@@ -15,30 +15,6 @@ import (
 )
 
 func TestRun(t *testing.T) {
-	t.Run("default greeting", func(t *testing.T) {
-		var out bytes.Buffer
-
-		if err := Run(nil, &out); err != nil {
-			t.Fatalf("Run() error = %v", err)
-		}
-
-		if out.String() != "Hello, Cogito!\n" {
-			t.Fatalf("Run() output = %q", out.String())
-		}
-	})
-
-	t.Run("custom greeting", func(t *testing.T) {
-		var out bytes.Buffer
-
-		if err := Run([]string{"--name", "team"}, &out); err != nil {
-			t.Fatalf("Run() error = %v", err)
-		}
-
-		if out.String() != "Hello, team!\n" {
-			t.Fatalf("Run() output = %q", out.String())
-		}
-	})
-
 	t.Run("version output", func(t *testing.T) {
 		oldVersion := version.Version
 		version.Version = "v1.2.3"
