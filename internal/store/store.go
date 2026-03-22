@@ -9,6 +9,8 @@ import (
 	"sync"
 )
 
+// Store provides append-only event persistence and atomic checkpoint writes for a single run.
+// All event appends are serialized under a mutex to maintain stable sequence numbers.
 type Store struct {
 	layout       Layout
 	eventMu      sync.Mutex

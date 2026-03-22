@@ -93,6 +93,25 @@ func (s *Supervisor) Run(ctx context.Context, request RunRequest) (*adapters.Ste
 	}
 	defer stderrFile.Close()
 
+	cmd, handleID, err := s.setupCommand(request, stdoutFile, stderrFile)
+	if err != nil {
+		return nil, err
+	}
+
+	s.track(handleID, cmd)
+	defer s.untrack(handleID)
+
+	waitErr, timedOut, interrupted := s.monitorProcess(ctx, cmd, request.Timeout)
+
+	input, err := s.collectOutput(request, waitErr, timedOut, interrupted, stdoutFile, stderrFile)
+	if err != nil {
+		return nil, err
+	}
+
+	return request.Normalizer.Normalize(ctx, input)
+}
+
+func (s *Supervisor) setupCommand(request RunRequest, stdoutFile, stderrFile *os.File) (*exec.Cmd, string, error) {
 	cmd := exec.Command(request.Command.Path, request.Command.Args...)
 	cmd.Dir = request.Command.Dir
 	cmd.Env = append(os.Environ(), request.Command.Env...)
@@ -101,7 +120,7 @@ func (s *Supervisor) Run(ctx context.Context, request RunRequest) (*adapters.Ste
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {
-		return nil, wrapError(ErrorCodeExecution, fmt.Sprintf("start provider command %q", request.Command.Path), err)
+		return nil, "", wrapError(ErrorCodeExecution, fmt.Sprintf("start provider command %q", request.Command.Path), err)
 	}
 
 	handleID := request.Handle.ProviderSessionID
@@ -109,58 +128,52 @@ func (s *Supervisor) Run(ctx context.Context, request RunRequest) (*adapters.Ste
 		handleID = fmt.Sprintf("pid-%d", cmd.Process.Pid)
 	}
 
-	s.track(handleID, cmd)
+	return cmd, handleID, nil
+}
 
-	defer s.untrack(handleID)
-
+func (s *Supervisor) monitorProcess(ctx context.Context, cmd *exec.Cmd, timeout time.Duration) (error, bool, bool) {
 	waitCh := make(chan error, 1)
 	go func() {
 		waitCh <- cmd.Wait()
 	}()
 
-	var (
-		waitErr     error
-		timedOut    bool
-		interrupted bool
-	)
-
-	var timeout <-chan time.Time
-
-	if request.Timeout > 0 {
-		timer := time.NewTimer(request.Timeout)
+	var timeoutCh <-chan time.Time
+	if timeout > 0 {
+		timer := time.NewTimer(timeout)
 		defer timer.Stop()
-		timeout = timer.C
+		timeoutCh = timer.C
 	}
 
 	select {
-	case waitErr = <-waitCh:
-	case <-timeout:
-		timedOut = true
-		waitErr = s.terminate(cmd, waitCh, "timeout")
+	case waitErr := <-waitCh:
+		return waitErr, false, false
+	case <-timeoutCh:
+		return s.terminate(cmd, waitCh, "timeout"), true, false
 	case <-ctx.Done():
-		interrupted = true
-		waitErr = s.terminate(cmd, waitCh, "interrupt")
+		return s.terminate(cmd, waitCh, "interrupt"), false, true
 	}
+}
 
+func (s *Supervisor) collectOutput(request RunRequest, waitErr error, timedOut, interrupted bool, stdoutFile, stderrFile *os.File) (NormalizerInput, error) {
 	if syncErr := stdoutFile.Sync(); syncErr != nil {
-		return nil, wrapError(ErrorCodeExecution, "sync stdout log", syncErr)
+		return NormalizerInput{}, wrapError(ErrorCodeExecution, "sync stdout log", syncErr)
 	}
 
 	if syncErr := stderrFile.Sync(); syncErr != nil {
-		return nil, wrapError(ErrorCodeExecution, "sync stderr log", syncErr)
+		return NormalizerInput{}, wrapError(ErrorCodeExecution, "sync stderr log", syncErr)
 	}
 
 	stdout, err := os.ReadFile(request.StdoutPath)
 	if err != nil {
-		return nil, wrapError(ErrorCodeExecution, "read stdout log", err)
+		return NormalizerInput{}, wrapError(ErrorCodeExecution, "read stdout log", err)
 	}
 
 	stderr, err := os.ReadFile(request.StderrPath)
 	if err != nil {
-		return nil, wrapError(ErrorCodeExecution, "read stderr log", err)
+		return NormalizerInput{}, wrapError(ErrorCodeExecution, "read stderr log", err)
 	}
 
-	input := NormalizerInput{
+	return NormalizerInput{
 		Handle:      request.Handle,
 		ExitCode:    exitCode(waitErr),
 		StdoutPath:  request.StdoutPath,
@@ -169,14 +182,7 @@ func (s *Supervisor) Run(ctx context.Context, request RunRequest) (*adapters.Ste
 		Stderr:      stderr,
 		TimedOut:    timedOut,
 		Interrupted: interrupted,
-	}
-
-	result, err := request.Normalizer.Normalize(ctx, input)
-	if err != nil {
-		return nil, err
-	}
-
-	return result, nil
+	}, nil
 }
 
 func (s *Supervisor) Interrupt(handle adapters.ExecutionHandle) error {

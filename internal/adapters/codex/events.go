@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -28,7 +27,7 @@ type eventError struct {
 
 func parseEvents(payload []byte) ([]event, error) {
 	if len(bytes.TrimSpace(payload)) == 0 {
-		return nil, errors.New("empty codex event stream")
+		return nil, fmt.Errorf("codex.parseEvents: empty event stream payload")
 	}
 
 	events := make([]event, 0, 8)
@@ -66,7 +65,7 @@ func parseEvents(payload []byte) ([]event, error) {
 	}
 
 	if len(events) == 0 {
-		return nil, errors.New("empty codex event stream")
+		return nil, fmt.Errorf("codex.parseEvents: no valid events parsed")
 	}
 
 	return events, nil

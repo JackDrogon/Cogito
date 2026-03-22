@@ -31,6 +31,8 @@ const (
 	EventReplayFailed       EventType = "ReplayFailed"
 )
 
+// Layout holds canonical file paths for a single run under DefaultRunsRoot.
+// Use LayoutForRun to construct instances rather than assembling paths manually.
 type Layout struct {
 	BaseDir            string
 	RunID              string
@@ -43,6 +45,8 @@ type Layout struct {
 	LocksDir           string
 }
 
+// Event represents one durable state transition in the append-only event log.
+// Sequence numbers are assigned atomically by Store and increase monotonically.
 type Event struct {
 	Sequence   int64             `json:"sequence"`
 	Type       EventType         `json:"type"`
@@ -63,6 +67,8 @@ type StepCheckpoint struct {
 	Summary           string `json:"summary,omitempty"`
 }
 
+// Checkpoint is a coarse-grained snapshot of run state used for resume after interruption.
+// Written atomically with temp-file-plus-rename to avoid exposing partial state.
 type Checkpoint struct {
 	RunID        string                    `json:"run_id"`
 	RepoPath     string                    `json:"repo_path,omitempty"`

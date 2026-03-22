@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"context"
 	"encoding/json"
 	"reflect"
 	"testing"
@@ -36,105 +37,129 @@ func RunContractSuite(t *testing.T, cases []ContractCase) {
 		t.Run(tc.Name, func(t *testing.T) {
 			ctx := t.Context()
 
-			capabilities := tc.Adapter.DescribeCapabilities()
-			if !reflect.DeepEqual(capabilities, tc.WantCapabilities) {
-				t.Fatalf("DescribeCapabilities() = %+v, want %+v", capabilities, tc.WantCapabilities)
-			}
-
-			execution, err := tc.Adapter.Start(ctx, tc.StartRequest)
-			if err != nil {
-				t.Fatalf("Start() error = %v", err)
-			}
-
-			assertHandleEcho(t, execution.Handle, tc.StartRequest)
-
-			if execution.State != tc.WantStartState {
-				t.Fatalf("Start().State = %q, want %q", execution.State, tc.WantStartState)
-			}
-
-			for i, wantState := range tc.WantPollStates {
-				execution, err = tc.Adapter.PollOrCollect(ctx, execution.Handle)
-				if err != nil {
-					t.Fatalf("PollOrCollect() #%d error = %v", i+1, err)
-				}
-
-				if execution.State != wantState {
-					t.Fatalf("PollOrCollect() #%d state = %q, want %q", i+1, execution.State, wantState)
-				}
-			}
-
-			normalizeRequest := tc.NormalizeRequest
-			normalizeRequest.Execution = execution
-
-			result, err := tc.Adapter.NormalizeResult(ctx, normalizeRequest)
-			if err != nil {
-				t.Fatalf("NormalizeResult() error = %v", err)
-			}
-
-			assertStepResult(t, result, tc.WantResult)
+			capabilities := runCapabilityTest(t, tc)
+			runStartAndPollTest(t, ctx, tc)
 
 			if tc.InterruptRequest != nil {
-				interruptExecution, err := tc.Adapter.Start(ctx, *tc.InterruptRequest)
-				if err != nil {
-					t.Fatalf("Start() for interrupt error = %v", err)
-				}
-
-				interruptExecution, err = tc.Adapter.Interrupt(ctx, interruptExecution.Handle)
-				if err != nil {
-					t.Fatalf("Interrupt() error = %v", err)
-				}
-
-				if interruptExecution.State != tc.WantInterruptState {
-					t.Fatalf("Interrupt().State = %q, want %q", interruptExecution.State, tc.WantInterruptState)
-				}
+				runInterruptTest(t, ctx, tc)
 			}
 
 			if tc.ResumeRequest != nil {
-				resumeExecution, err := tc.Adapter.Start(ctx, *tc.ResumeRequest)
-				if err != nil {
-					t.Fatalf("Start() for resume error = %v", err)
-				}
-
-				if capabilities.Interrupt {
-					resumeExecution, err = tc.Adapter.Interrupt(ctx, resumeExecution.Handle)
-					if err != nil {
-						t.Fatalf("Interrupt() before resume error = %v", err)
-					}
-				}
-
-				resumeExecution, err = tc.Adapter.Resume(ctx, ResumeRequest{Handle: resumeExecution.Handle})
-				if err != nil {
-					t.Fatalf("Resume() error = %v", err)
-				}
-
-				if resumeExecution.State != tc.WantResumeState {
-					t.Fatalf("Resume().State = %q, want %q", resumeExecution.State, tc.WantResumeState)
-				}
-
-				for i, wantState := range tc.WantResumePollStates {
-					resumeExecution, err = tc.Adapter.PollOrCollect(ctx, resumeExecution.Handle)
-					if err != nil {
-						t.Fatalf("PollOrCollect() after resume #%d error = %v", i+1, err)
-					}
-
-					if resumeExecution.State != wantState {
-						t.Fatalf("PollOrCollect() after resume #%d state = %q, want %q", i+1, resumeExecution.State, wantState)
-					}
-				}
-
-				if tc.WantResumeResult != nil {
-					resumeNormalize := tc.ResumeNormalize
-					resumeNormalize.Execution = resumeExecution
-
-					result, err := tc.Adapter.NormalizeResult(ctx, resumeNormalize)
-					if err != nil {
-						t.Fatalf("NormalizeResult() after resume error = %v", err)
-					}
-
-					assertStepResult(t, result, *tc.WantResumeResult)
-				}
+				runResumeTest(t, ctx, tc, capabilities)
 			}
 		})
+	}
+}
+
+func runCapabilityTest(t *testing.T, tc *ContractCase) CapabilityMatrix {
+	t.Helper()
+
+	capabilities := tc.Adapter.DescribeCapabilities()
+	if !reflect.DeepEqual(capabilities, tc.WantCapabilities) {
+		t.Fatalf("DescribeCapabilities() = %+v, want %+v", capabilities, tc.WantCapabilities)
+	}
+	return capabilities
+}
+
+func runStartAndPollTest(t *testing.T, ctx context.Context, tc *ContractCase) {
+	t.Helper()
+
+	execution, err := tc.Adapter.Start(ctx, tc.StartRequest)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	assertHandleEcho(t, execution.Handle, tc.StartRequest)
+
+	if execution.State != tc.WantStartState {
+		t.Fatalf("Start().State = %q, want %q", execution.State, tc.WantStartState)
+	}
+
+	for i, wantState := range tc.WantPollStates {
+		execution, err = tc.Adapter.PollOrCollect(ctx, execution.Handle)
+		if err != nil {
+			t.Fatalf("PollOrCollect() #%d error = %v", i+1, err)
+		}
+
+		if execution.State != wantState {
+			t.Fatalf("PollOrCollect() #%d state = %q, want %q", i+1, execution.State, wantState)
+		}
+	}
+
+	normalizeRequest := tc.NormalizeRequest
+	normalizeRequest.Execution = execution
+
+	result, err := tc.Adapter.NormalizeResult(ctx, normalizeRequest)
+	if err != nil {
+		t.Fatalf("NormalizeResult() error = %v", err)
+	}
+
+	assertStepResult(t, result, tc.WantResult)
+}
+
+func runInterruptTest(t *testing.T, ctx context.Context, tc *ContractCase) {
+	t.Helper()
+
+	interruptExecution, err := tc.Adapter.Start(ctx, *tc.InterruptRequest)
+	if err != nil {
+		t.Fatalf("Start() for interrupt error = %v", err)
+	}
+
+	interruptExecution, err = tc.Adapter.Interrupt(ctx, interruptExecution.Handle)
+	if err != nil {
+		t.Fatalf("Interrupt() error = %v", err)
+	}
+
+	if interruptExecution.State != tc.WantInterruptState {
+		t.Fatalf("Interrupt().State = %q, want %q", interruptExecution.State, tc.WantInterruptState)
+	}
+}
+
+func runResumeTest(t *testing.T, ctx context.Context, tc *ContractCase, capabilities CapabilityMatrix) {
+	t.Helper()
+
+	resumeExecution, err := tc.Adapter.Start(ctx, *tc.ResumeRequest)
+	if err != nil {
+		t.Fatalf("Start() for resume error = %v", err)
+	}
+
+	if capabilities.Interrupt {
+		resumeExecution, err = tc.Adapter.Interrupt(ctx, resumeExecution.Handle)
+		if err != nil {
+			t.Fatalf("Interrupt() before resume error = %v", err)
+		}
+	}
+
+	resumeExecution, err = tc.Adapter.Resume(ctx, ResumeRequest{Handle: resumeExecution.Handle})
+	if err != nil {
+		t.Fatalf("Resume() error = %v", err)
+	}
+
+	if resumeExecution.State != tc.WantResumeState {
+		t.Fatalf("Resume().State = %q, want %q", resumeExecution.State, tc.WantResumeState)
+	}
+
+	for i, wantState := range tc.WantResumePollStates {
+		resumeExecution, err = tc.Adapter.PollOrCollect(ctx, resumeExecution.Handle)
+		if err != nil {
+			t.Fatalf("PollOrCollect() after resume #%d error = %v", i+1, err)
+		}
+
+		if resumeExecution.State != wantState {
+			t.Fatalf("PollOrCollect() after resume #%d state = %q, want %q", i+1, resumeExecution.State, wantState)
+		}
+	}
+
+	if tc.WantResumeResult != nil {
+		resumeNormalize := tc.ResumeNormalize
+		resumeNormalize.Execution = resumeExecution
+
+		result, err := tc.Adapter.NormalizeResult(ctx, resumeNormalize)
+		if err != nil {
+			t.Fatalf("NormalizeResult() after resume error = %v", err)
+		}
+
+		assertStepResult(t, result, *tc.WantResumeResult)
 	}
 }
 

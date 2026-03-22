@@ -2,7 +2,6 @@ package opencode
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -17,7 +16,7 @@ type response struct {
 func parseResponse(payload []byte) (*response, error) {
 	trimmed := strings.TrimSpace(string(payload))
 	if trimmed == "" {
-		return nil, errors.New("empty opencode response")
+		return nil, fmt.Errorf("opencode.parseResponse: empty response payload")
 	}
 
 	var raw map[string]any

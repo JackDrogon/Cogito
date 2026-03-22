@@ -35,7 +35,9 @@ type ApprovalStepSpec struct {
 	Message string
 }
 
-// StepSpec is the validated workflow step specification.
+// StepSpec is the validated workflow step specification after parse stage.
+// It represents a schema-valid step with kind-specific fields populated correctly,
+// but has not yet been compiled into the dependency graph.
 type StepSpec struct {
 	ID       string
 	Kind     StepKind
@@ -60,7 +62,10 @@ type CompiledStep struct {
 	Dependents []string
 }
 
-// CompiledWorkflow is the immutable graph representation used by later layers.
+// CompiledWorkflow is the immutable, runtime-ready DAG produced by CompileWorkflow.
+// It contains the validated dependency graph with precomputed topological order and
+// step index for O(1) lookup. Runtime consumes this instead of raw YAML to ensure
+// deterministic scheduling and reproducible execution order.
 type CompiledWorkflow struct {
 	Spec             *Spec
 	Steps            []CompiledStep

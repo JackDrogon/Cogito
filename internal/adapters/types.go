@@ -16,6 +16,9 @@ const (
 	CapabilityMachineReadableLogs Capability = "machine_readable_logs"
 )
 
+// CapabilityMatrix declares which optional features an adapter implementation supports.
+// Runtime uses this to validate workflow requirements before execution and to skip
+// unsupported operations gracefully.
 type CapabilityMatrix struct {
 	StructuredOutput    bool `json:"structured_output"`
 	Resume              bool `json:"resume"`
@@ -49,6 +52,20 @@ func (m CapabilityMatrix) Require(capability Capability) error {
 	return unsupportedCapabilityError(capability)
 }
 
+// Adapter is the service provider interface for AI tool integrations.
+//
+// Each adapter wraps a concrete provider (Codex, Claude, OpenCode) and exposes
+// a staged lifecycle so runtime can persist intermediate states and resume work
+// after interruptions or failures.
+//
+// Lifecycle stages:
+//  1. Start: initiate provider session and return initial Execution
+//  2. PollOrCollect: advance or observe remote/local session state
+//  3. Interrupt/Resume: control flow when capabilities allow
+//  4. NormalizeResult: convert finished Execution into workflow-safe StepResult
+//
+// Implementations must report capabilities via DescribeCapabilities so runtime
+// can validate workflow requirements before execution begins.
 type Adapter interface {
 	DescribeCapabilities() CapabilityMatrix
 	Start(ctx context.Context, request StartRequest) (*Execution, error)

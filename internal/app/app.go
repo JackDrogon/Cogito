@@ -32,6 +32,7 @@ var rootCommands = map[string]commandHandler{
 	"resume":   runResumeCommand,
 	"replay":   runReplayCommand,
 	"cancel":   runCancelCommand,
+	"approve":  runApproveCommand,
 }
 
 func printUsage(stdout io.Writer) {
@@ -42,6 +43,7 @@ func printUsage(stdout io.Writer) {
 	fmt.Fprintln(stdout, "  run         Execute a workflow")
 	fmt.Fprintln(stdout, "  status      Show workflow run status")
 	fmt.Fprintln(stdout, "  resume      Resume a paused workflow")
+	fmt.Fprintln(stdout, "  approve     Approve a waiting workflow")
 	fmt.Fprintln(stdout, "  replay      Replay workflow from event log")
 	fmt.Fprintln(stdout, "  cancel      Cancel a running workflow")
 	fmt.Fprintln(stdout, "")
@@ -85,7 +87,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer) error {
 
 func runWorkflowCommand(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("workflow subcommand is required")
+		return fmt.Errorf("workflow: subcommand is required")
 	}
 
 	if !isSubcommandToken(args[0]) {
@@ -107,10 +109,10 @@ func runWorkflowCommand(ctx context.Context, args []string, stdout io.Writer) er
 		}
 
 		if len(fs.Args()) > 0 {
-			return errors.New("workflow subcommand is required")
+			return fmt.Errorf("workflow: subcommand is required")
 		}
 
-		return errors.New("workflow subcommand is required")
+		return fmt.Errorf("workflow: subcommand is required")
 	}
 
 	switch args[0] {
@@ -132,7 +134,7 @@ func runWorkflowValidateCommand(_ context.Context, args []string, stdout io.Writ
 	}
 
 	if len(remainingArgs) != 1 {
-		return errors.New("workflow validate expects exactly 1 file argument")
+		return fmt.Errorf("workflow.validate: expects exactly 1 file argument")
 	}
 
 	if _, err := workflow.LoadFile(remainingArgs[0]); err != nil {
@@ -172,7 +174,7 @@ func runRunCommand(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 
 	if len(remainingArgs) != 1 {
-		return errors.New("run expects exactly 1 file argument")
+		return fmt.Errorf("run: expects exactly 1 file argument")
 	}
 
 	return executeWorkflowRun(ctx, remainingArgs[0], flags, stdout)
@@ -238,7 +240,7 @@ func runReplayCommand(_ context.Context, args []string, stdout io.Writer) error 
 	}
 
 	if len(remainingArgs) != 1 {
-		return errors.New("replay expects exactly 1 events file argument")
+		return fmt.Errorf("replay: expects exactly 1 events file argument")
 	}
 
 	return executeReplay(remainingArgs[0], stdout)
@@ -259,6 +261,23 @@ func runCancelCommand(ctx context.Context, args []string, stdout io.Writer) erro
 	}
 
 	return executeCancelRun(ctx, flags.stateDir, stdout)
+}
+
+func runApproveCommand(ctx context.Context, args []string, stdout io.Writer) error {
+	flags, remainingArgs, err := parseSharedFlags("approve", args, stdout)
+	if err != nil {
+		return err
+	}
+
+	if remainingArgs == nil {
+		return nil
+	}
+
+	if len(remainingArgs) > 0 {
+		return fmt.Errorf("approve does not accept positional arguments: %v", remainingArgs)
+	}
+
+	return executeApproveRun(ctx, flags, stdout)
 }
 
 func parseSharedFlags(commandName string, args []string, stdout io.Writer) (*sharedFlags, []string, error) {
