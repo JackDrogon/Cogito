@@ -203,6 +203,26 @@ func TestFormatRunStatusIncludesStepLines(t *testing.T) {
 	}
 }
 
+func TestTextPresenterRendersRunAndMessages(t *testing.T) {
+	var runOut bytes.Buffer
+	if err := presenter.PresentRunWorkflow(&runOut, RunWorkflowOutput{RunID: "run-1", StateDir: "ref/tmp/runs/run-1", State: runtime.RunStateSucceeded}); err != nil {
+		t.Fatalf("PresentRunWorkflow() error = %v", err)
+	}
+	for _, want := range []string{"run_id=run-1", "state_dir=ref/tmp/runs/run-1", "state=succeeded"} {
+		if !strings.Contains(runOut.String(), want) {
+			t.Fatalf("PresentRunWorkflow() output = %q, want contains %q", runOut.String(), want)
+		}
+	}
+
+	var msgOut bytes.Buffer
+	if err := presenter.PresentMessage(&msgOut, "approval granted"); err != nil {
+		t.Fatalf("PresentMessage() error = %v", err)
+	}
+	if msgOut.String() != "approval granted\n" {
+		t.Fatalf("PresentMessage() output = %q", msgOut.String())
+	}
+}
+
 func TestRunSharedFlagsOnIsolatedRepo(t *testing.T) {
 	fixture := newAppRepoFixture(t)
 	workflowPath := writeWorkflowFile(t, fixture.repoDir, "simple.yaml", "printf 'hello\\n'")

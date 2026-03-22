@@ -29,8 +29,7 @@ func (workflowValidateCommand) Run(ctx context.Context, args []string, stdout io
 		return err
 	}
 
-	_, err = fmt.Fprintln(stdout, "workflow valid")
-	return err
+	return presenter.PresentWorkflowValid(stdout)
 }
 
 type workflowRunCommand struct{}
@@ -52,7 +51,12 @@ func (workflowRunCommand) Run(ctx context.Context, args []string, stdout io.Writ
 			return fmt.Errorf("run does not accept extra positional arguments: %v", remainingArgs)
 		}
 
-		return executeWorkflowRun(ctx, args[0], flags, stdout)
+		result, err := appsvc.RunWorkflow(ctx, RunWorkflowInput{WorkflowPath: args[0], Flags: flags})
+		if err != nil {
+			return err
+		}
+
+		return presenter.PresentRunWorkflow(stdout, result)
 	}
 
 	flags, remainingArgs, err := parseSharedFlags("run", args, stdout)
@@ -65,7 +69,12 @@ func (workflowRunCommand) Run(ctx context.Context, args []string, stdout io.Writ
 		return err
 	}
 
-	return executeWorkflowRun(ctx, workflowPath, flags, stdout)
+	result, err := appsvc.RunWorkflow(ctx, RunWorkflowInput{WorkflowPath: workflowPath, Flags: flags})
+	if err != nil {
+		return err
+	}
+
+	return presenter.PresentRunWorkflow(stdout, result)
 }
 
 type statusCommand struct{}
@@ -83,8 +92,7 @@ func (statusCommand) Run(ctx context.Context, args []string, stdout io.Writer) e
 		return err
 	}
 
-	_, err = io.WriteString(stdout, formatRunStatus(result))
-	return err
+	return presenter.PresentStatusRun(stdout, result)
 }
 
 type resumeCommand struct{}
@@ -97,7 +105,12 @@ func (resumeCommand) Run(ctx context.Context, args []string, stdout io.Writer) e
 		return err
 	}
 
-	return executeResumeRun(ctx, flags, stdout)
+	result, err := appsvc.ResumeRun(ctx, ResumeRunInput{Flags: flags})
+	if err != nil {
+		return err
+	}
+
+	return presenter.PresentMessage(stdout, result.Message)
 }
 
 type replayCommand struct{}
@@ -118,8 +131,7 @@ func (replayCommand) Run(ctx context.Context, args []string, stdout io.Writer) e
 		return err
 	}
 
-	_, err = fmt.Fprintln(stdout, result.Message)
-	return err
+	return presenter.PresentMessage(stdout, result.Message)
 }
 
 type cancelCommand struct{}
@@ -132,7 +144,12 @@ func (cancelCommand) Run(ctx context.Context, args []string, stdout io.Writer) e
 		return err
 	}
 
-	return executeCancelRun(ctx, flags.stateDir, stdout)
+	result, err := appsvc.CancelRun(ctx, CancelRunInput{StateDir: flags.stateDir})
+	if err != nil {
+		return err
+	}
+
+	return presenter.PresentMessage(stdout, result.Message)
 }
 
 type approveCommand struct{}
@@ -145,7 +162,12 @@ func (approveCommand) Run(ctx context.Context, args []string, stdout io.Writer) 
 		return err
 	}
 
-	return executeApproveRun(ctx, flags, stdout)
+	result, err := appsvc.ApproveRun(ctx, ApproveRunInput{Flags: flags})
+	if err != nil {
+		return err
+	}
+
+	return presenter.PresentMessage(stdout, result.Message)
 }
 
 func parseSharedFlagsWithoutArgs(commandName string, args []string, stdout io.Writer) (*sharedFlags, error) {

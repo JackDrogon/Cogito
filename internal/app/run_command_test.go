@@ -203,7 +203,8 @@ func TestExecuteWorkflowRunUsesRepoLockAndDirtyGuard(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- executeWorkflowRun(t.Context(), workflowPath, &sharedFlags{repo: fixture.repoDir, stateDir: stateDir, allowDirty: false}, ioDiscard{})
+		_, err := appsvc.RunWorkflow(t.Context(), RunWorkflowInput{WorkflowPath: workflowPath, Flags: &sharedFlags{repo: fixture.repoDir, stateDir: stateDir, allowDirty: false}})
+		errCh <- err
 	}()
 
 	deadline := time.Now().Add(2 * time.Second)
@@ -218,23 +219,23 @@ func TestExecuteWorkflowRunUsesRepoLockAndDirtyGuard(t *testing.T) {
 	}
 
 	if err := <-errCh; err != nil {
-		t.Fatalf("executeWorkflowRun() error = %v", err)
+		t.Fatalf("RunWorkflow() error = %v", err)
 	}
 	if _, err := os.Stat(runLockPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("Stat(run lock after run) error = %v, want not exist", err)
 	}
 
 	writeAppFile(t, filepath.Join(fixture.repoDir, "tracked.txt"), []byte("dirty now\n"))
-	err := executeWorkflowRun(t.Context(), workflowPath, &sharedFlags{repo: fixture.repoDir, stateDir: filepath.Join(fixture.runsRoot, "run-dirty")}, ioDiscard{})
+	_, err := appsvc.RunWorkflow(t.Context(), RunWorkflowInput{WorkflowPath: workflowPath, Flags: &sharedFlags{repo: fixture.repoDir, stateDir: filepath.Join(fixture.runsRoot, "run-dirty")}})
 	if err == nil {
-		t.Fatal("executeWorkflowRun() dirty error = nil, want dirty worktree rejection")
+		t.Fatal("RunWorkflow() dirty error = nil, want dirty worktree rejection")
 	}
 	if !strings.Contains(err.Error(), "dirty worktree") {
-		t.Fatalf("executeWorkflowRun() error = %v, want dirty worktree", err)
+		t.Fatalf("RunWorkflow() error = %v, want dirty worktree", err)
 	}
 
-	if err := executeWorkflowRun(t.Context(), workflowPath, &sharedFlags{repo: fixture.repoDir, stateDir: filepath.Join(fixture.runsRoot, "run-dirty-allowed"), allowDirty: true}, ioDiscard{}); err != nil {
-		t.Fatalf("executeWorkflowRun() with allowDirty error = %v", err)
+	if _, err := appsvc.RunWorkflow(t.Context(), RunWorkflowInput{WorkflowPath: workflowPath, Flags: &sharedFlags{repo: fixture.repoDir, stateDir: filepath.Join(fixture.runsRoot, "run-dirty-allowed"), allowDirty: true}}); err != nil {
+		t.Fatalf("RunWorkflow() with allowDirty error = %v", err)
 	}
 }
 
@@ -352,10 +353,6 @@ type appRepoFixture struct {
 	repoDir  string
 	runsRoot string
 }
-
-type ioDiscard struct{}
-
-func (ioDiscard) Write(p []byte) (int, error) { return len(p), nil }
 
 func newAppRepoFixture(t *testing.T) appRepoFixture {
 	t.Helper()
