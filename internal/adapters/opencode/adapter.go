@@ -279,8 +279,17 @@ func (execRunner) Run(ctx context.Context, command CommandSpec) (CommandResult, 
 
 	var stderr bytes.Buffer
 
-	cmd.Stdout = io.MultiWriter(&stdout, command.Stdout)
-	cmd.Stderr = io.MultiWriter(&stderr, command.Stderr)
+	stdoutWriter := command.Stdout
+	if stdoutWriter == nil {
+		stdoutWriter = io.Discard
+	}
+	stderrWriter := command.Stderr
+	if stderrWriter == nil {
+		stderrWriter = io.Discard
+	}
+
+	cmd.Stdout = io.MultiWriter(&stdout, stdoutWriter)
+	cmd.Stderr = io.MultiWriter(&stderr, stderrWriter)
 
 	if command.Stdin != "" {
 		cmd.Stdin = strings.NewReader(command.Stdin)
