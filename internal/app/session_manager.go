@@ -15,7 +15,7 @@ import (
 
 func latestRunFailure(runStore *store.Store) error {
 	if runStore == nil {
-		return fmt.Errorf("latestRunFailure: run store is required")
+		return errors.New("latestRunFailure: run store is required")
 	}
 
 	events, err := runStore.ReadEvents()
@@ -30,7 +30,7 @@ func latestRunFailure(runStore *store.Store) error {
 		}
 	}
 
-	return fmt.Errorf("latestRunFailure: run failed with no error message")
+	return errors.New("latestRunFailure: run failed with no error message")
 }
 
 func openExistingRunStore(stateDir string) (*store.Store, string, error) {
@@ -50,7 +50,7 @@ func openExistingRunStore(stateDir string) (*store.Store, string, error) {
 func parseRunStateDir(stateDir string) (string, string, error) {
 	stateDir = strings.TrimSpace(stateDir)
 	if stateDir == "" {
-		return "", "", fmt.Errorf("parseRunStateDir: state dir is required")
+		return "", "", errors.New("parseRunStateDir: state dir is required")
 	}
 
 	runID := filepath.Base(stateDir)
@@ -113,7 +113,7 @@ func loadExistingRunEngine(stateDir string, flags *sharedFlags) (*store.Store, *
 func loadReplayInput(eventsPath string) (string, *workflow.CompiledWorkflow, []store.Event, error) {
 	eventsPath = strings.TrimSpace(eventsPath)
 	if eventsPath == "" {
-		return "", nil, nil, fmt.Errorf("loadReplayInput: events file path is required")
+		return "", nil, nil, errors.New("loadReplayInput: events file path is required")
 	}
 
 	runDir := filepath.Dir(eventsPath)

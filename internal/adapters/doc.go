@@ -17,7 +17,7 @@ The SPI is centered on Adapter plus a small registry used by higher-level wiring
 	       |
 	  +----+----+-------------------+
 	  |         |                   |
-	  v         v                   v
+	  ↓         ↓                   ↓
 	Start   Poll/Collect   Interrupt/Resume/Normalize
 
 # Lifecycle contract

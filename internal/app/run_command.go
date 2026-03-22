@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
@@ -12,7 +13,7 @@ import (
 
 func executeWorkflowRun(ctx context.Context, workflowPath string, flags *sharedFlags, stdout io.Writer) (err error) {
 	if flags == nil {
-		return fmt.Errorf("executeWorkflowRun: flags are required")
+		return errors.New("executeWorkflowRun: flags are required")
 	}
 
 	approvalMode, err := runtime.ParseApprovalMode(flags.approval)

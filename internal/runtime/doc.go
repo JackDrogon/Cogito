@@ -14,18 +14,18 @@ and advances it by recording durable events and rebuilding an in-memory Snapshot
 
 	CompiledWorkflow + dependencies
 	            |
-	            v
+	            ↓
 	         Engine
 	            |
 	    +-------+--------+
 	    |                |
-	    v                v
+	    ↓                ↓
 	EventStore       Adapter/CommandRunner
 	    |
-	    v
+	    ↓
 	events + checkpoint
 	    |
-	    v
+	    ↓
 	  Replay / Resume
 
 # Event-sourced execution model

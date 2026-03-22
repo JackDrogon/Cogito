@@ -73,11 +73,28 @@ func (e *Engine) executeStep(ctx context.Context, stepID string) error {
 		providerSessionID := e.ids.NewSyntheticSessionID(stepID)
 		summary := defaultApprovalSummary(step, adapters.ExecutionStateWaitingApproval)
 
-		if err := e.persistStepTransition(store.EventStepStarted, stepID, StepStateQueued, StepStateRunning, attemptID, providerSessionID, summary, ""); err != nil {
+		if err := e.persistStepTransition(StepTransitionParams{
+			EventType:         store.EventStepStarted,
+			StepID:            stepID,
+			From:              StepStateQueued,
+			To:                StepStateRunning,
+			AttemptID:         attemptID,
+			ProviderSessionID: providerSessionID,
+			Summary:           summary,
+			NormalizedStatus:  "",
+		}); err != nil {
 			return err
 		}
 
-		return e.requestApproval(ctx, step, attemptID, providerSessionID, summary, ApprovalTriggerExplicit, adapters.ExecutionStateWaitingApproval)
+		return e.requestApproval(
+			ctx,
+			step,
+			attemptID,
+			providerSessionID,
+			summary,
+			ApprovalTriggerExplicit,
+			adapters.ExecutionStateWaitingApproval,
+		)
 	}
 
 	handled, err := e.requestExceptionalApproval(ctx, step, attemptID)
@@ -92,21 +109,51 @@ func (e *Engine) executeStep(ctx context.Context, stepID string) error {
 	driver, err := e.buildDriver(step)
 	if err != nil {
 		providerSessionID := e.ids.NewSyntheticSessionID(stepID)
-		if startErr := e.persistStepTransition(store.EventStepStarted, stepID, StepStateQueued, StepStateRunning, attemptID, providerSessionID, "step started", ""); startErr != nil {
+		if startErr := e.persistStepTransition(StepTransitionParams{
+			EventType:         store.EventStepStarted,
+			StepID:            stepID,
+			From:              StepStateQueued,
+			To:                StepStateRunning,
+			AttemptID:         attemptID,
+			ProviderSessionID: providerSessionID,
+			Summary:           "step started",
+			NormalizedStatus:  "",
+		}); startErr != nil {
 			return startErr
 		}
 
-		return e.failRunForExecutionError(stepID, attemptID, providerSessionID, err, "driver setup failed")
+		return e.failRunForExecutionError(FailRunParams{
+			StepID:            stepID,
+			AttemptID:         attemptID,
+			ProviderSessionID: providerSessionID,
+			ExecutionErr:      err,
+			Message:           "driver setup failed",
+		})
 	}
 
 	execution, err := driver.Start(ctx, step, attemptID, e.Snapshot())
 	if err != nil {
 		providerSessionID := e.ids.NewSyntheticSessionID(stepID)
-		if startErr := e.persistStepTransition(store.EventStepStarted, stepID, StepStateQueued, StepStateRunning, attemptID, providerSessionID, "step started", ""); startErr != nil {
+		if startErr := e.persistStepTransition(StepTransitionParams{
+			EventType:         store.EventStepStarted,
+			StepID:            stepID,
+			From:              StepStateQueued,
+			To:                StepStateRunning,
+			AttemptID:         attemptID,
+			ProviderSessionID: providerSessionID,
+			Summary:           "step started",
+			NormalizedStatus:  "",
+		}); startErr != nil {
 			return startErr
 		}
 
-		return e.failRunForExecutionError(stepID, attemptID, providerSessionID, err, "step start failed")
+		return e.failRunForExecutionError(FailRunParams{
+			StepID:            stepID,
+			AttemptID:         attemptID,
+			ProviderSessionID: providerSessionID,
+			ExecutionErr:      err,
+			Message:           "step start failed",
+		})
 	}
 
 	providerSessionID := strings.TrimSpace(execution.Handle.ProviderSessionID)
@@ -115,14 +162,29 @@ func (e *Engine) executeStep(ctx context.Context, stepID string) error {
 		execution.Handle.ProviderSessionID = providerSessionID
 	}
 
-	if err := e.persistStepTransition(store.EventStepStarted, stepID, StepStateQueued, StepStateRunning, attemptID, providerSessionID, normalizeSummary(execution.Summary, execution.State), ""); err != nil {
+	if err := e.persistStepTransition(StepTransitionParams{
+		EventType:         store.EventStepStarted,
+		StepID:            stepID,
+		From:              StepStateQueued,
+		To:                StepStateRunning,
+		AttemptID:         attemptID,
+		ProviderSessionID: providerSessionID,
+		Summary:           normalizeSummary(execution.Summary, execution.State),
+		NormalizedStatus:  "",
+	}); err != nil {
 		return err
 	}
 
 	return e.continueExecution(ctx, step, attemptID, driver, execution)
 }
 
-func (e *Engine) continueExecution(ctx context.Context, step workflow.CompiledStep, attemptID string, driver stepDriver, execution *adapters.Execution) error {
+func (e *Engine) continueExecution(
+	ctx context.Context,
+	step workflow.CompiledStep,
+	attemptID string,
+	driver stepDriver,
+	execution *adapters.Execution,
+) error {
 	providerSessionID := strings.TrimSpace(execution.Handle.ProviderSessionID)
 	if providerSessionID == "" {
 		providerSessionID = e.ids.NewSyntheticSessionID(step.ID)
@@ -133,7 +195,13 @@ func (e *Engine) continueExecution(ctx context.Context, step workflow.CompiledSt
 	for !execution.State.Normalizable() {
 		execution, err = driver.PollOrCollect(ctx, execution.Handle)
 		if err != nil {
-			return e.failRunForExecutionError(step.ID, attemptID, providerSessionID, err, "step polling failed")
+			return e.failRunForExecutionError(FailRunParams{
+				StepID:            step.ID,
+				AttemptID:         attemptID,
+				ProviderSessionID: providerSessionID,
+				ExecutionErr:      err,
+				Message:           "step polling failed",
+			})
 		}
 
 		if strings.TrimSpace(execution.Handle.ProviderSessionID) == "" {
@@ -143,7 +211,13 @@ func (e *Engine) continueExecution(ctx context.Context, step workflow.CompiledSt
 
 	result, err := driver.NormalizeResult(ctx, execution)
 	if err != nil {
-		return e.failRunForExecutionError(step.ID, attemptID, providerSessionID, err, "result normalization failed")
+		return e.failRunForExecutionError(FailRunParams{
+			StepID:            step.ID,
+			AttemptID:         attemptID,
+			ProviderSessionID: providerSessionID,
+			ExecutionErr:      err,
+			Message:           "result normalization failed",
+		})
 	}
 
 	if strings.TrimSpace(result.Handle.ProviderSessionID) == "" {
@@ -153,7 +227,12 @@ func (e *Engine) continueExecution(ctx context.Context, step workflow.CompiledSt
 	return e.applyResult(ctx, step, attemptID, result)
 }
 
-func (e *Engine) applyResult(ctx context.Context, step workflow.CompiledStep, attemptID string, result *adapters.StepResult) error {
+func (e *Engine) applyResult(
+	ctx context.Context,
+	step workflow.CompiledStep,
+	attemptID string,
+	result *adapters.StepResult,
+) error {
 	if result == nil {
 		return newError(ErrorCodeExecution, "step result is required")
 	}
@@ -167,17 +246,52 @@ func (e *Engine) applyResult(ctx context.Context, step workflow.CompiledStep, at
 
 	switch result.Status {
 	case adapters.ExecutionStateSucceeded:
-		return e.persistStepTransition(store.EventStepSucceeded, step.ID, StepStateRunning, StepStateSucceeded, attemptID, providerSessionID, summary, string(result.Status))
+		return e.persistStepTransition(StepTransitionParams{
+			EventType:         store.EventStepSucceeded,
+			StepID:            step.ID,
+			From:              StepStateRunning,
+			To:                StepStateSucceeded,
+			AttemptID:         attemptID,
+			ProviderSessionID: providerSessionID,
+			Summary:           summary,
+			NormalizedStatus:  string(result.Status),
+		})
 	case adapters.ExecutionStateFailed:
-		if err := e.persistStepTransition(store.EventStepFailed, step.ID, StepStateRunning, StepStateFailed, attemptID, providerSessionID, summary, string(result.Status)); err != nil {
+		if err := e.persistStepTransition(StepTransitionParams{
+			EventType:         store.EventStepFailed,
+			StepID:            step.ID,
+			From:              StepStateRunning,
+			To:                StepStateFailed,
+			AttemptID:         attemptID,
+			ProviderSessionID: providerSessionID,
+			Summary:           summary,
+			NormalizedStatus:  string(result.Status),
+		}); err != nil {
 			return err
 		}
 
 		return e.persistRunTransition(store.EventRunFailed, RunStateRunning, RunStateFailed, summary)
 	case adapters.ExecutionStateWaitingApproval:
-		return e.requestApproval(ctx, step, attemptID, providerSessionID, summary, ApprovalTriggerAdapter, result.Status)
+		return e.requestApproval(
+			ctx,
+			step,
+			attemptID,
+			providerSessionID,
+			summary,
+			ApprovalTriggerAdapter,
+			result.Status,
+		)
 	case adapters.ExecutionStateInterrupted:
-		if err := e.persistStepTransition(store.EventStepRetried, step.ID, StepStateRunning, StepStateQueued, attemptID, providerSessionID, summary, string(result.Status)); err != nil {
+		if err := e.persistStepTransition(StepTransitionParams{
+			EventType:         store.EventStepRetried,
+			StepID:            step.ID,
+			From:              StepStateRunning,
+			To:                StepStateQueued,
+			AttemptID:         attemptID,
+			ProviderSessionID: providerSessionID,
+			Summary:           summary,
+			NormalizedStatus:  string(result.Status),
+		}); err != nil {
 			return err
 		}
 
@@ -214,8 +328,18 @@ func (e *Engine) buildDriver(step workflow.CompiledStep) (stepDriver, error) {
 }
 
 type stepDriver interface {
-	Start(ctx context.Context, step workflow.CompiledStep, attemptID string, snapshot Snapshot) (*adapters.Execution, error)
-	Resume(ctx context.Context, step workflow.CompiledStep, handle adapters.ExecutionHandle, snapshot Snapshot) (*adapters.Execution, error)
+	Start(
+		ctx context.Context,
+		step workflow.CompiledStep,
+		attemptID string,
+		snapshot Snapshot,
+	) (*adapters.Execution, error)
+	Resume(
+		ctx context.Context,
+		step workflow.CompiledStep,
+		handle adapters.ExecutionHandle,
+		snapshot Snapshot,
+	) (*adapters.Execution, error)
 	PollOrCollect(ctx context.Context, handle adapters.ExecutionHandle) (*adapters.Execution, error)
 	Interrupt(ctx context.Context, handle adapters.ExecutionHandle) (*adapters.Execution, error)
 	NormalizeResult(ctx context.Context, execution *adapters.Execution) (*adapters.StepResult, error)
@@ -225,7 +349,12 @@ type agentDriver struct {
 	adapter adapters.Adapter
 }
 
-func (d agentDriver) Start(ctx context.Context, step workflow.CompiledStep, attemptID string, snapshot Snapshot) (*adapters.Execution, error) {
+func (d agentDriver) Start(
+	ctx context.Context,
+	step workflow.CompiledStep,
+	attemptID string,
+	snapshot Snapshot,
+) (*adapters.Execution, error) {
 	if step.Agent == nil {
 		return nil, newError(ErrorCodeConfig, fmt.Sprintf("agent config missing for step %q", step.ID))
 	}
@@ -250,7 +379,12 @@ func (d agentDriver) Interrupt(ctx context.Context, handle adapters.ExecutionHan
 	return d.adapter.Interrupt(ctx, handle)
 }
 
-func (d agentDriver) Resume(ctx context.Context, step workflow.CompiledStep, handle adapters.ExecutionHandle, _ Snapshot) (*adapters.Execution, error) {
+func (d agentDriver) Resume(
+	ctx context.Context,
+	step workflow.CompiledStep,
+	handle adapters.ExecutionHandle,
+	_ Snapshot,
+) (*adapters.Execution, error) {
 	if step.Agent == nil {
 		return nil, newError(ErrorCodeConfig, fmt.Sprintf("agent config missing for step %q", step.ID))
 	}
@@ -270,7 +404,12 @@ type commandDriver struct {
 	runner CommandRunner
 }
 
-func (d commandDriver) Start(ctx context.Context, step workflow.CompiledStep, attemptID string, snapshot Snapshot) (*adapters.Execution, error) {
+func (d commandDriver) Start(
+	ctx context.Context,
+	step workflow.CompiledStep,
+	attemptID string,
+	snapshot Snapshot,
+) (*adapters.Execution, error) {
 	if step.Command == nil {
 		return nil, newError(ErrorCodeConfig, fmt.Sprintf("command config missing for step %q", step.ID))
 	}
@@ -284,7 +423,10 @@ func (d commandDriver) Start(ctx context.Context, step workflow.CompiledStep, at
 	})
 }
 
-func (d commandDriver) PollOrCollect(ctx context.Context, handle adapters.ExecutionHandle) (*adapters.Execution, error) {
+func (d commandDriver) PollOrCollect(
+	ctx context.Context,
+	handle adapters.ExecutionHandle,
+) (*adapters.Execution, error) {
 	return d.runner.PollOrCollect(ctx, handle)
 }
 
@@ -292,11 +434,19 @@ func (d commandDriver) Interrupt(ctx context.Context, handle adapters.ExecutionH
 	return d.runner.Interrupt(ctx, handle)
 }
 
-func (d commandDriver) Resume(_ context.Context, step workflow.CompiledStep, _ adapters.ExecutionHandle, _ Snapshot) (*adapters.Execution, error) {
+func (d commandDriver) Resume(
+	_ context.Context,
+	step workflow.CompiledStep,
+	_ adapters.ExecutionHandle,
+	_ Snapshot,
+) (*adapters.Execution, error) {
 	return nil, newError(ErrorCodeExecution, fmt.Sprintf("command step %q does not support approval resume", step.ID))
 }
 
-func (d commandDriver) NormalizeResult(ctx context.Context, execution *adapters.Execution) (*adapters.StepResult, error) {
+func (d commandDriver) NormalizeResult(
+	ctx context.Context,
+	execution *adapters.Execution,
+) (*adapters.StepResult, error) {
 	return d.runner.NormalizeResult(ctx, execution)
 }
 
@@ -305,7 +455,12 @@ type approvalDriver struct {
 	ids   IDGenerator
 }
 
-func (d approvalDriver) Start(_ context.Context, step workflow.CompiledStep, attemptID string, _ Snapshot) (*adapters.Execution, error) {
+func (d approvalDriver) Start(
+	_ context.Context,
+	step workflow.CompiledStep,
+	attemptID string,
+	_ Snapshot,
+) (*adapters.Execution, error) {
 	return &adapters.Execution{
 		Handle: adapters.ExecutionHandle{
 			RunID:             d.runID,
@@ -318,19 +473,39 @@ func (d approvalDriver) Start(_ context.Context, step workflow.CompiledStep, att
 	}, nil
 }
 
-func (d approvalDriver) Resume(_ context.Context, step workflow.CompiledStep, handle adapters.ExecutionHandle, _ Snapshot) (*adapters.Execution, error) {
-	return &adapters.Execution{Handle: handle, State: adapters.ExecutionStateSucceeded, Summary: approvalDecisionSummary(ApprovalDecisionApprove, step)}, nil
+func (d approvalDriver) Resume(
+	_ context.Context,
+	step workflow.CompiledStep,
+	handle adapters.ExecutionHandle,
+	_ Snapshot,
+) (*adapters.Execution, error) {
+	return &adapters.Execution{
+		Handle:  handle,
+		State:   adapters.ExecutionStateSucceeded,
+		Summary: approvalDecisionSummary(ApprovalDecisionApprove, step),
+	}, nil
 }
 
 func (d approvalDriver) Interrupt(_ context.Context, handle adapters.ExecutionHandle) (*adapters.Execution, error) {
-	return &adapters.Execution{Handle: handle, State: adapters.ExecutionStateInterrupted, Summary: "approval interrupted"}, nil
+	return &adapters.Execution{
+		Handle:  handle,
+		State:   adapters.ExecutionStateInterrupted,
+		Summary: "approval interrupted",
+	}, nil
 }
 
 func (d approvalDriver) PollOrCollect(_ context.Context, handle adapters.ExecutionHandle) (*adapters.Execution, error) {
-	return &adapters.Execution{Handle: handle, State: adapters.ExecutionStateWaitingApproval, Summary: "approval pending"}, nil
+	return &adapters.Execution{
+		Handle:  handle,
+		State:   adapters.ExecutionStateWaitingApproval,
+		Summary: "approval pending",
+	}, nil
 }
 
-func (d approvalDriver) NormalizeResult(_ context.Context, execution *adapters.Execution) (*adapters.StepResult, error) {
+func (d approvalDriver) NormalizeResult(
+	_ context.Context,
+	execution *adapters.Execution,
+) (*adapters.StepResult, error) {
 	if execution == nil {
 		return nil, newError(ErrorCodeExecution, "approval execution is required")
 	}

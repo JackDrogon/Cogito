@@ -58,6 +58,7 @@ func runCapabilityTest(t *testing.T, tc *ContractCase) CapabilityMatrix {
 	if !reflect.DeepEqual(capabilities, tc.WantCapabilities) {
 		t.Fatalf("DescribeCapabilities() = %+v, want %+v", capabilities, tc.WantCapabilities)
 	}
+
 	return capabilities
 }
 

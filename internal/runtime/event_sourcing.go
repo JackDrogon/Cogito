@@ -24,7 +24,16 @@ func (e *Engine) queueReadySteps() error {
 	}
 
 	for _, stepID := range e.selectReadyPendingStepIDs() {
-		if err := e.persistStepTransition(store.EventStepQueued, stepID, StepStatePending, StepStateQueued, "", "", "step ready", ""); err != nil {
+		if err := e.persistStepTransition(StepTransitionParams{
+			EventType:         store.EventStepQueued,
+			StepID:            stepID,
+			From:              StepStatePending,
+			To:                StepStateQueued,
+			AttemptID:         "",
+			ProviderSessionID: "",
+			Summary:           "step ready",
+			NormalizedStatus:  "",
+		}); err != nil {
 			return err
 		}
 	}
@@ -59,41 +68,60 @@ func (e *Engine) selectReadyPendingStepIDs() []string {
 	return ready
 }
 
-func (e *Engine) persistApprovalRequested(stepID, attemptID, providerSessionID, summary string, trigger ApprovalTrigger, status adapters.ExecutionState) error {
+// ApprovalRequestedParams groups parameters for approval request events.
+type ApprovalRequestedParams struct {
+	StepID            string
+	AttemptID         string
+	ProviderSessionID string
+	Summary           string
+	Trigger           ApprovalTrigger
+	Status            adapters.ExecutionState
+}
+
+func (e *Engine) persistApprovalRequested(params ApprovalRequestedParams) error {
 	event := store.Event{
 		Type:       store.EventApprovalRequested,
-		StepID:     stepID,
-		AttemptID:  attemptID,
-		ApprovalID: e.ids.NewApprovalID(stepID),
-		Message:    summary,
+		StepID:     params.StepID,
+		AttemptID:  params.AttemptID,
+		ApprovalID: e.ids.NewApprovalID(params.StepID),
+		Message:    params.Summary,
 		Data: map[string]string{
 			dataOccurredAt:        e.clock().UTC().Format(time.RFC3339Nano),
 			dataFromState:         string(StepStateRunning),
 			dataToState:           string(StepStateWaitingApproval),
-			dataProviderSessionID: providerSessionID,
-			dataApprovalTrigger:   string(trigger),
-			dataSummary:           summary,
-			dataNormalizedStatus:  string(status),
+			dataProviderSessionID: params.ProviderSessionID,
+			dataApprovalTrigger:   string(params.Trigger),
+			dataSummary:           params.Summary,
+			dataNormalizedStatus:  string(params.Status),
 		},
 	}
 
 	return e.persistEvent(event)
 }
 
-func (e *Engine) persistApprovalResolution(eventType store.EventType, pending pendingApproval, from, to StepState, summary string) error {
+// ApprovalResolutionParams groups parameters for approval resolution events.
+type ApprovalResolutionParams struct {
+	EventType store.EventType
+	Pending   pendingApproval
+	From      StepState
+	To        StepState
+	Summary   string
+}
+
+func (e *Engine) persistApprovalResolution(params ApprovalResolutionParams) error {
 	event := store.Event{
-		Type:       eventType,
-		StepID:     pending.Step.ID,
-		AttemptID:  pending.AttemptID,
-		ApprovalID: pending.ApprovalID,
-		Message:    summary,
+		Type:       params.EventType,
+		StepID:     params.Pending.Step.ID,
+		AttemptID:  params.Pending.AttemptID,
+		ApprovalID: params.Pending.ApprovalID,
+		Message:    params.Summary,
 		Data: map[string]string{
 			dataOccurredAt:        e.clock().UTC().Format(time.RFC3339Nano),
-			dataFromState:         string(from),
-			dataToState:           string(to),
-			dataProviderSessionID: pending.ProviderSessionID,
-			dataApprovalTrigger:   string(pending.Trigger),
-			dataSummary:           summary,
+			dataFromState:         string(params.From),
+			dataToState:           string(params.To),
+			dataProviderSessionID: params.Pending.ProviderSessionID,
+			dataApprovalTrigger:   string(params.Pending.Trigger),
+			dataSummary:           params.Summary,
 		},
 	}
 
@@ -116,23 +144,35 @@ func (e *Engine) persistRunTransition(eventType store.EventType, from, to RunSta
 	return e.persistEvent(event)
 }
 
-func (e *Engine) persistStepTransition(eventType store.EventType, stepID string, from, to StepState, attemptID, providerSessionID, summary, normalizedStatus string) error {
+// StepTransitionParams groups parameters for step state transitions.
+type StepTransitionParams struct {
+	EventType         store.EventType
+	StepID            string
+	From              StepState
+	To                StepState
+	AttemptID         string
+	ProviderSessionID string
+	Summary           string
+	NormalizedStatus  string
+}
+
+func (e *Engine) persistStepTransition(params StepTransitionParams) error {
 	event := store.Event{
-		Type:      eventType,
-		StepID:    stepID,
-		AttemptID: attemptID,
-		Message:   normalizeSummary(summary, adapters.ExecutionStateRunning),
+		Type:      params.EventType,
+		StepID:    params.StepID,
+		AttemptID: params.AttemptID,
+		Message:   normalizeSummary(params.Summary, adapters.ExecutionStateRunning),
 		Data: map[string]string{
 			dataOccurredAt:        e.clock().UTC().Format(time.RFC3339Nano),
-			dataFromState:         string(from),
-			dataToState:           string(to),
-			dataProviderSessionID: providerSessionID,
-			dataSummary:           normalizeSummary(summary, adapters.ExecutionStateRunning),
+			dataFromState:         string(params.From),
+			dataToState:           string(params.To),
+			dataProviderSessionID: params.ProviderSessionID,
+			dataSummary:           normalizeSummary(params.Summary, adapters.ExecutionStateRunning),
 		},
 	}
 
-	if normalizedStatus != "" {
-		event.Data[dataNormalizedStatus] = normalizedStatus
+	if params.NormalizedStatus != "" {
+		event.Data[dataNormalizedStatus] = params.NormalizedStatus
 	}
 
 	return e.persistEvent(event)
@@ -183,9 +223,27 @@ func (e *Engine) allStepsSucceeded() bool {
 	return true
 }
 
-func (e *Engine) failRunForExecutionError(stepID, attemptID, providerSessionID string, executionErr error, message string) error {
-	summary := normalizeSummary(executionErr.Error(), adapters.ExecutionStateFailed)
-	if err := e.persistStepTransition(store.EventStepFailed, stepID, StepStateRunning, StepStateFailed, attemptID, providerSessionID, summary, string(adapters.ExecutionStateFailed)); err != nil {
+// FailRunParams groups parameters for run failure events.
+type FailRunParams struct {
+	StepID            string
+	AttemptID         string
+	ProviderSessionID string
+	ExecutionErr      error
+	Message           string
+}
+
+func (e *Engine) failRunForExecutionError(params FailRunParams) error {
+	summary := normalizeSummary(params.ExecutionErr.Error(), adapters.ExecutionStateFailed)
+	if err := e.persistStepTransition(StepTransitionParams{
+		EventType:         store.EventStepFailed,
+		StepID:            params.StepID,
+		From:              StepStateRunning,
+		To:                StepStateFailed,
+		AttemptID:         params.AttemptID,
+		ProviderSessionID: params.ProviderSessionID,
+		Summary:           summary,
+		NormalizedStatus:  string(adapters.ExecutionStateFailed),
+	}); err != nil {
 		return err
 	}
 
@@ -193,7 +251,7 @@ func (e *Engine) failRunForExecutionError(stepID, attemptID, providerSessionID s
 		return err
 	}
 
-	return wrapError(ErrorCodeExecution, message, executionErr)
+	return wrapError(ErrorCodeExecution, params.Message, params.ExecutionErr)
 }
 
 func latestEventSequence(events []store.Event) int64 {

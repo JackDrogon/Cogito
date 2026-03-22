@@ -2,6 +2,7 @@ package claude
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -25,7 +26,7 @@ type response struct {
 func parseResponse(payload []byte) (*response, error) {
 	trimmed := strings.TrimSpace(string(payload))
 	if trimmed == "" {
-		return nil, fmt.Errorf("claude.parseResponse: empty response payload")
+		return nil, errors.New("claude.parseResponse: empty response payload")
 	}
 
 	var raw map[string]any

@@ -29,6 +29,16 @@ const (
 
 type ApprovalDecision string
 
+type ApprovalRequestParams struct {
+	Step              workflow.CompiledStep
+	AttemptID         string
+	ProviderSessionID string
+	Summary           string
+	Trigger           ApprovalTrigger
+	Status            adapters.ExecutionState
+	Decision          ApprovalDecisionResult
+}
+
 const (
 	ApprovalDecisionWait    ApprovalDecision = "wait"
 	ApprovalDecisionApprove ApprovalDecision = "approve"
@@ -72,7 +82,11 @@ type pendingApproval struct {
 	Trigger           ApprovalTrigger
 }
 
-func (e *Engine) requestExceptionalApproval(ctx context.Context, step workflow.CompiledStep, attemptID string) (bool, error) {
+func (e *Engine) requestExceptionalApproval(
+	ctx context.Context,
+	step workflow.CompiledStep,
+	attemptID string,
+) (bool, error) {
 	decision, required, err := e.approvalPolicy.EvaluateException(ctx, ApprovalExceptionRequest{
 		Step:      step,
 		Snapshot:  e.Snapshot(),
@@ -95,14 +109,37 @@ func (e *Engine) requestExceptionalApproval(ctx context.Context, step workflow.C
 		summary = "approval required by policy"
 	}
 
-	if err := e.persistStepTransition(store.EventStepStarted, step.ID, StepStateQueued, StepStateRunning, attemptID, providerSessionID, summary, ""); err != nil {
+	if err := e.persistStepTransition(StepTransitionParams{
+		EventType:         store.EventStepStarted,
+		StepID:            step.ID,
+		From:              StepStateQueued,
+		To:                StepStateRunning,
+		AttemptID:         attemptID,
+		ProviderSessionID: providerSessionID,
+		Summary:           summary,
+		NormalizedStatus:  "",
+	}); err != nil {
 		return true, err
 	}
 
-	return true, e.requestApprovalWithDecision(ctx, step, attemptID, providerSessionID, summary, ApprovalTriggerPolicy, adapters.ExecutionStateWaitingApproval, decision)
+	return true, e.requestApprovalWithDecision(ctx, ApprovalRequestParams{
+		Step:              step,
+		AttemptID:         attemptID,
+		ProviderSessionID: providerSessionID,
+		Summary:           summary,
+		Trigger:           ApprovalTriggerPolicy,
+		Status:            adapters.ExecutionStateWaitingApproval,
+		Decision:          decision,
+	})
 }
 
-func (e *Engine) requestApproval(ctx context.Context, step workflow.CompiledStep, attemptID, providerSessionID, summary string, trigger ApprovalTrigger, status adapters.ExecutionState) error {
+func (e *Engine) requestApproval(
+	ctx context.Context,
+	step workflow.CompiledStep,
+	attemptID, providerSessionID, summary string,
+	trigger ApprovalTrigger,
+	status adapters.ExecutionState,
+) error {
 	decision, err := e.approvalPolicy.DecideGate(ctx, ApprovalGateRequest{
 		Trigger:           trigger,
 		Step:              step,
@@ -116,26 +153,52 @@ func (e *Engine) requestApproval(ctx context.Context, step workflow.CompiledStep
 		return err
 	}
 
-	return e.requestApprovalWithDecision(ctx, step, attemptID, providerSessionID, summary, trigger, status, decision)
+	return e.requestApprovalWithDecision(ctx, ApprovalRequestParams{
+		Step:              step,
+		AttemptID:         attemptID,
+		ProviderSessionID: providerSessionID,
+		Summary:           summary,
+		Trigger:           trigger,
+		Status:            status,
+		Decision:          decision,
+	})
 }
 
-func (e *Engine) requestApprovalWithDecision(ctx context.Context, step workflow.CompiledStep, attemptID, providerSessionID, summary string, trigger ApprovalTrigger, status adapters.ExecutionState, decision ApprovalDecisionResult) error {
-	if err := e.persistApprovalRequested(step.ID, attemptID, providerSessionID, summary, trigger, status); err != nil {
+func (e *Engine) requestApprovalWithDecision(
+	ctx context.Context,
+	params ApprovalRequestParams,
+) error {
+	if err := e.persistApprovalRequested(ApprovalRequestedParams{
+		StepID:            params.Step.ID,
+		AttemptID:         params.AttemptID,
+		ProviderSessionID: params.ProviderSessionID,
+		Summary:           params.Summary,
+		Trigger:           params.Trigger,
+		Status:            params.Status,
+	}); err != nil {
 		return err
 	}
 
-	if err := e.persistRunTransition(store.EventRunWaitingApproval, RunStateRunning, RunStateWaitingApproval, summary); err != nil {
+	if err := e.persistRunTransition(
+		store.EventRunWaitingApproval,
+		RunStateRunning,
+		RunStateWaitingApproval,
+		params.Summary,
+	); err != nil {
 		return err
 	}
 
-	resolvedDecision := normalizeApprovalDecision(decision.Decision)
+	resolvedDecision := normalizeApprovalDecision(params.Decision.Decision)
 	switch resolvedDecision {
 	case ApprovalDecisionWait:
 		return nil
 	case ApprovalDecisionApprove, ApprovalDecisionDeny, ApprovalDecisionTimeout:
-		return e.resolvePendingApproval(ctx, resolvedDecision, decision.Summary)
+		return e.resolvePendingApproval(ctx, resolvedDecision, params.Decision.Summary)
 	default:
-		return newError(ErrorCodeExecution, fmt.Sprintf("unsupported approval decision %q", decision.Decision))
+		return newError(
+			ErrorCodeExecution,
+			fmt.Sprintf("unsupported approval decision %q", params.Decision.Decision),
+		)
 	}
 }
 
@@ -156,11 +219,22 @@ func (e *Engine) resolvePendingApproval(ctx context.Context, decision ApprovalDe
 
 	switch decision {
 	case ApprovalDecisionApprove:
-		if err := e.persistApprovalResolution(store.EventApprovalGranted, pending, StepStateWaitingApproval, StepStateRunning, summary); err != nil {
+		if err := e.persistApprovalResolution(ApprovalResolutionParams{
+			EventType: store.EventApprovalGranted,
+			Pending:   pending,
+			From:      StepStateWaitingApproval,
+			To:        StepStateRunning,
+			Summary:   summary,
+		}); err != nil {
 			return err
 		}
 
-		if err := e.persistRunTransition(store.EventRunStarted, RunStateWaitingApproval, RunStateRunning, "run resumed"); err != nil {
+		if err := e.persistRunTransition(
+			store.EventRunStarted,
+			RunStateWaitingApproval,
+			RunStateRunning,
+			"run resumed",
+		); err != nil {
 			return err
 		}
 
@@ -170,21 +244,43 @@ func (e *Engine) resolvePendingApproval(ctx context.Context, decision ApprovalDe
 
 		return e.finalizeRunningState()
 	case ApprovalDecisionDeny:
-		if err := e.persistApprovalResolution(store.EventApprovalDenied, pending, StepStateWaitingApproval, StepStateFailed, summary); err != nil {
+		if err := e.persistApprovalResolution(ApprovalResolutionParams{
+			EventType: store.EventApprovalDenied,
+			Pending:   pending,
+			From:      StepStateWaitingApproval,
+			To:        StepStateFailed,
+			Summary:   summary,
+		}); err != nil {
 			return err
 		}
 
-		if err := e.persistRunTransition(store.EventRunFailed, RunStateWaitingApproval, RunStateFailed, summary); err != nil {
+		if err := e.persistRunTransition(
+			store.EventRunFailed,
+			RunStateWaitingApproval,
+			RunStateFailed,
+			summary,
+		); err != nil {
 			return err
 		}
 
 		return newError(ErrorCodeExecution, summary)
 	case ApprovalDecisionTimeout:
-		if err := e.persistApprovalResolution(store.EventApprovalTimedOut, pending, StepStateWaitingApproval, StepStateFailed, summary); err != nil {
+		if err := e.persistApprovalResolution(ApprovalResolutionParams{
+			EventType: store.EventApprovalTimedOut,
+			Pending:   pending,
+			From:      StepStateWaitingApproval,
+			To:        StepStateFailed,
+			Summary:   summary,
+		}); err != nil {
 			return err
 		}
 
-		if err := e.persistRunTransition(store.EventRunFailed, RunStateWaitingApproval, RunStateFailed, summary); err != nil {
+		if err := e.persistRunTransition(
+			store.EventRunFailed,
+			RunStateWaitingApproval,
+			RunStateFailed,
+			summary,
+		); err != nil {
 			return err
 		}
 
@@ -197,7 +293,13 @@ func (e *Engine) resolvePendingApproval(ctx context.Context, decision ApprovalDe
 func (e *Engine) continueApprovedStep(ctx context.Context, pending pendingApproval) error {
 	driver, err := e.buildDriver(pending.Step)
 	if err != nil {
-		return e.failRunForExecutionError(pending.Step.ID, pending.AttemptID, pending.ProviderSessionID, err, "driver setup failed after approval")
+		return e.failRunForExecutionError(FailRunParams{
+			StepID:            pending.Step.ID,
+			AttemptID:         pending.AttemptID,
+			ProviderSessionID: pending.ProviderSessionID,
+			ExecutionErr:      err,
+			Message:           "driver setup failed after approval",
+		})
 	}
 
 	handle := adapters.ExecutionHandle{
@@ -213,12 +315,24 @@ func (e *Engine) continueApprovedStep(ctx context.Context, pending pendingApprov
 	case ApprovalTriggerExplicit, ApprovalTriggerAdapter:
 		execution, err = driver.Resume(ctx, pending.Step, handle, e.Snapshot())
 		if err != nil {
-			return e.failRunForExecutionError(pending.Step.ID, pending.AttemptID, pending.ProviderSessionID, err, "step resume failed after approval")
+			return e.failRunForExecutionError(FailRunParams{
+				StepID:            pending.Step.ID,
+				AttemptID:         pending.AttemptID,
+				ProviderSessionID: pending.ProviderSessionID,
+				ExecutionErr:      err,
+				Message:           "step resume failed after approval",
+			})
 		}
 	case ApprovalTriggerPolicy:
 		execution, err = driver.Start(ctx, pending.Step, pending.AttemptID, e.Snapshot())
 		if err != nil {
-			return e.failRunForExecutionError(pending.Step.ID, pending.AttemptID, pending.ProviderSessionID, err, "step start failed after approval")
+			return e.failRunForExecutionError(FailRunParams{
+				StepID:            pending.Step.ID,
+				AttemptID:         pending.AttemptID,
+				ProviderSessionID: pending.ProviderSessionID,
+				ExecutionErr:      err,
+				Message:           "step start failed after approval",
+			})
 		}
 	default:
 		return newError(ErrorCodeExecution, fmt.Sprintf("unsupported approval trigger %q", pending.Trigger))
@@ -241,7 +355,12 @@ func (e *Engine) finalizeRunningState() error {
 	}
 
 	if e.allStepsSucceeded() {
-		return e.persistRunTransition(store.EventRunSucceeded, RunStateRunning, RunStateSucceeded, "run succeeded")
+		return e.persistRunTransition(
+			store.EventRunSucceeded,
+			RunStateRunning,
+			RunStateSucceeded,
+			"run succeeded",
+		)
 	}
 
 	return nil
@@ -249,10 +368,14 @@ func (e *Engine) finalizeRunningState() error {
 
 func (e *Engine) findPendingApproval() (pendingApproval, error) {
 	if e.snapshot.State != RunStateWaitingApproval {
-		return pendingApproval{}, newError(ErrorCodeState, fmt.Sprintf("run is not waiting approval: %q", e.snapshot.State))
+		return pendingApproval{}, newError(
+			ErrorCodeState,
+			fmt.Sprintf("run is not waiting approval: %q", e.snapshot.State),
+		)
 	}
 
 	var pending pendingApproval
+
 	found := false
 
 	for _, stepID := range e.compiled.TopologicalOrder {
@@ -343,7 +466,10 @@ func (p approvalModePolicy) DecideGate(_ context.Context, request ApprovalGateRe
 	return ApprovalDecisionResult{Decision: decision, Summary: summary}, nil
 }
 
-func (approvalModePolicy) EvaluateException(_ context.Context, _ ApprovalExceptionRequest) (ApprovalDecisionResult, bool, error) {
+func (approvalModePolicy) EvaluateException(
+	_ context.Context,
+	_ ApprovalExceptionRequest,
+) (ApprovalDecisionResult, bool, error) {
 	return ApprovalDecisionResult{}, false, nil
 }
 

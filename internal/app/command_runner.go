@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -58,19 +59,19 @@ func newSupervisorCommandRunner(runStore *store.Store, workingDir string, timeou
 
 func (r *supervisorCommandRunner) Start(ctx context.Context, request runtime.CommandRequest) (*adapters.Execution, error) {
 	if strings.TrimSpace(request.RunID) == "" {
-		return nil, fmt.Errorf("supervisorCommandRunner.Start: run id is required")
+		return nil, errors.New("supervisorCommandRunner.Start: run id is required")
 	}
 
 	if strings.TrimSpace(request.StepID) == "" {
-		return nil, fmt.Errorf("supervisorCommandRunner.Start: step id is required")
+		return nil, errors.New("supervisorCommandRunner.Start: step id is required")
 	}
 
 	if strings.TrimSpace(request.AttemptID) == "" {
-		return nil, fmt.Errorf("supervisorCommandRunner.Start: attempt id is required")
+		return nil, errors.New("supervisorCommandRunner.Start: attempt id is required")
 	}
 
 	if strings.TrimSpace(request.Command) == "" {
-		return nil, fmt.Errorf("supervisorCommandRunner.Start: command is required")
+		return nil, errors.New("supervisorCommandRunner.Start: command is required")
 	}
 
 	commandSpec, err := parseCommandSpec(request.Command, r.commandWorkingDir(request))
@@ -128,7 +129,7 @@ func (r *supervisorCommandRunner) Interrupt(_ context.Context, handle adapters.E
 
 func (r *supervisorCommandRunner) NormalizeResult(_ context.Context, execution *adapters.Execution) (*adapters.StepResult, error) {
 	if execution == nil {
-		return nil, fmt.Errorf("supervisorCommandRunner.NormalizeResult: execution is required")
+		return nil, errors.New("supervisorCommandRunner.NormalizeResult: execution is required")
 	}
 
 	if !execution.State.Normalizable() {
@@ -274,7 +275,7 @@ func parseCommandSpec(command, dir string) (executor.CommandSpec, error) {
 	}
 
 	if len(argv) == 0 {
-		return executor.CommandSpec{}, fmt.Errorf("parseCommandSpec: command is required")
+		return executor.CommandSpec{}, errors.New("parseCommandSpec: command is required")
 	}
 
 	return executor.CommandSpec{
@@ -284,8 +285,8 @@ func parseCommandSpec(command, dir string) (executor.CommandSpec, error) {
 	}, nil
 }
 
-// parseQuoted handles character parsing inside quoted strings
-func parseQuoted(r rune, inSingle, inDouble *bool, escaped *bool, current *strings.Builder) {
+// parseQuoted handles character parsing inside quoted strings.
+func parseQuoted(r rune, inSingle, inDouble, escaped *bool, current *strings.Builder) {
 	switch {
 	case *inSingle:
 		if r == '\'' {
@@ -305,7 +306,7 @@ func parseQuoted(r rune, inSingle, inDouble *bool, escaped *bool, current *strin
 	}
 }
 
-// parseUnquoted handles character parsing outside quoted strings
+// parseUnquoted handles character parsing outside quoted strings.
 func parseUnquoted(r rune, inSingle, inDouble, escaped, tokenStarted *bool, current *strings.Builder, flush func()) {
 	switch r {
 	case '\\':
@@ -323,6 +324,7 @@ func parseUnquoted(r rune, inSingle, inDouble, escaped, tokenStarted *bool, curr
 		}
 	default:
 		current.WriteRune(r)
+
 		*tokenStarted = true
 	}
 }
@@ -330,29 +332,35 @@ func parseUnquoted(r rune, inSingle, inDouble, escaped, tokenStarted *bool, curr
 func tokenizeCommand(command string) ([]string, error) {
 	command = strings.TrimSpace(command)
 	if command == "" {
-		return nil, fmt.Errorf("tokenizeCommand: command is required")
+		return nil, errors.New("tokenizeCommand: command is required")
 	}
 
 	args := make([]string, 0, 4)
+
 	var current strings.Builder
+
 	inSingle, inDouble, escaped, tokenStarted := false, false, false, false
 
 	flush := func() {
 		args = append(args, current.String())
 		current.Reset()
+
 		tokenStarted = false
 	}
 
 	for _, r := range command {
 		if escaped {
 			current.WriteRune(r)
+
 			escaped = false
 			tokenStarted = true
+
 			continue
 		}
 
 		if inSingle || inDouble {
 			parseQuoted(r, &inSingle, &inDouble, &escaped, &current)
+
 			tokenStarted = true
 		} else {
 			parseUnquoted(r, &inSingle, &inDouble, &escaped, &tokenStarted, &current, flush)
@@ -362,9 +370,11 @@ func tokenizeCommand(command string) ([]string, error) {
 	if escaped {
 		current.WriteRune('\\')
 	}
+
 	if inSingle || inDouble {
 		return nil, fmt.Errorf("unterminated quoted string in command %s", strconv.Quote(command))
 	}
+
 	if tokenStarted {
 		flush()
 	}

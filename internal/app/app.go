@@ -87,7 +87,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer) error {
 
 func runWorkflowCommand(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("workflow: subcommand is required")
+		return errors.New("workflow: subcommand is required")
 	}
 
 	if !isSubcommandToken(args[0]) {
@@ -109,10 +109,10 @@ func runWorkflowCommand(ctx context.Context, args []string, stdout io.Writer) er
 		}
 
 		if len(fs.Args()) > 0 {
-			return fmt.Errorf("workflow: subcommand is required")
+			return errors.New("workflow: subcommand is required")
 		}
 
-		return fmt.Errorf("workflow: subcommand is required")
+		return errors.New("workflow: subcommand is required")
 	}
 
 	switch args[0] {
@@ -134,7 +134,7 @@ func runWorkflowValidateCommand(_ context.Context, args []string, stdout io.Writ
 	}
 
 	if len(remainingArgs) != 1 {
-		return fmt.Errorf("workflow.validate: expects exactly 1 file argument")
+		return errors.New("workflow.validate: expects exactly 1 file argument")
 	}
 
 	if _, err := workflow.LoadFile(remainingArgs[0]); err != nil {
@@ -174,7 +174,7 @@ func runRunCommand(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 
 	if len(remainingArgs) != 1 {
-		return fmt.Errorf("run: expects exactly 1 file argument")
+		return errors.New("run: expects exactly 1 file argument")
 	}
 
 	return executeWorkflowRun(ctx, remainingArgs[0], flags, stdout)
@@ -240,7 +240,7 @@ func runReplayCommand(_ context.Context, args []string, stdout io.Writer) error 
 	}
 
 	if len(remainingArgs) != 1 {
-		return fmt.Errorf("replay: expects exactly 1 events file argument")
+		return errors.New("replay: expects exactly 1 events file argument")
 	}
 
 	return executeReplay(remainingArgs[0], stdout)

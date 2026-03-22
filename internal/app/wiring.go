@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -24,7 +25,7 @@ type runtimeWiring struct {
 
 func buildRuntimeWiring(runStore *store.Store, flags *sharedFlags) (runtimeWiring, error) {
 	if runStore == nil {
-		return runtimeWiring{}, fmt.Errorf("buildRuntimeWiring: run store is required")
+		return runtimeWiring{}, errors.New("buildRuntimeWiring: run store is required")
 	}
 
 	repoPath, workingDir, err := resolveExecutionContext(runStore, flags)
@@ -60,7 +61,7 @@ func lookupRegisteredAdapter(step workflow.CompiledStep) (adapters.Adapter, erro
 
 func resolveExecutionContext(runStore *store.Store, flags *sharedFlags) (string, string, error) {
 	if runStore == nil {
-		return "", "", fmt.Errorf("resolveExecutionContext: run store is required")
+		return "", "", errors.New("resolveExecutionContext: run store is required")
 	}
 
 	if flags != nil && strings.TrimSpace(flags.repo) != "" {

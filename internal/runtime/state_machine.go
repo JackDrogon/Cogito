@@ -98,21 +98,27 @@ func validateEventPreconditions(compiled *workflow.CompiledWorkflow, snapshot *S
 	if compiled == nil {
 		return newError(code, "compiled workflow is required")
 	}
+
 	if snapshot == nil {
 		return newError(code, "snapshot is required")
 	}
+
 	if strings.TrimSpace(event.RunID) == "" {
 		return newError(code, "event run id is required")
 	}
+
 	if snapshot.RunID == "" {
 		snapshot.RunID = event.RunID
 	}
+
 	if event.RunID != snapshot.RunID {
 		return newError(code, fmt.Sprintf("event run id %q does not match snapshot %q", event.RunID, snapshot.RunID))
 	}
+
 	if event.Sequence != snapshot.LastSequence+1 {
 		return newError(code, fmt.Sprintf("invalid event sequence %d after %d", event.Sequence, snapshot.LastSequence))
 	}
+
 	return nil
 }
 
@@ -126,9 +132,11 @@ func applyRunEvent(compiled *workflow.CompiledWorkflow, snapshot *Snapshot, tran
 	}
 
 	snapshot.State = to
+
 	if event.Type == store.EventRunCreated {
 		initializePendingSteps(snapshot, compiled)
 	}
+
 	if event.Type == store.EventRunCanceled {
 		cancelActiveSteps(snapshot)
 	}
@@ -141,6 +149,7 @@ func applyRunEvent(compiled *workflow.CompiledWorkflow, snapshot *Snapshot, tran
 		To:        string(to),
 		Summary:   normalizeSummary(summary, adapters.ExecutionStateRunning),
 	})
+
 	return nil
 }
 
@@ -149,6 +158,7 @@ func applyStepEvent(compiled *workflow.CompiledWorkflow, snapshot *Snapshot, tra
 	if stepID == "" {
 		return newError(code, fmt.Sprintf("event %s missing step id", event.Type))
 	}
+
 	if _, ok := compiled.StepIndex[stepID]; !ok {
 		return newError(code, fmt.Sprintf("event references unknown step %q", stepID))
 	}
@@ -167,12 +177,15 @@ func applyStepEvent(compiled *workflow.CompiledWorkflow, snapshot *Snapshot, tra
 	if event.AttemptID != "" {
 		current.AttemptID = event.AttemptID
 	}
+
 	if providerSessionID != "" {
 		current.ProviderSessionID = providerSessionID
 	}
+
 	if summary != "" {
 		current.Summary = summary
 	}
+
 	if to == StepStateQueued && event.Type == store.EventStepRetried {
 		current.AttemptID = ""
 		current.ProviderSessionID = ""
@@ -190,6 +203,7 @@ func applyStepEvent(compiled *workflow.CompiledWorkflow, snapshot *Snapshot, tra
 		ProviderSessionID: current.ProviderSessionID,
 		Summary:           normalizeSummary(current.Summary, adapters.ExecutionStateRunning),
 	})
+
 	return nil
 }
 
@@ -198,6 +212,7 @@ func applyApprovalEvent(compiled *workflow.CompiledWorkflow, snapshot *Snapshot,
 	if stepID == "" {
 		return newError(code, fmt.Sprintf("event %s missing step id", event.Type))
 	}
+
 	if _, ok := compiled.StepIndex[stepID]; !ok {
 		return newError(code, fmt.Sprintf("event references unknown step %q", stepID))
 	}
@@ -217,9 +232,11 @@ func applyApprovalEvent(compiled *workflow.CompiledWorkflow, snapshot *Snapshot,
 	if event.AttemptID != "" {
 		current.AttemptID = event.AttemptID
 	}
+
 	if providerSessionID != "" {
 		current.ProviderSessionID = providerSessionID
 	}
+
 	if summary != "" {
 		current.Summary = summary
 	}
@@ -245,6 +262,7 @@ func applyApprovalEvent(compiled *workflow.CompiledWorkflow, snapshot *Snapshot,
 		ProviderSessionID: current.ProviderSessionID,
 		Summary:           normalizeSummary(current.Summary, adapters.ExecutionStateRunning),
 	})
+
 	return nil
 }
 
@@ -255,6 +273,7 @@ func applyEvent(compiled *workflow.CompiledWorkflow, snapshot *Snapshot, transit
 
 	data := cloneStringMap(event.Data)
 	occurredAt := strings.TrimSpace(data[dataOccurredAt])
+
 	if occurredAt == "" {
 		return newError(code, fmt.Sprintf("event %s missing %s", event.Type, dataOccurredAt))
 	}
@@ -278,6 +297,7 @@ func applyEvent(compiled *workflow.CompiledWorkflow, snapshot *Snapshot, transit
 
 	snapshot.LastSequence = event.Sequence
 	snapshot.UpdatedAt = occurredAt
+
 	return nil
 }
 

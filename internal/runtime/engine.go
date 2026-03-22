@@ -162,7 +162,11 @@ func NewEngine(runID string, compiled *workflow.CompiledWorkflow, deps MachineDe
 
 	if len(events) == 0 {
 		if checkpoint != nil {
-			engine.repoPath, engine.workingDir = checkpointExecutionContext(checkpoint, engine.repoPath, engine.workingDir)
+			engine.repoPath, engine.workingDir = checkpointExecutionContext(
+				checkpoint,
+				engine.repoPath,
+				engine.workingDir,
+			)
 		}
 
 		return engine, nil
@@ -223,12 +227,22 @@ func (e *Engine) Start(_ context.Context) error {
 
 	switch e.snapshot.State {
 	case RunStatePending:
-		if err := e.persistRunTransition(store.EventRunStarted, RunStatePending, RunStateRunning, "run started"); err != nil {
+		if err := e.persistRunTransition(
+			store.EventRunStarted,
+			RunStatePending,
+			RunStateRunning,
+			"run started",
+		); err != nil {
 			return err
 		}
 	case RunStateRunning:
 	case RunStatePaused:
-		if err := e.persistRunTransition(store.EventRunStarted, RunStatePaused, RunStateRunning, "run resumed"); err != nil {
+		if err := e.persistRunTransition(
+			store.EventRunStarted,
+			RunStatePaused,
+			RunStateRunning,
+			"run resumed",
+		); err != nil {
 			return err
 		}
 	case RunStateWaitingApproval:
@@ -281,7 +295,12 @@ func (e *Engine) ExecuteNext(ctx context.Context) (bool, error) {
 	ready := e.ReadyStepIDs()
 	if len(ready) == 0 {
 		if e.allStepsSucceeded() {
-			if err := e.persistRunTransition(store.EventRunSucceeded, RunStateRunning, RunStateSucceeded, "run succeeded"); err != nil {
+			if err := e.persistRunTransition(
+				store.EventRunSucceeded,
+				RunStateRunning,
+				RunStateSucceeded,
+				"run succeeded",
+			); err != nil {
 				return false, err
 			}
 

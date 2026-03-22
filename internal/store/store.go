@@ -190,6 +190,7 @@ func writeAtomicJSON(path string, value any, code ErrorCode) (err error) {
 	if err != nil {
 		return wrapError(code, "create temp file", err)
 	}
+
 	closed := false
 	defer func() {
 		if closed {
@@ -216,6 +217,7 @@ func writeAtomicJSON(path string, value any, code ErrorCode) (err error) {
 	if err = file.Close(); err != nil {
 		return wrapError(code, "close temp file", err)
 	}
+
 	closed = true
 
 	if err := os.Rename(tempPath, path); err != nil {

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/JackDrogon/Cogito/internal/adapters"
@@ -55,7 +56,7 @@ func (a builtinLocalAdapter) Resume(_ context.Context, request adapters.ResumeRe
 
 func (a builtinLocalAdapter) NormalizeResult(_ context.Context, request adapters.NormalizeRequest) (*adapters.StepResult, error) {
 	if request.Execution == nil {
-		return nil, fmt.Errorf("builtinLocalAdapter.NormalizeResult: execution is required")
+		return nil, errors.New("builtinLocalAdapter.NormalizeResult: execution is required")
 	}
 
 	return &adapters.StepResult{

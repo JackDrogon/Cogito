@@ -325,7 +325,9 @@ func writeExclusiveJSON(path string, value any) (err error) {
 	if err != nil {
 		return err
 	}
+
 	closed := false
+
 	defer func() {
 		if closed {
 			return
@@ -340,13 +342,14 @@ func writeExclusiveJSON(path string, value any) (err error) {
 		return err
 	}
 
-	if err = file.Sync(); err != nil {
+	if err := file.Sync(); err != nil {
 		return err
 	}
 
-	if err = file.Close(); err != nil {
+	if err := file.Close(); err != nil {
 		return err
 	}
+
 	closed = true
 
 	return syncDir(filepath.Dir(path))
@@ -365,7 +368,9 @@ func writeAtomicJSON(path string, value any) (err error) {
 	if err != nil {
 		return wrapError(ErrorCodeLock, "create temp lock file", err)
 	}
+
 	closed := false
+
 	defer func() {
 		if closed {
 			return
@@ -387,6 +392,7 @@ func writeAtomicJSON(path string, value any) (err error) {
 	if err = file.Close(); err != nil {
 		return wrapError(ErrorCodeLock, "close temp lock file", err)
 	}
+
 	closed = true
 
 	if err := os.Rename(tempPath, path); err != nil {

@@ -72,13 +72,20 @@ func checkpointFromSnapshot(snapshot Snapshot, repoPath, workingDir string) *sto
 	}
 }
 
-func snapshotFromCheckpoint(runID string, compiled *workflow.CompiledWorkflow, checkpoint *store.Checkpoint) (Snapshot, error) {
+func snapshotFromCheckpoint(
+	runID string,
+	compiled *workflow.CompiledWorkflow,
+	checkpoint *store.Checkpoint,
+) (Snapshot, error) {
 	if checkpoint == nil {
 		return Snapshot{}, newError(ErrorCodeState, "checkpoint is required")
 	}
 
 	if strings.TrimSpace(checkpoint.RunID) != "" && strings.TrimSpace(checkpoint.RunID) != runID {
-		return Snapshot{}, newError(ErrorCodeState, fmt.Sprintf("checkpoint run id %q does not match %q", checkpoint.RunID, runID))
+		return Snapshot{}, newError(
+			ErrorCodeState,
+			fmt.Sprintf("checkpoint run id %q does not match %q", checkpoint.RunID, runID),
+		)
 	}
 
 	state := RunState(strings.TrimSpace(checkpoint.State))
@@ -109,7 +116,10 @@ func snapshotFromCheckpoint(runID string, compiled *workflow.CompiledWorkflow, c
 		}
 
 		if !validStepState(stepState) {
-			return Snapshot{}, newError(ErrorCodeState, fmt.Sprintf("unknown checkpoint step state %q for %s", stored.State, step.ID))
+			return Snapshot{}, newError(
+				ErrorCodeState,
+				fmt.Sprintf("unknown checkpoint step state %q for %s", stored.State, step.ID),
+			)
 		}
 
 		snapshot.Steps[step.ID] = StepSnapshot{
@@ -130,7 +140,10 @@ func checkpointExecutionContext(checkpoint *store.Checkpoint, repoPath, workingD
 		return normalizeExecutionContext(repoPath, workingDir)
 	}
 
-	return normalizeExecutionContext(firstNonEmpty(strings.TrimSpace(checkpoint.RepoPath), repoPath), firstNonEmpty(strings.TrimSpace(checkpoint.WorkingDir), workingDir))
+	return normalizeExecutionContext(
+		firstNonEmpty(strings.TrimSpace(checkpoint.RepoPath), repoPath),
+		firstNonEmpty(strings.TrimSpace(checkpoint.WorkingDir), workingDir),
+	)
 }
 
 func normalizeExecutionContext(repoPath, workingDir string) (string, string) {

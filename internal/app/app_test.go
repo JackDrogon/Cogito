@@ -2,7 +2,6 @@ package app
 
 import (
 	"bytes"
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,7 +23,7 @@ func TestRun(t *testing.T) {
 		}()
 
 		var out bytes.Buffer
-		if err := Run(context.Background(), []string{"--version"}, &out); err != nil {
+		if err := Run(t.Context(), []string{"--version"}, &out); err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
 
@@ -35,7 +34,7 @@ func TestRun(t *testing.T) {
 
 	t.Run("unexpected args", func(t *testing.T) {
 		var out bytes.Buffer
-		err := Run(context.Background(), []string{"extra"}, &out)
+		err := Run(t.Context(), []string{"extra"}, &out)
 		if err == nil {
 			t.Fatal("Run() expected error, got nil")
 		}
@@ -48,7 +47,7 @@ func TestRun(t *testing.T) {
 		var out bytes.Buffer
 		path := filepath.Join("..", "workflow", "testdata", "simple.yaml")
 
-		if err := Run(context.Background(), []string{"workflow", "validate", path}, &out); err != nil {
+		if err := Run(t.Context(), []string{"workflow", "validate", path}, &out); err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
 
@@ -61,7 +60,7 @@ func TestRun(t *testing.T) {
 		var out bytes.Buffer
 		path := filepath.Join("..", "workflow", "testdata", "unsupported-kind.yaml")
 
-		err := Run(context.Background(), []string{"workflow", "validate", path}, &out)
+		err := Run(t.Context(), []string{"workflow", "validate", path}, &out)
 		if err == nil {
 			t.Fatal("Run() error = nil, want workflow validation failure")
 		}
@@ -111,7 +110,7 @@ func TestSubcommandRouting(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var out bytes.Buffer
-			err := Run(context.Background(), tc.args, &out)
+			err := Run(t.Context(), tc.args, &out)
 
 			if tc.wantErr == "" {
 				if err != nil {
@@ -136,7 +135,7 @@ func TestRunSharedFlagsOnIsolatedRepo(t *testing.T) {
 	stateDir := filepath.Join(fixture.runsRoot, "run-shared-flags")
 
 	var out bytes.Buffer
-	err := Run(context.Background(), []string{"run", "--repo", fixture.repoDir, "--approval", "auto", "--provider-timeout", "30s", "--state-dir", stateDir, workflowPath}, &out)
+	err := Run(t.Context(), []string{"run", "--repo", fixture.repoDir, "--approval", "auto", "--provider-timeout", "30s", "--state-dir", stateDir, workflowPath}, &out)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -155,7 +154,7 @@ func TestRunCommandHonorsApprovalDenyAfterWorkflowPath(t *testing.T) {
 
 	for attempt := 1; attempt <= 2; attempt++ {
 		var out bytes.Buffer
-		err := Run(context.Background(), []string{"run", workflowPath, "--state-dir", stateDir, "--approval=deny", "--allow-dirty"}, &out)
+		err := Run(t.Context(), []string{"run", workflowPath, "--state-dir", stateDir, "--approval=deny", "--allow-dirty"}, &out)
 		if err == nil {
 			t.Fatalf("Run() attempt %d error = nil, want approval denied", attempt)
 		}
@@ -173,7 +172,7 @@ func TestRunAndStatusUsePersistedWorkflowAndCheckpoint(t *testing.T) {
 	workflowPath := filepath.Join("..", "workflow", "testdata", "simple.yaml")
 
 	var runOut bytes.Buffer
-	if err := Run(context.Background(), []string{"run", workflowPath, "--state-dir", stateDir, "--approval=auto", "--allow-dirty"}, &runOut); err != nil {
+	if err := Run(t.Context(), []string{"run", workflowPath, "--state-dir", stateDir, "--approval=auto", "--allow-dirty"}, &runOut); err != nil {
 		t.Fatalf("Run(run) error = %v", err)
 	}
 
@@ -205,7 +204,7 @@ func TestRunAndStatusUsePersistedWorkflowAndCheckpoint(t *testing.T) {
 	}
 
 	var statusOut bytes.Buffer
-	if err := Run(context.Background(), []string{"status", "--state-dir", stateDir}, &statusOut); err != nil {
+	if err := Run(t.Context(), []string{"status", "--state-dir", stateDir}, &statusOut); err != nil {
 		t.Fatalf("Run(status) error = %v", err)
 	}
 
@@ -253,7 +252,7 @@ func TestRunAndStatusUsePersistedWorkflowAndCheckpoint(t *testing.T) {
 
 func TestStatusMissingRunStateReturnsCleanError(t *testing.T) {
 	var out bytes.Buffer
-	err := Run(context.Background(), []string{"status", "--state-dir", filepath.Join("ref", "tmp", "does-not-exist")}, &out)
+	err := Run(t.Context(), []string{"status", "--state-dir", filepath.Join("ref", "tmp", "does-not-exist")}, &out)
 	if err == nil {
 		t.Fatal("Run(status missing) error = nil, want error")
 	}
@@ -272,7 +271,7 @@ func TestResumeCommandResumesPausedRunAndRejectsDuplicate(t *testing.T) {
 	writePausedRunState(t, stateDir)
 
 	var out bytes.Buffer
-	if err := Run(context.Background(), []string{"resume", "--state-dir", stateDir}, &out); err != nil {
+	if err := Run(t.Context(), []string{"resume", "--state-dir", stateDir}, &out); err != nil {
 		t.Fatalf("Run(resume) error = %v", err)
 	}
 	if out.String() != "run resumed\n" {
@@ -288,7 +287,7 @@ func TestResumeCommandResumesPausedRunAndRejectsDuplicate(t *testing.T) {
 	}
 
 	var dupOut bytes.Buffer
-	err = Run(context.Background(), []string{"resume", "--state-dir", stateDir}, &dupOut)
+	err = Run(t.Context(), []string{"resume", "--state-dir", stateDir}, &dupOut)
 	if err == nil {
 		t.Fatal("Run(resume duplicate) error = nil, want invalid resume state")
 	}
@@ -305,7 +304,7 @@ func TestReplayCommandDoesNotMutateRunState(t *testing.T) {
 	workflowPath := filepath.Join("..", "workflow", "testdata", "simple.yaml")
 
 	var runOut bytes.Buffer
-	if err := Run(context.Background(), []string{"run", workflowPath, "--state-dir", stateDir, "--approval=auto", "--allow-dirty"}, &runOut); err != nil {
+	if err := Run(t.Context(), []string{"run", workflowPath, "--state-dir", stateDir, "--approval=auto", "--allow-dirty"}, &runOut); err != nil {
 		t.Fatalf("Run(run) error = %v", err)
 	}
 
@@ -328,7 +327,7 @@ func TestReplayCommandDoesNotMutateRunState(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := Run(context.Background(), []string{"replay", runStore.Layout().EventsPath}, &out); err != nil {
+	if err := Run(t.Context(), []string{"replay", runStore.Layout().EventsPath}, &out); err != nil {
 		t.Fatalf("Run(replay) error = %v", err)
 	}
 	if out.String() != "replay OK\n" {
@@ -364,7 +363,7 @@ func TestCancelCommandCancelsPausedRunAndRejectsDuplicate(t *testing.T) {
 	writePausedRunState(t, stateDir)
 
 	var out bytes.Buffer
-	if err := Run(context.Background(), []string{"cancel", "--state-dir", stateDir}, &out); err != nil {
+	if err := Run(t.Context(), []string{"cancel", "--state-dir", stateDir}, &out); err != nil {
 		t.Fatalf("Run(cancel) error = %v", err)
 	}
 	if out.String() != "run canceled\n" {
@@ -380,7 +379,7 @@ func TestCancelCommandCancelsPausedRunAndRejectsDuplicate(t *testing.T) {
 	}
 
 	var dupOut bytes.Buffer
-	err = Run(context.Background(), []string{"cancel", "--state-dir", stateDir}, &dupOut)
+	err = Run(t.Context(), []string{"cancel", "--state-dir", stateDir}, &dupOut)
 	if err == nil {
 		t.Fatal("Run(cancel duplicate) error = nil, want invalid cancel state")
 	}
@@ -409,7 +408,7 @@ func TestResumeCommandUsesPersistedWorkingDir(t *testing.T) {
 	t.Chdir(otherDir)
 
 	var out bytes.Buffer
-	if err := Run(context.Background(), []string{"resume", "--state-dir", stateDir}, &out); err != nil {
+	if err := Run(t.Context(), []string{"resume", "--state-dir", stateDir}, &out); err != nil {
 		t.Fatalf("Run(resume persisted working dir) error = %v", err)
 	}
 

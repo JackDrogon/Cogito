@@ -101,7 +101,7 @@ func (s *Supervisor) Run(ctx context.Context, request RunRequest) (*adapters.Ste
 	s.track(handleID, cmd)
 	defer s.untrack(handleID)
 
-	waitErr, timedOut, interrupted := s.monitorProcess(ctx, cmd, request.Timeout)
+	timedOut, interrupted, waitErr := s.monitorProcess(ctx, cmd, request.Timeout)
 
 	input, err := s.collectOutput(request, waitErr, timedOut, interrupted, stdoutFile, stderrFile)
 	if err != nil {
@@ -120,7 +120,11 @@ func (s *Supervisor) setupCommand(request RunRequest, stdoutFile, stderrFile *os
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {
-		return nil, "", wrapError(ErrorCodeExecution, fmt.Sprintf("start provider command %q", request.Command.Path), err)
+		return nil, "", wrapError(
+			ErrorCodeExecution,
+			fmt.Sprintf("start provider command %q", request.Command.Path),
+			err,
+		)
 	}
 
 	handleID := request.Handle.ProviderSessionID
@@ -131,13 +135,14 @@ func (s *Supervisor) setupCommand(request RunRequest, stdoutFile, stderrFile *os
 	return cmd, handleID, nil
 }
 
-func (s *Supervisor) monitorProcess(ctx context.Context, cmd *exec.Cmd, timeout time.Duration) (error, bool, bool) {
+func (s *Supervisor) monitorProcess(ctx context.Context, cmd *exec.Cmd, timeout time.Duration) (bool, bool, error) {
 	waitCh := make(chan error, 1)
 	go func() {
 		waitCh <- cmd.Wait()
 	}()
 
 	var timeoutCh <-chan time.Time
+
 	if timeout > 0 {
 		timer := time.NewTimer(timeout)
 		defer timer.Stop()
@@ -146,15 +151,20 @@ func (s *Supervisor) monitorProcess(ctx context.Context, cmd *exec.Cmd, timeout 
 
 	select {
 	case waitErr := <-waitCh:
-		return waitErr, false, false
+		return false, false, waitErr
 	case <-timeoutCh:
-		return s.terminate(cmd, waitCh, "timeout"), true, false
+		return true, false, s.terminate(cmd, waitCh, "timeout")
 	case <-ctx.Done():
-		return s.terminate(cmd, waitCh, "interrupt"), false, true
+		return false, true, s.terminate(cmd, waitCh, "interrupt")
 	}
 }
 
-func (s *Supervisor) collectOutput(request RunRequest, waitErr error, timedOut, interrupted bool, stdoutFile, stderrFile *os.File) (NormalizerInput, error) {
+func (s *Supervisor) collectOutput(
+	request RunRequest,
+	waitErr error,
+	timedOut, interrupted bool,
+	stdoutFile, stderrFile *os.File,
+) (NormalizerInput, error) {
 	if syncErr := stdoutFile.Sync(); syncErr != nil {
 		return NormalizerInput{}, wrapError(ErrorCodeExecution, "sync stdout log", syncErr)
 	}
