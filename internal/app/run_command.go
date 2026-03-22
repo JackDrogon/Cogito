@@ -424,13 +424,12 @@ type commandSession struct {
 	cancel context.CancelFunc
 	done   chan commandSessionResult
 
-	mu             sync.Mutex
-	settled        bool
-	result         *adapters.Execution
-	err            error
-	stdout         string
-	stderr         string
-	artifactsSaved bool
+	mu      sync.Mutex
+	settled bool
+	result  *adapters.Execution
+	err     error
+	stdout  string
+	stderr  string
 }
 
 type commandSessionResult struct {

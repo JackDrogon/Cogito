@@ -1291,7 +1291,7 @@ func NewApprovalModePolicy(mode ApprovalMode) ApprovalPolicy {
 }
 
 func (p approvalModePolicy) DecideGate(_ context.Context, request ApprovalGateRequest) (ApprovalDecisionResult, error) {
-	decision := ApprovalDecisionWait
+	var decision ApprovalDecision
 	switch p.mode {
 	case ApprovalModeApprove:
 		decision = ApprovalDecisionApprove

@@ -345,10 +345,7 @@ func cloneArtifactRefs(artifacts []shared.ArtifactRef) []shared.ArtifactRef {
 	}
 
 	cloned := make([]shared.ArtifactRef, 0, len(artifacts))
-	for _, artifact := range artifacts {
-		cloned = append(cloned, artifact)
-	}
-
+	cloned = append(cloned, artifacts...)
 	return cloned
 }
 

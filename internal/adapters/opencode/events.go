@@ -102,9 +102,7 @@ func buildLogs(version string, response *response, stderr []byte) []shared.LogEn
 	})
 
 	if response != nil {
-		for _, entry := range response.logEntries() {
-			logs = append(logs, entry)
-		}
+		logs = append(logs, response.logEntries()...)
 		if len(logs) == 1 {
 			fields := map[string]string{}
 			if sessionID := strings.TrimSpace(firstNonEmpty(response.string("session_id"), response.string("sessionId"))); sessionID != "" {

@@ -327,10 +327,7 @@ func cloneArtifactRefs(artifacts []ArtifactRef) []ArtifactRef {
 	}
 
 	cloned := make([]ArtifactRef, 0, len(artifacts))
-	for _, artifact := range artifacts {
-		cloned = append(cloned, artifact)
-	}
-
+	cloned = append(cloned, artifacts...)
 	return cloned
 }
 

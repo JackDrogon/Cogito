@@ -138,11 +138,11 @@ func TestUnsupportedCapabilitiesAreExplicit(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				execution, err := adapter.PollOrCollect(t.Context(), start.Handle)
+				_, err = adapter.PollOrCollect(t.Context(), start.Handle)
 				if err != nil {
 					return err
 				}
-				execution, err = adapter.PollOrCollect(t.Context(), start.Handle)
+				execution, err := adapter.PollOrCollect(t.Context(), start.Handle)
 				if err != nil {
 					return err
 				}
@@ -158,11 +158,11 @@ func TestUnsupportedCapabilitiesAreExplicit(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				execution, err := adapter.PollOrCollect(t.Context(), start.Handle)
+				_, err = adapter.PollOrCollect(t.Context(), start.Handle)
 				if err != nil {
 					return err
 				}
-				execution, err = adapter.PollOrCollect(t.Context(), start.Handle)
+				execution, err := adapter.PollOrCollect(t.Context(), start.Handle)
 				if err != nil {
 					return err
 				}
@@ -178,11 +178,11 @@ func TestUnsupportedCapabilitiesAreExplicit(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				execution, err := adapter.PollOrCollect(t.Context(), start.Handle)
+				_, err = adapter.PollOrCollect(t.Context(), start.Handle)
 				if err != nil {
 					return err
 				}
-				execution, err = adapter.PollOrCollect(t.Context(), start.Handle)
+				execution, err := adapter.PollOrCollect(t.Context(), start.Handle)
 				if err != nil {
 					return err
 				}
