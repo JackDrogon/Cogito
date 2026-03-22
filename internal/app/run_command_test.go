@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -20,7 +19,7 @@ func TestSupervisorCommandRunnerWritesLogsAndArtifacts(t *testing.T) {
 	runStore := openTestRunStore(t, "run-logs")
 	runner := newSupervisorCommandRunner(runStore, ".", 0)
 
-	execution, err := runner.Start(context.Background(), runtime.CommandRequest{
+	execution, err := runner.Start(t.Context(), runtime.CommandRequest{
 		RunID:     "run-logs",
 		StepID:    "prepare",
 		AttemptID: "attempt-01",
@@ -30,7 +29,7 @@ func TestSupervisorCommandRunnerWritesLogsAndArtifacts(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 
-	collected, err := runner.PollOrCollect(context.Background(), execution.Handle)
+	collected, err := runner.PollOrCollect(t.Context(), execution.Handle)
 	if err != nil {
 		t.Fatalf("PollOrCollect() error = %v", err)
 	}
@@ -38,7 +37,7 @@ func TestSupervisorCommandRunnerWritesLogsAndArtifacts(t *testing.T) {
 		t.Fatalf("collected.State = %q, want %q", collected.State, adapters.ExecutionStateSucceeded)
 	}
 
-	result, err := runner.NormalizeResult(context.Background(), collected)
+	result, err := runner.NormalizeResult(t.Context(), collected)
 	if err != nil {
 		t.Fatalf("NormalizeResult() error = %v", err)
 	}
@@ -78,7 +77,7 @@ func TestSupervisorCommandRunnerInterruptsRunningCommand(t *testing.T) {
 	runStore := openTestRunStore(t, "run-interrupt")
 	runner := newSupervisorCommandRunner(runStore, ".", 0)
 
-	execution, err := runner.Start(context.Background(), runtime.CommandRequest{
+	execution, err := runner.Start(t.Context(), runtime.CommandRequest{
 		RunID:     "run-interrupt",
 		StepID:    "prepare",
 		AttemptID: "attempt-01",
@@ -89,7 +88,7 @@ func TestSupervisorCommandRunnerInterruptsRunningCommand(t *testing.T) {
 	}
 
 	time.Sleep(100 * time.Millisecond)
-	interrupted, err := runner.Interrupt(context.Background(), execution.Handle)
+	interrupted, err := runner.Interrupt(t.Context(), execution.Handle)
 	if err != nil {
 		t.Fatalf("Interrupt() error = %v", err)
 	}
@@ -97,7 +96,7 @@ func TestSupervisorCommandRunnerInterruptsRunningCommand(t *testing.T) {
 		t.Fatalf("interrupted.State = %q, want %q", interrupted.State, adapters.ExecutionStateInterrupted)
 	}
 
-	result, err := runner.NormalizeResult(context.Background(), interrupted)
+	result, err := runner.NormalizeResult(t.Context(), interrupted)
 	if err != nil {
 		t.Fatalf("NormalizeResult() error = %v", err)
 	}
@@ -110,7 +109,7 @@ func TestSupervisorCommandRunnerHonorsTimeout(t *testing.T) {
 	runStore := openTestRunStore(t, "run-timeout")
 	runner := newSupervisorCommandRunner(runStore, ".", 50*time.Millisecond)
 
-	execution, err := runner.Start(context.Background(), runtime.CommandRequest{
+	execution, err := runner.Start(t.Context(), runtime.CommandRequest{
 		RunID:     "run-timeout",
 		StepID:    "prepare",
 		AttemptID: "attempt-01",
@@ -120,7 +119,7 @@ func TestSupervisorCommandRunnerHonorsTimeout(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 
-	collected, err := runner.PollOrCollect(context.Background(), execution.Handle)
+	collected, err := runner.PollOrCollect(t.Context(), execution.Handle)
 	if err != nil {
 		t.Fatalf("PollOrCollect() error = %v", err)
 	}

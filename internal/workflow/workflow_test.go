@@ -62,7 +62,6 @@ func TestParseWorkflow(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			input := tt.input
 			if tt.fixture != "" {
@@ -127,7 +126,6 @@ func TestValidateWorkflowDAG(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			input := tt.input
 			if tt.fixture != "" {

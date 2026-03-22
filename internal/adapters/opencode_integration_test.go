@@ -84,7 +84,7 @@ func TestOpenCodeBinaryMissingIsExplicit(t *testing.T) {
 		Runner: &opencodeContractRunner{},
 	})
 
-	_, err := adapter.Start(context.Background(), adapters.StartRequest{RunID: "run-345", StepID: "summarize", AttemptID: "attempt-3", Prompt: "Summarize"})
+	_, err := adapter.Start(t.Context(), adapters.StartRequest{RunID: "run-345", StepID: "summarize", AttemptID: "attempt-3", Prompt: "Summarize"})
 	if err == nil {
 		t.Fatal("Start() error = nil, want error")
 	}

@@ -22,7 +22,7 @@ func TestBuildExecArgs(t *testing.T) {
 
 func TestBinaryPathMissingIsExplicit(t *testing.T) {
 	adapter := New(Config{LookPath: func(string) (string, error) { return "", exec.ErrNotFound }, Runner: scriptedRunner{}})
-	_, err := adapter.Start(context.Background(), shared.StartRequest{RunID: "run-1", StepID: "review", AttemptID: "attempt-1", Prompt: "Fix it"})
+	_, err := adapter.Start(t.Context(), shared.StartRequest{RunID: "run-1", StepID: "review", AttemptID: "attempt-1", Prompt: "Fix it"})
 	if err == nil {
 		t.Fatal("Start() error = nil, want error")
 	}

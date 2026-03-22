@@ -30,7 +30,7 @@ func TestProcessTimeoutKillsChildren(t *testing.T) {
 	stderrPath := filepath.Join(tempDir, "stderr.log")
 
 	supervisor := NewSupervisor()
-	result, err := supervisor.Run(context.Background(), RunRequest{
+	result, err := supervisor.Run(t.Context(), RunRequest{
 		Handle: newHandle("timeout-step", "timeout-session"),
 		Command: CommandSpec{
 			Path: os.Args[0],
@@ -81,7 +81,7 @@ func TestMalformedStructuredOutputFailsExplicitly(t *testing.T) {
 	stderrPath := filepath.Join(tempDir, "stderr.log")
 
 	supervisor := NewSupervisor()
-	result, err := supervisor.Run(context.Background(), RunRequest{
+	result, err := supervisor.Run(t.Context(), RunRequest{
 		Handle: newHandle("structured-step", "structured-session"),
 		Command: CommandSpec{
 			Path: os.Args[0],
@@ -127,7 +127,7 @@ func TestInterruptStopsRunningProcess(t *testing.T) {
 	stderrPath := filepath.Join(tempDir, "stderr.log")
 
 	supervisor := NewSupervisor()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	type runResult struct {

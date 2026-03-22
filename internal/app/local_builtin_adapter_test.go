@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -23,7 +22,7 @@ func TestLookupRegisteredAdapterSupportsBuiltinLocalProviders(t *testing.T) {
 				t.Fatalf("lookupRegisteredAdapter() error = %v", err)
 			}
 
-			execution, err := adapter.Start(context.Background(), adapters.StartRequest{
+			execution, err := adapter.Start(t.Context(), adapters.StartRequest{
 				RunID:     "run-1",
 				StepID:    "agent-step",
 				AttemptID: "attempt-1",

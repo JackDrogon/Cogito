@@ -50,8 +50,8 @@ type fakeSession struct {
 
 func NewFakeAdapter(config FakeConfig) *FakeAdapter {
 	scripts := make(map[string]FakeScript, len(config.Scripts))
-	for attemptID, script := range config.Scripts {
-		scripts[attemptID] = cloneFakeScript(script)
+	for attemptID := range config.Scripts {
+		scripts[attemptID] = cloneFakeScript(config.Scripts[attemptID])
 	}
 
 	return &FakeAdapter{
@@ -110,7 +110,9 @@ func (a *FakeAdapter) PollOrCollect(_ context.Context, handle ExecutionHandle) (
 	}
 
 	var snapshots []FakeSnapshot
+
 	var index *int
+
 	if session.resumed {
 		snapshots = session.script.ResumePolls
 		index = &session.resumePollIndex
@@ -151,6 +153,7 @@ func (a *FakeAdapter) Interrupt(_ context.Context, handle ExecutionHandle) (*Exe
 
 	session.current = buildExecution(session.handle, snapshot)
 	session.interrupted = true
+
 	return cloneExecution(session.current), nil
 }
 
@@ -183,6 +186,7 @@ func (a *FakeAdapter) Resume(_ context.Context, request ResumeRequest) (*Executi
 	session.current = buildExecution(session.handle, snapshot)
 	session.resumed = true
 	session.interrupted = false
+
 	return cloneExecution(session.current), nil
 }
 
@@ -318,6 +322,7 @@ func cloneJSON(value json.RawMessage) json.RawMessage {
 
 	cloned := make(json.RawMessage, len(value))
 	copy(cloned, value)
+
 	return cloned
 }
 
@@ -328,6 +333,7 @@ func cloneArtifactRefs(artifacts []ArtifactRef) []ArtifactRef {
 
 	cloned := make([]ArtifactRef, 0, len(artifacts))
 	cloned = append(cloned, artifacts...)
+
 	return cloned
 }
 
@@ -337,6 +343,7 @@ func cloneLogs(logs []LogEntry) []LogEntry {
 	}
 
 	cloned := make([]LogEntry, 0, len(logs))
+
 	for _, entry := range logs {
 		clonedEntry := LogEntry{Level: entry.Level, Message: entry.Message}
 		if entry.Fields != nil {

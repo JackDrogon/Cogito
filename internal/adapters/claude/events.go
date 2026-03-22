@@ -2,6 +2,7 @@ package claude
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -25,7 +26,7 @@ type response struct {
 func parseResponse(payload []byte) (*response, error) {
 	trimmed := strings.TrimSpace(string(payload))
 	if trimmed == "" {
-		return nil, fmt.Errorf("empty claude response")
+		return nil, errors.New("empty claude response")
 	}
 
 	var raw map[string]any
@@ -37,7 +38,9 @@ func parseResponse(payload []byte) (*response, error) {
 	if err := json.Unmarshal([]byte(trimmed), &parsed); err != nil {
 		return nil, err
 	}
+
 	parsed.Raw = raw
+
 	return &parsed, nil
 }
 
@@ -55,12 +58,15 @@ func buildExecution(request shared.StartRequest, version string, response *respo
 	}
 
 	state := shared.ExecutionStateSucceeded
+
 	summary := strings.TrimSpace(firstLine(outputText))
 	if summary == "" {
 		summary = "claude execution succeeded"
 	}
+
 	if response.IsError {
 		state = shared.ExecutionStateFailed
+
 		if summary == "" {
 			summary = "claude execution failed"
 		}
@@ -91,6 +97,7 @@ func sanitizeID(value string) string {
 
 	value = strings.ReplaceAll(value, " ", "-")
 	value = strings.ReplaceAll(value, "/", "-")
+
 	return value
 }
 
@@ -110,30 +117,38 @@ func buildLogs(version string, response *response, stderr []byte) []shared.LogEn
 		if strings.TrimSpace(response.Type) != "" {
 			fields["type"] = strings.TrimSpace(response.Type)
 		}
+
 		if strings.TrimSpace(response.Subtype) != "" {
 			fields["subtype"] = strings.TrimSpace(response.Subtype)
 		}
+
 		if strings.TrimSpace(response.StopReason) != "" {
 			fields["stop_reason"] = strings.TrimSpace(response.StopReason)
 		}
+
 		if strings.TrimSpace(response.SessionID) != "" {
 			fields["session_id"] = strings.TrimSpace(response.SessionID)
 		}
+
 		if response.DurationMS > 0 {
 			fields["duration_ms"] = strconv.FormatInt(response.DurationMS, 10)
 		}
+
 		if response.DurationAPIMS > 0 {
 			fields["duration_api_ms"] = strconv.FormatInt(response.DurationAPIMS, 10)
 		}
+
 		if response.NumTurns > 0 {
 			fields["num_turns"] = strconv.FormatInt(response.NumTurns, 10)
 		}
 
 		level := "info"
+
 		message := strings.TrimSpace(firstLine(response.Result))
 		if message == "" {
 			message = "claude response captured"
 		}
+
 		if response.IsError {
 			level = "error"
 		}

@@ -108,7 +108,9 @@ func (s *Supervisor) Run(ctx context.Context, request RunRequest) (*adapters.Ste
 	if handleID == "" {
 		handleID = fmt.Sprintf("pid-%d", cmd.Process.Pid)
 	}
+
 	s.track(handleID, cmd)
+
 	defer s.untrack(handleID)
 
 	waitCh := make(chan error, 1)
@@ -123,6 +125,7 @@ func (s *Supervisor) Run(ctx context.Context, request RunRequest) (*adapters.Ste
 	)
 
 	var timeout <-chan time.Time
+
 	if request.Timeout > 0 {
 		timer := time.NewTimer(request.Timeout)
 		defer timer.Stop()
@@ -184,6 +187,7 @@ func (s *Supervisor) Interrupt(handle adapters.ExecutionHandle) error {
 	s.mu.Lock()
 	cmd, ok := s.running[handle.ProviderSessionID]
 	s.mu.Unlock()
+
 	if !ok {
 		return newError(ErrorCodeExecution, fmt.Sprintf("provider process %q is not running", handle.ProviderSessionID))
 	}
@@ -194,6 +198,7 @@ func (s *Supervisor) Interrupt(handle adapters.ExecutionHandle) error {
 func DefaultNormalizer() ResultNormalizer {
 	return ResultNormalizerFunc(func(_ context.Context, input NormalizerInput) (*adapters.StepResult, error) {
 		status, summary := statusAndSummary(input)
+
 		return &adapters.StepResult{
 			Handle:     input.Handle,
 			Status:     status,
@@ -234,12 +239,12 @@ func validateRunRequest(request RunRequest) error {
 func openOutputFile(path string) (*os.File, error) {
 	cleanPath := filepath.Clean(path)
 	if err := os.MkdirAll(filepath.Dir(cleanPath), 0o700); err != nil {
-		return nil, wrapError(ErrorCodeExecution, fmt.Sprintf("create log directory for %s", cleanPath), err)
+		return nil, wrapError(ErrorCodeExecution, "create log directory for "+cleanPath, err)
 	}
 
 	file, err := os.OpenFile(cleanPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
-		return nil, wrapError(ErrorCodeExecution, fmt.Sprintf("open log file %s", cleanPath), err)
+		return nil, wrapError(ErrorCodeExecution, "open log file "+cleanPath, err)
 	}
 
 	return file, nil
@@ -258,8 +263,9 @@ func (s *Supervisor) terminate(cmd *exec.Cmd, waitCh <-chan error, reason string
 		return err
 	case <-graceTimer.C:
 		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil && !isMissingProcess(err) {
-			return wrapError(ErrorCodeExecution, fmt.Sprintf("force kill provider process after %s", reason), err)
+			return wrapError(ErrorCodeExecution, "force kill provider process after "+reason, err)
 		}
+
 		return <-waitCh
 	}
 }
@@ -290,6 +296,7 @@ func exitCode(err error) int {
 	}
 
 	var exitErr *exec.ExitError
+
 	if !strings.Contains(err.Error(), "signal") && !strings.Contains(err.Error(), "killed") {
 		if !strings.Contains(err.Error(), "exit status") {
 			return -1
@@ -333,7 +340,7 @@ func selectOutputText(stdout, stderr []byte) string {
 }
 
 func isMissingProcess(err error) bool {
-	return err == syscall.ESRCH
+	return errors.Is(err, syscall.ESRCH)
 }
 
 func validateHandle(handle adapters.ExecutionHandle) error {

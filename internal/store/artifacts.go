@@ -21,6 +21,7 @@ var secretSummaryPatterns = []*regexp.Regexp{
 
 func sanitizeArtifacts(runDir string, artifacts []ArtifactRecord) ([]ArtifactRecord, error) {
 	cleaned := make([]ArtifactRecord, 0, len(artifacts))
+
 	for _, artifact := range artifacts {
 		normalized, err := sanitizeArtifact(runDir, artifact)
 		if err != nil {
@@ -50,6 +51,7 @@ func sanitizeArtifact(runDir string, artifact ArtifactRecord) (ArtifactRecord, e
 	artifact.StepID = strings.TrimSpace(artifact.StepID)
 	artifact.Summary = redactSummary(artifact.Summary)
 	artifact.CreatedAt = strings.TrimSpace(artifact.CreatedAt)
+
 	return artifact, nil
 }
 
@@ -64,6 +66,7 @@ func sanitizeCheckpoint(checkpoint *Checkpoint) *Checkpoint {
 	}
 
 	clone.Steps = make(map[string]StepCheckpoint, len(checkpoint.Steps))
+
 	for stepID, step := range checkpoint.Steps {
 		step.Summary = redactSummary(step.Summary)
 		clone.Steps[stepID] = step
@@ -74,6 +77,7 @@ func sanitizeCheckpoint(checkpoint *Checkpoint) *Checkpoint {
 
 func sanitizeArtifactPath(runDir, artifactPath string) (string, string, error) {
 	runDir = filepath.Clean(runDir)
+
 	artifactPath = strings.TrimSpace(artifactPath)
 	if artifactPath == "" {
 		return "", "", artifactPathError("artifact path is required")
@@ -89,6 +93,7 @@ func sanitizeArtifactPath(runDir, artifactPath string) (string, string, error) {
 	}
 
 	fullPath := filepath.Join(runDir, clean)
+
 	rel, err := filepath.Rel(runDir, fullPath)
 	if err != nil {
 		return "", "", fmt.Errorf("resolve artifact path: %w", err)
@@ -121,6 +126,7 @@ func digestFile(path string) (string, error) {
 	}
 
 	sum := sha256.Sum256(data)
+
 	return hex.EncodeToString(sum[:]), nil
 }
 

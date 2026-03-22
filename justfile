@@ -56,7 +56,7 @@ lint:
 # Format all Go code
 [group('quality')]
 fmt:
-    go fmt ./...
+    gofumpt -l -w .
 
 # Tidy module dependencies
 [group('quality')]

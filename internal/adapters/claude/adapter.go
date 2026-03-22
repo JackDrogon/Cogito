@@ -15,8 +15,9 @@ import (
 )
 
 const (
-	ProviderName = "claude"
-	binaryName   = "claude"
+	ProviderName   = "claude"
+	binaryName     = "claude"
+	versionUnknown = "unknown"
 )
 
 func init() {
@@ -101,6 +102,7 @@ func (a *Adapter) Start(ctx context.Context, request shared.StartRequest) (*shar
 	}
 
 	version := a.binaryVersion(ctx, binaryPath)
+
 	result, err := a.runner.Run(ctx, CommandSpec{
 		Path: binaryPath,
 		Args: buildPrintArgs(request),
@@ -116,6 +118,7 @@ func (a *Adapter) Start(ctx context.Context, request shared.StartRequest) (*shar
 	}
 
 	execution := buildExecution(request, version, response, result.Stderr)
+
 	a.mu.Lock()
 	a.sessions[execution.Handle.ProviderSessionID] = cloneExecution(execution)
 	a.mu.Unlock()
@@ -215,7 +218,8 @@ func (a *Adapter) binaryVersion(ctx context.Context, binaryPath string) string {
 		result, err := a.runner.Run(ctx, CommandSpec{Path: binaryPath, Args: []string{"--version"}})
 		if err != nil {
 			a.versionErr = err
-			a.version = "unknown"
+			a.version = versionUnknown
+
 			return
 		}
 
@@ -223,15 +227,16 @@ func (a *Adapter) binaryVersion(ctx context.Context, binaryPath string) string {
 		if version == "" {
 			version = strings.TrimSpace(string(result.Stderr))
 		}
+
 		if version == "" {
-			version = "unknown"
+			version = versionUnknown
 		}
 
 		a.version = version
 	})
 
 	if a.version == "" {
-		return "unknown"
+		return versionUnknown
 	}
 
 	return a.version
@@ -257,15 +262,19 @@ func (execRunner) Run(ctx context.Context, command CommandSpec) (CommandResult, 
 	cmd.Dir = command.Dir
 
 	var stdout bytes.Buffer
+
 	var stderr bytes.Buffer
+
 	cmd.Stdout = io.MultiWriter(&stdout, command.Stdout)
 	cmd.Stderr = io.MultiWriter(&stderr, command.Stderr)
+
 	if command.Stdin != "" {
 		cmd.Stdin = strings.NewReader(command.Stdin)
 	}
 
 	err := cmd.Run()
 	result := CommandResult{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}
+
 	if err != nil {
 		return result, err
 	}
@@ -336,6 +345,7 @@ func cloneJSON(value json.RawMessage) json.RawMessage {
 
 	cloned := make(json.RawMessage, len(value))
 	copy(cloned, value)
+
 	return cloned
 }
 
@@ -346,6 +356,7 @@ func cloneArtifactRefs(artifacts []shared.ArtifactRef) []shared.ArtifactRef {
 
 	cloned := make([]shared.ArtifactRef, 0, len(artifacts))
 	cloned = append(cloned, artifacts...)
+
 	return cloned
 }
 
@@ -355,6 +366,7 @@ func cloneLogs(logs []shared.LogEntry) []shared.LogEntry {
 	}
 
 	cloned := make([]shared.LogEntry, 0, len(logs))
+
 	for _, entry := range logs {
 		clonedEntry := shared.LogEntry{Level: entry.Level, Message: entry.Message}
 		if entry.Fields != nil {

@@ -4,12 +4,15 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
 
 	shared "github.com/JackDrogon/Cogito/internal/adapters"
 )
+
+const eventTypeError = "error"
 
 type event struct {
 	Type     string         `json:"type"`
@@ -25,11 +28,12 @@ type eventError struct {
 
 func parseEvents(payload []byte) ([]event, error) {
 	if len(bytes.TrimSpace(payload)) == 0 {
-		return nil, fmt.Errorf("empty codex event stream")
+		return nil, errors.New("empty codex event stream")
 	}
 
 	events := make([]event, 0, 8)
 	reader := bufio.NewReader(bytes.NewReader(payload))
+
 	for {
 		line, err := reader.ReadBytes('\n')
 		if len(line) > 0 {
@@ -44,6 +48,7 @@ func parseEvents(payload []byte) ([]event, error) {
 				if err := json.Unmarshal(trimmed, &parsed); err != nil {
 					return nil, err
 				}
+
 				parsed.Raw = raw
 				events = append(events, parsed)
 			}
@@ -52,6 +57,7 @@ func parseEvents(payload []byte) ([]event, error) {
 		if err == nil {
 			continue
 		}
+
 		if err == io.EOF {
 			break
 		}
@@ -60,13 +66,13 @@ func parseEvents(payload []byte) ([]event, error) {
 	}
 
 	if len(events) == 0 {
-		return nil, fmt.Errorf("empty codex event stream")
+		return nil, errors.New("empty codex event stream")
 	}
 
 	return events, nil
 }
 
-func buildExecution(request shared.StartRequest, version string, events []event, lastMessage []byte, stderr []byte) *shared.Execution {
+func buildExecution(request shared.StartRequest, version string, events []event, lastMessage, stderr []byte) *shared.Execution {
 	handle := shared.ExecutionHandle{
 		RunID:             request.RunID,
 		StepID:            request.StepID,
@@ -77,18 +83,22 @@ func buildExecution(request shared.StartRequest, version string, events []event,
 	messageText := strings.TrimSpace(string(lastMessage))
 	errorMessage := eventErrorMessage(events)
 	outputText := messageText
+
 	if outputText == "" {
 		outputText = strings.TrimSpace(errorMessage)
 	}
+
 	if outputText == "" {
 		outputText = strings.TrimSpace(string(stderr))
 	}
 
 	state := shared.ExecutionStateSucceeded
+
 	summary := strings.TrimSpace(firstLine(messageText))
 	if summary == "" {
 		summary = "codex execution succeeded"
 	}
+
 	if errorMessage != "" {
 		state = shared.ExecutionStateFailed
 		summary = errorMessage
@@ -121,6 +131,7 @@ func sanitizeID(value string) string {
 
 	value = strings.ReplaceAll(value, " ", "-")
 	value = strings.ReplaceAll(value, "/", "-")
+
 	return value
 }
 
@@ -130,7 +141,7 @@ func eventErrorMessage(events []event) string {
 			return strings.TrimSpace(event.Error.Message)
 		}
 
-		if event.Type == "error" && strings.TrimSpace(event.Message) != "" {
+		if event.Type == eventTypeError && strings.TrimSpace(event.Message) != "" {
 			return strings.TrimSpace(event.Message)
 		}
 	}
@@ -156,16 +167,19 @@ func buildLogs(version string, events []event, stderr []byte) []shared.LogEntry 
 		}
 
 		level := "info"
+
 		message := strings.TrimSpace(event.Message)
 		if message == "" {
 			message = event.Type
 		}
+
 		if event.Error != nil && strings.TrimSpace(event.Error.Message) != "" {
 			level = "error"
 			message = strings.TrimSpace(event.Error.Message)
 		}
-		if event.Type == "error" {
-			level = "error"
+
+		if event.Type == eventTypeError {
+			level = eventTypeError
 		}
 
 		logs = append(logs, shared.LogEntry{Level: level, Message: message, Fields: fields})

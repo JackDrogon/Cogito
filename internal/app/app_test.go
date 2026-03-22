@@ -401,22 +401,11 @@ func TestResumeCommandUsesPersistedWorkingDir(t *testing.T) {
 	stateDir := filepath.Join(baseDir, "runs", "run-working-dir")
 	writePausedCommandRunState(t, stateDir, repoDir, "pwd")
 
-	originalWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
 	otherDir := filepath.Join(baseDir, "other")
 	if err := os.MkdirAll(otherDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(other) error = %v", err)
 	}
-	if err := os.Chdir(otherDir); err != nil {
-		t.Fatalf("Chdir(other) error = %v", err)
-	}
-	defer func() {
-		if err := os.Chdir(originalWD); err != nil {
-			t.Fatalf("restore Chdir() error = %v", err)
-		}
-	}()
+	t.Chdir(otherDir)
 
 	var out bytes.Buffer
 	if err := Run([]string{"resume", "--state-dir", stateDir}, &out); err != nil {

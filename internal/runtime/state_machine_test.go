@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -102,7 +103,7 @@ func TestDeterministicTransitions(t *testing.T) {
 		},
 	}))
 
-	if err := fixture.engine.ExecuteAll(context.Background()); err != nil {
+	if err := fixture.engine.ExecuteAll(t.Context()); err != nil {
 		t.Fatalf("ExecuteAll() error = %v", err)
 	}
 
@@ -180,7 +181,7 @@ func TestReplayProducesSameTransitions(t *testing.T) {
 		},
 	}))
 
-	if err := fixture.engine.ExecuteAll(context.Background()); err != nil {
+	if err := fixture.engine.ExecuteAll(t.Context()); err != nil {
 		t.Fatalf("ExecuteAll() error = %v", err)
 	}
 
@@ -211,7 +212,7 @@ func TestDuplicateResumeRejected(t *testing.T) {
 		},
 	}, nil)
 
-	if err := fixture.engine.ExecuteAll(context.Background()); err != nil {
+	if err := fixture.engine.ExecuteAll(t.Context()); err != nil {
 		t.Fatalf("ExecuteAll() error = %v", err)
 	}
 
@@ -261,7 +262,7 @@ func TestTopologicalSchedulingRespectsDependencies(t *testing.T) {
 		},
 	}, nil)
 
-	if err := fixture.engine.Start(context.Background()); err != nil {
+	if err := fixture.engine.Start(t.Context()); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
 
@@ -269,7 +270,7 @@ func TestTopologicalSchedulingRespectsDependencies(t *testing.T) {
 		t.Fatalf("ReadyStepIDs() after Start = %v, want %v", got, []string{"build", "docs"})
 	}
 
-	if _, err := fixture.engine.ExecuteNext(context.Background()); err != nil {
+	if _, err := fixture.engine.ExecuteNext(t.Context()); err != nil {
 		t.Fatalf("ExecuteNext() build error = %v", err)
 	}
 
@@ -277,7 +278,7 @@ func TestTopologicalSchedulingRespectsDependencies(t *testing.T) {
 		t.Fatalf("ReadyStepIDs() after build = %v, want %v", got, []string{"docs"})
 	}
 
-	if _, err := fixture.engine.ExecuteNext(context.Background()); err != nil {
+	if _, err := fixture.engine.ExecuteNext(t.Context()); err != nil {
 		t.Fatalf("ExecuteNext() docs error = %v", err)
 	}
 
@@ -324,7 +325,7 @@ func TestResumeAfterApproval(t *testing.T) {
 	}
 	fixture := newRuntimeMachineFixtureWithPolicy(t, approvalWorkflowSpec(), commandScripts, nil, newApprovalModePolicy(ApprovalModeAuto))
 
-	if err := fixture.engine.ExecuteAll(context.Background()); err != nil {
+	if err := fixture.engine.ExecuteAll(t.Context()); err != nil {
 		t.Fatalf("ExecuteAll() before grant error = %v", err)
 	}
 
@@ -349,11 +350,11 @@ func TestResumeAfterApproval(t *testing.T) {
 		t.Fatalf("reloaded legal approval trigger = %q, want %q", got, ApprovalTriggerExplicit)
 	}
 
-	if err := fixture.engine.GrantApproval(context.Background(), ""); err != nil {
+	if err := fixture.engine.GrantApproval(t.Context(), ""); err != nil {
 		t.Fatalf("GrantApproval() error = %v", err)
 	}
 
-	if err := fixture.engine.ExecuteAll(context.Background()); err != nil {
+	if err := fixture.engine.ExecuteAll(t.Context()); err != nil {
 		t.Fatalf("ExecuteAll() after grant error = %v", err)
 	}
 
@@ -396,7 +397,7 @@ func TestApprovalDenialStopsSideEffects(t *testing.T) {
 		},
 	}, nil, newApprovalModePolicy(ApprovalModeDeny))
 
-	err := fixture.engine.ExecuteAll(context.Background())
+	err := fixture.engine.ExecuteAll(t.Context())
 	if err == nil {
 		t.Fatal("ExecuteAll() error = nil, want approval denied")
 	}
@@ -485,11 +486,11 @@ func TestApprovalResolutionBranches(t *testing.T) {
 				},
 			}, nil, newApprovalModePolicy(ApprovalModeAuto))
 
-			if err := fixture.engine.ExecuteAll(context.Background()); err != nil {
+			if err := fixture.engine.ExecuteAll(t.Context()); err != nil {
 				t.Fatalf("ExecuteAll() before resolution error = %v", err)
 			}
 
-			err := tc.resolve(context.Background(), fixture.engine)
+			err := tc.resolve(t.Context(), fixture.engine)
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("resolve approval error = %v", err)
@@ -529,6 +530,7 @@ func TestApprovalTriggerSources(t *testing.T) {
 		{
 			name: "explicit step",
 			fixture: func(t *testing.T) runtimeMachineFixture {
+				t.Helper()
 				return newRuntimeMachineFixtureWithPolicy(t, approvalWorkflowSpec(), map[string]commandScript{
 					"draft": {
 						Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "draft started"},
@@ -546,6 +548,7 @@ func TestApprovalTriggerSources(t *testing.T) {
 		{
 			name: "adapter requested",
 			fixture: func(t *testing.T) runtimeMachineFixture {
+				t.Helper()
 				return newRuntimeMachineFixtureWithPolicy(t, adapterApprovalWorkflowSpec(), nil, adapters.NewFakeAdapter(adapters.FakeConfig{
 					Capabilities: adapters.CapabilityMatrix{Resume: true},
 					Scripts: map[string]adapters.FakeScript{
@@ -564,6 +567,7 @@ func TestApprovalTriggerSources(t *testing.T) {
 		{
 			name: "policy exception",
 			fixture: func(t *testing.T) runtimeMachineFixture {
+				t.Helper()
 				return newRuntimeMachineFixtureWithPolicy(t, policyApprovalWorkflowSpec(), map[string]commandScript{
 					"ship": {
 						Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "ship started"},
@@ -584,11 +588,13 @@ func TestApprovalTriggerSources(t *testing.T) {
 			stepID:      "ship",
 			wantTrigger: ApprovalTriggerPolicy,
 			beforeAssert: func(t *testing.T, fixture runtimeMachineFixture) {
+				t.Helper()
 				if got := fixture.runner.StartCount("ship"); got != 0 {
 					t.Fatalf("ship start count before grant = %d, want 0", got)
 				}
 			},
 			afterAssert: func(t *testing.T, fixture runtimeMachineFixture) {
+				t.Helper()
 				if got := fixture.runner.StartCount("ship"); got != 1 {
 					t.Fatalf("ship start count after grant = %d, want 1", got)
 				}
@@ -600,7 +606,7 @@ func TestApprovalTriggerSources(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fixture := tc.fixture(t)
 
-			if err := fixture.engine.ExecuteAll(context.Background()); err != nil {
+			if err := fixture.engine.ExecuteAll(t.Context()); err != nil {
 				t.Fatalf("ExecuteAll() before grant error = %v", err)
 			}
 			if tc.beforeAssert != nil {
@@ -621,7 +627,7 @@ func TestApprovalTriggerSources(t *testing.T) {
 				t.Fatalf("approval trigger data = %q, want %q", got, tc.wantTrigger)
 			}
 
-			if err := fixture.engine.GrantApproval(context.Background(), ""); err != nil {
+			if err := fixture.engine.GrantApproval(t.Context(), ""); err != nil {
 				t.Fatalf("GrantApproval() error = %v", err)
 			}
 			if tc.afterAssert != nil {
@@ -757,6 +763,7 @@ type runtimeMachineFixture struct {
 }
 
 func newRuntimeMachineFixture(t *testing.T, spec *workflow.Spec, commandScripts map[string]commandScript, adapter adapters.Adapter) runtimeMachineFixture {
+	t.Helper()
 	return newRuntimeMachineFixtureWithPolicy(t, spec, commandScripts, adapter, nil)
 }
 
@@ -1059,7 +1066,7 @@ func (r *testCommandRunner) Interrupt(_ context.Context, handle adapters.Executi
 
 func (r *testCommandRunner) NormalizeResult(_ context.Context, execution *adapters.Execution) (*adapters.StepResult, error) {
 	if execution == nil {
-		return nil, fmt.Errorf("execution is required")
+		return nil, errors.New("execution is required")
 	}
 
 	return &adapters.StepResult{
@@ -1115,7 +1122,7 @@ func (r *interruptRecordingCommandRunner) Interrupt(_ context.Context, handle ad
 
 func (r *interruptRecordingCommandRunner) NormalizeResult(_ context.Context, execution *adapters.Execution) (*adapters.StepResult, error) {
 	if execution == nil {
-		return nil, fmt.Errorf("execution is required")
+		return nil, errors.New("execution is required")
 	}
 
 	return &adapters.StepResult{Handle: execution.Handle, Status: execution.State, Summary: execution.Summary}, nil

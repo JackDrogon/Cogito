@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -23,7 +24,7 @@ var (
 func Register(reg Registration) error {
 	name := strings.TrimSpace(reg.Name)
 	if name == "" {
-		return fmt.Errorf("adapter registration name is required")
+		return errors.New("adapter registration name is required")
 	}
 
 	if reg.New == nil {
@@ -39,6 +40,7 @@ func Register(reg Registration) error {
 
 	reg.Name = name
 	registry[name] = reg
+
 	return nil
 }
 
@@ -70,5 +72,6 @@ func RegisteredNames() []string {
 	}
 
 	sort.Strings(names)
+
 	return names
 }

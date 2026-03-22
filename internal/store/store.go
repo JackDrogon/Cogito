@@ -23,6 +23,7 @@ func LayoutForRun(baseDir, runID string) Layout {
 
 	runID = strings.TrimSpace(runID)
 	runDir := filepath.Join(baseDir, runID)
+
 	return Layout{
 		BaseDir:            baseDir,
 		RunID:              runID,
@@ -47,6 +48,7 @@ func Open(baseDir, runID string) (*Store, error) {
 	}
 
 	store := &Store{layout: layout}
+
 	events, err := store.ReadEvents()
 	if err != nil {
 		return nil, err
@@ -70,6 +72,7 @@ func OpenExisting(baseDir, runID string) (*Store, error) {
 	}
 
 	store := &Store{layout: layout}
+
 	events, err := store.ReadEvents()
 	if err != nil {
 		return nil, err
@@ -107,7 +110,15 @@ func ensureLayout(layout Layout) error {
 }
 
 func validateExistingLayout(layout Layout) error {
-	for _, path := range []string{layout.RunDir, layout.LocksDir, layout.EventsPath, layout.ArtifactsPath, layout.CheckpointPath, layout.WorkflowPath} {
+	paths := []string{
+		layout.RunDir,
+		layout.LocksDir,
+		layout.EventsPath,
+		layout.ArtifactsPath,
+		layout.CheckpointPath,
+		layout.WorkflowPath,
+	}
+	for _, path := range paths {
 		if _, err := os.Stat(path); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				return wrapError(ErrorCodePath, "open existing run layout", err)

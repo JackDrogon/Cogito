@@ -2,6 +2,7 @@ package opencode
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -16,7 +17,7 @@ type response struct {
 func parseResponse(payload []byte) (*response, error) {
 	trimmed := strings.TrimSpace(string(payload))
 	if trimmed == "" {
-		return nil, fmt.Errorf("empty opencode response")
+		return nil, errors.New("empty opencode response")
 	}
 
 	var raw map[string]any
@@ -51,8 +52,10 @@ func buildExecution(request shared.StartRequest, version string, response *respo
 
 	state := shared.ExecutionStateSucceeded
 	summary := strings.TrimSpace(firstNonEmpty(response.string("summary"), firstLine(outputText), "opencode adapter passed"))
+
 	if response.failed() || failedMessage != "" {
 		state = shared.ExecutionStateFailed
+
 		if failedMessage != "" {
 			summary = failedMessage
 		} else if summary == "" {
@@ -87,6 +90,7 @@ func sanitizeID(value string) string {
 
 	value = strings.ReplaceAll(value, " ", "-")
 	value = strings.ReplaceAll(value, "/", "-")
+
 	return value
 }
 
@@ -108,6 +112,7 @@ func buildLogs(version string, response *response, stderr []byte) []shared.LogEn
 			if sessionID := strings.TrimSpace(firstNonEmpty(response.string("session_id"), response.string("sessionId"))); sessionID != "" {
 				fields["session_id"] = sessionID
 			}
+
 			if messageCount := response.intString("message_count"); messageCount != "" {
 				fields["message_count"] = messageCount
 			}
@@ -142,7 +147,7 @@ func (r *response) string(key string) string {
 	return strings.TrimSpace(text)
 }
 
-func (r *response) nestedString(key string, nested string) string {
+func (r *response) nestedString(key, nested string) string {
 	if r == nil || r.Raw == nil {
 		return ""
 	}
@@ -201,6 +206,7 @@ func (r *response) failed() bool {
 	}
 
 	status := strings.ToLower(strings.TrimSpace(firstNonEmpty(r.string("status"), r.string("state"))))
+
 	return status == "failed" || status == "error"
 }
 
@@ -220,6 +226,7 @@ func (r *response) logEntries() []shared.LogEntry {
 	}
 
 	entries := make([]shared.LogEntry, 0, len(rawEntries))
+
 	for _, rawEntry := range rawEntries {
 		object, ok := rawEntry.(map[string]any)
 		if !ok {
@@ -233,12 +240,14 @@ func (r *response) logEntries() []shared.LogEntry {
 		if entry.Level == "" {
 			entry.Level = "info"
 		}
+
 		if entry.Message == "" {
 			entry.Message = "opencode log captured"
 		}
 
 		if fields, ok := object["fields"].(map[string]any); ok {
 			entry.Fields = make(map[string]string, len(fields))
+
 			for key, value := range fields {
 				if text := stringValue(value); text != "" {
 					entry.Fields[key] = text

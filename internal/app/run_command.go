@@ -26,7 +26,7 @@ const providerLogsDir = "provider-logs"
 
 func executeWorkflowRun(workflowPath string, flags *sharedFlags, stdout io.Writer) (err error) {
 	if flags == nil {
-		return fmt.Errorf("run flags are required")
+		return errors.New("run flags are required")
 	}
 
 	approvalMode, err := runtime.ParseApprovalMode(flags.approval)
@@ -48,6 +48,7 @@ func executeWorkflowRun(workflowPath string, flags *sharedFlags, stdout io.Write
 	if err != nil {
 		return err
 	}
+
 	defer func() {
 		if releaseErr := repoLock.Release(); err == nil && releaseErr != nil {
 			err = releaseErr
@@ -90,6 +91,7 @@ func executeWorkflowRun(workflowPath string, flags *sharedFlags, stdout io.Write
 	}
 
 	_, err = fmt.Fprintf(stdout, "run_id=%s\nstate_dir=%s\nstate=%s\n", runID, runStore.Layout().RunDir, snapshot.State)
+
 	return err
 }
 
@@ -112,6 +114,7 @@ func executeResumeRun(flags *sharedFlags, stdout io.Writer) error {
 	}
 
 	_, err = fmt.Fprintln(stdout, "run resumed")
+
 	return err
 }
 
@@ -126,6 +129,7 @@ func executeReplay(eventsPath string, stdout io.Writer) error {
 	}
 
 	_, err = fmt.Fprintln(stdout, "replay OK")
+
 	return err
 }
 
@@ -140,12 +144,13 @@ func executeCancelRun(stateDir string, stdout io.Writer) error {
 	}
 
 	_, err = fmt.Fprintln(stdout, "run canceled")
+
 	return err
 }
 
 func latestRunFailure(runStore *store.Store) error {
 	if runStore == nil {
-		return fmt.Errorf("run failed")
+		return errors.New("run failed")
 	}
 
 	events, err := runStore.ReadEvents()
@@ -160,7 +165,7 @@ func latestRunFailure(runStore *store.Store) error {
 		}
 	}
 
-	return fmt.Errorf("run failed")
+	return errors.New("run failed")
 }
 
 func openExistingRunStore(stateDir string) (*store.Store, string, error) {
@@ -180,11 +185,12 @@ func openExistingRunStore(stateDir string) (*store.Store, string, error) {
 func parseRunStateDir(stateDir string) (string, string, error) {
 	stateDir = strings.TrimSpace(stateDir)
 	if stateDir == "" {
-		return "", "", fmt.Errorf("state dir is required")
+		return "", "", errors.New("state dir is required")
 	}
 
 	runID := filepath.Base(stateDir)
 	baseDir := filepath.Dir(stateDir)
+
 	if runID == "." || runID == string(filepath.Separator) || strings.TrimSpace(runID) == "" {
 		return "", "", fmt.Errorf("invalid state dir %q", stateDir)
 	}
@@ -207,6 +213,7 @@ func loadExistingRunEngine(stateDir string, flags *sharedFlags) (*store.Store, *
 		if isMissingRunStateError(err) {
 			return nil, nil, nil, fmt.Errorf("run state not found: %s", stateDir)
 		}
+
 		return nil, nil, nil, err
 	}
 
@@ -215,6 +222,7 @@ func loadExistingRunEngine(stateDir string, flags *sharedFlags) (*store.Store, *
 		if isMissingRunStateError(err) {
 			return nil, nil, nil, fmt.Errorf("run state not found: %s", stateDir)
 		}
+
 		return nil, nil, nil, err
 	}
 
@@ -240,10 +248,11 @@ func loadExistingRunEngine(stateDir string, flags *sharedFlags) (*store.Store, *
 func loadReplayInput(eventsPath string) (string, *workflow.CompiledWorkflow, []store.Event, error) {
 	eventsPath = strings.TrimSpace(eventsPath)
 	if eventsPath == "" {
-		return "", nil, nil, fmt.Errorf("events file is required")
+		return "", nil, nil, errors.New("events file is required")
 	}
 
 	runDir := filepath.Dir(eventsPath)
+
 	runID := filepath.Base(runDir)
 	if runID == "." || runID == string(filepath.Separator) || strings.TrimSpace(runID) == "" {
 		return "", nil, nil, fmt.Errorf("invalid events file path %q", eventsPath)
@@ -272,6 +281,7 @@ func isMissingRunStateError(err error) bool {
 	}
 
 	var storeErr *store.Error
+
 	return errors.As(err, &storeErr) && storeErr.Code == store.ErrorCodePath && errors.Is(storeErr.Err, os.ErrNotExist)
 }
 
@@ -281,12 +291,15 @@ func formatStepSummaries(compiled *workflow.CompiledWorkflow, snapshot runtime.S
 	}
 
 	lines := make([]string, 0, len(compiled.TopologicalOrder))
+
 	for _, stepID := range compiled.TopologicalOrder {
 		step := snapshot.Steps[stepID]
 		line := fmt.Sprintf("step=%s state=%s", stepID, step.State)
+
 		if summary := strings.TrimSpace(step.Summary); summary != "" {
 			line += fmt.Sprintf(" summary=%q", summary)
 		}
+
 		lines = append(lines, line)
 	}
 
@@ -302,7 +315,7 @@ type runtimeWiring struct {
 
 func buildRuntimeWiring(runStore *store.Store, flags *sharedFlags) (runtimeWiring, error) {
 	if runStore == nil {
-		return runtimeWiring{}, fmt.Errorf("run store is required")
+		return runtimeWiring{}, errors.New("run store is required")
 	}
 
 	repoPath, workingDir, err := resolveExecutionContext(runStore, flags)
@@ -338,7 +351,7 @@ func lookupRegisteredAdapter(step workflow.CompiledStep) (adapters.Adapter, erro
 
 func resolveExecutionContext(runStore *store.Store, flags *sharedFlags) (string, string, error) {
 	if runStore == nil {
-		return "", "", fmt.Errorf("run store is required")
+		return "", "", errors.New("run store is required")
 	}
 
 	if flags != nil && strings.TrimSpace(flags.repo) != "" {
@@ -354,12 +367,15 @@ func resolveExecutionContext(runStore *store.Store, flags *sharedFlags) (string,
 	if err == nil && checkpoint != nil {
 		repoPath := strings.TrimSpace(checkpoint.RepoPath)
 		workingDir := strings.TrimSpace(checkpoint.WorkingDir)
+
 		if repoPath == "" {
 			repoPath = workingDir
 		}
+
 		if workingDir == "" {
 			workingDir = repoPath
 		}
+
 		if repoPath != "" || workingDir != "" {
 			return repoPath, workingDir, nil
 		}
@@ -383,6 +399,7 @@ func providerTimeout(flags *sharedFlags) time.Duration {
 
 func acquireRepoLock(flags *sharedFlags, runID, runsRoot string) (*runtime.RepoLock, error) {
 	manager := runtime.NewRepoLockManager(runtime.Dependencies{})
+
 	return manager.Acquire(runtime.AcquireOptions{
 		RunID:         runID,
 		RepoPath:      repoPath(flags),
@@ -450,16 +467,19 @@ func newSupervisorCommandRunner(runStore *store.Store, workingDir string, timeou
 
 func (r *supervisorCommandRunner) Start(ctx context.Context, request runtime.CommandRequest) (*adapters.Execution, error) {
 	if strings.TrimSpace(request.RunID) == "" {
-		return nil, fmt.Errorf("run id is required")
+		return nil, errors.New("run id is required")
 	}
+
 	if strings.TrimSpace(request.StepID) == "" {
-		return nil, fmt.Errorf("step id is required")
+		return nil, errors.New("step id is required")
 	}
+
 	if strings.TrimSpace(request.AttemptID) == "" {
-		return nil, fmt.Errorf("attempt id is required")
+		return nil, errors.New("attempt id is required")
 	}
+
 	if strings.TrimSpace(request.Command) == "" {
-		return nil, fmt.Errorf("command is required")
+		return nil, errors.New("command is required")
 	}
 
 	commandSpec, err := parseCommandSpec(request.Command, r.commandWorkingDir(request))
@@ -511,15 +531,17 @@ func (r *supervisorCommandRunner) Interrupt(_ context.Context, handle adapters.E
 	}
 
 	session.cancel()
+
 	return session.await()
 }
 
 func (r *supervisorCommandRunner) NormalizeResult(_ context.Context, execution *adapters.Execution) (*adapters.StepResult, error) {
 	if execution == nil {
-		return nil, fmt.Errorf("execution is required")
+		return nil, errors.New("execution is required")
 	}
+
 	if !execution.State.Normalizable() {
-		return nil, fmt.Errorf("execution state cannot be normalized")
+		return nil, errors.New("execution state cannot be normalized")
 	}
 
 	return &adapters.StepResult{
@@ -557,6 +579,7 @@ func (r *supervisorCommandRunner) commandWorkingDir(request runtime.CommandReque
 	if dir := strings.TrimSpace(r.workingDir); dir != "" {
 		return dir
 	}
+
 	if dir := strings.TrimSpace(request.WorkingDir); dir != "" {
 		return dir
 	}
@@ -567,6 +590,7 @@ func (r *supervisorCommandRunner) commandWorkingDir(request runtime.CommandReque
 func (r *supervisorCommandRunner) logPaths(stepID, attemptID string) (string, string) {
 	base := filepath.Join(r.store.Layout().RunDir, providerLogsDir, sanitizePathToken(stepID))
 	prefix := sanitizePathToken(attemptID)
+
 	return filepath.Join(base, prefix+"-stdout.log"), filepath.Join(base, prefix+"-stderr.log")
 }
 
@@ -577,10 +601,12 @@ func (r *supervisorCommandRunner) saveArtifacts(stepID, stdoutPath, stderrPath s
 	}
 
 	createdAt := r.now().UTC().Format(time.RFC3339Nano)
+
 	relStdout, err := filepath.Rel(r.store.Layout().RunDir, stdoutPath)
 	if err != nil {
 		return err
 	}
+
 	relStderr, err := filepath.Rel(r.store.Layout().RunDir, stderrPath)
 	if err != nil {
 		return err
@@ -616,8 +642,10 @@ func (s *commandSession) await() (*adapters.Execution, error) {
 		result := cloneExecution(s.result)
 		err := s.err
 		s.mu.Unlock()
+
 		return result, err
 	}
+
 	ch := s.done
 	s.mu.Unlock()
 
@@ -629,9 +657,11 @@ func (s *commandSession) await() (*adapters.Execution, error) {
 		s.result = cloneExecution(resolved.result)
 		s.err = resolved.err
 	}
+
 	result := cloneExecution(s.result)
 	err := s.err
 	s.mu.Unlock()
+
 	return result, err
 }
 
@@ -659,6 +689,7 @@ func cloneExecution(execution *adapters.Execution) *adapters.Execution {
 	cloned := *execution
 	cloned.ArtifactRefs = append([]adapters.ArtifactRef(nil), execution.ArtifactRefs...)
 	cloned.Logs = append([]adapters.LogEntry(nil), execution.Logs...)
+
 	return &cloned
 }
 
@@ -669,6 +700,7 @@ func sanitizePathToken(value string) string {
 	}
 
 	replacer := strings.NewReplacer("/", "-", "\\", "-", " ", "-", ":", "-")
+
 	return replacer.Replace(value)
 }
 
@@ -677,8 +709,9 @@ func parseCommandSpec(command, dir string) (executor.CommandSpec, error) {
 	if err != nil {
 		return executor.CommandSpec{}, err
 	}
+
 	if len(argv) == 0 {
-		return executor.CommandSpec{}, fmt.Errorf("command is required")
+		return executor.CommandSpec{}, errors.New("command is required")
 	}
 
 	return executor.CommandSpec{
@@ -691,11 +724,13 @@ func parseCommandSpec(command, dir string) (executor.CommandSpec, error) {
 func tokenizeCommand(command string) ([]string, error) {
 	command = strings.TrimSpace(command)
 	if command == "" {
-		return nil, fmt.Errorf("command is required")
+		return nil, errors.New("command is required")
 	}
 
 	args := make([]string, 0, 4)
+
 	var current strings.Builder
+
 	inSingle := false
 	inDouble := false
 	escaped := false
@@ -704,6 +739,7 @@ func tokenizeCommand(command string) ([]string, error) {
 	flush := func() {
 		args = append(args, current.String())
 		current.Reset()
+
 		tokenStarted = false
 	}
 
@@ -711,6 +747,7 @@ func tokenizeCommand(command string) ([]string, error) {
 		switch {
 		case escaped:
 			current.WriteRune(r)
+
 			escaped = false
 			tokenStarted = true
 		case inSingle:
@@ -719,6 +756,7 @@ func tokenizeCommand(command string) ([]string, error) {
 			} else {
 				current.WriteRune(r)
 			}
+
 			tokenStarted = true
 		case inDouble:
 			switch r {
@@ -729,6 +767,7 @@ func tokenizeCommand(command string) ([]string, error) {
 				inDouble = false
 			default:
 				current.WriteRune(r)
+
 				tokenStarted = true
 			}
 		default:
@@ -748,6 +787,7 @@ func tokenizeCommand(command string) ([]string, error) {
 				}
 			default:
 				current.WriteRune(r)
+
 				tokenStarted = true
 			}
 		}
@@ -756,9 +796,11 @@ func tokenizeCommand(command string) ([]string, error) {
 	if escaped {
 		current.WriteRune('\\')
 	}
+
 	if inSingle || inDouble {
 		return nil, fmt.Errorf("unterminated quoted string in command %s", strconv.Quote(command))
 	}
+
 	if tokenStarted {
 		flush()
 	}

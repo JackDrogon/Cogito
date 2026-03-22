@@ -59,9 +59,11 @@ func ReadEventsFile(path string) ([]Event, error) {
 	scanner.Buffer(buffer, 1024*1024)
 
 	events := make([]Event, 0)
+
 	lineNumber := 0
 	for scanner.Scan() {
 		lineNumber++
+
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue

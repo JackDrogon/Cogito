@@ -35,6 +35,7 @@ func validateSemantic(spec *Spec) error {
 
 	for _, step := range spec.Steps {
 		seenDependencies := make(map[string]struct{}, len(step.Needs))
+
 		for _, dependencyID := range step.Needs {
 			dependencyID = strings.TrimSpace(dependencyID)
 			if dependencyID == "" {
@@ -89,6 +90,7 @@ func validateDAG(compiled *CompiledWorkflow) error {
 
 	for _, step := range compiled.Steps {
 		indegree[step.ID] = len(step.Needs)
+
 		if len(step.Needs) == 0 {
 			ready = append(ready, step.ID)
 		}
@@ -97,9 +99,11 @@ func validateDAG(compiled *CompiledWorkflow) error {
 	sortStepIDsByDeclaration(ready, compiled.StepIndex)
 
 	order := make([]string, 0, len(compiled.Steps))
+
 	for len(ready) > 0 {
 		current := ready[0]
 		ready = ready[1:]
+
 		order = append(order, current)
 
 		step := compiled.Steps[compiled.StepIndex[current]]
@@ -114,6 +118,7 @@ func validateDAG(compiled *CompiledWorkflow) error {
 
 	if len(order) != len(compiled.Steps) {
 		remaining := make([]string, 0, len(compiled.Steps)-len(order))
+
 		for _, step := range compiled.Steps {
 			if indegree[step.ID] > 0 {
 				remaining = append(remaining, step.ID)
@@ -121,9 +126,11 @@ func validateDAG(compiled *CompiledWorkflow) error {
 		}
 
 		sortStepIDsByDeclaration(remaining, compiled.StepIndex)
-		return newError(ErrorCodeSemantic, fmt.Sprintf("cycle detected involving steps: %s", strings.Join(remaining, ", ")))
+
+		return newError(ErrorCodeSemantic, "cycle detected involving steps: "+strings.Join(remaining, ", "))
 	}
 
 	compiled.TopologicalOrder = order
+
 	return nil
 }

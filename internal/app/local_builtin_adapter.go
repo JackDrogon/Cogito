@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/JackDrogon/Cogito/internal/adapters"
@@ -37,12 +38,12 @@ func (a builtinLocalAdapter) Start(_ context.Context, request adapters.StartRequ
 			ProviderSessionID: fmt.Sprintf("builtin-%s-%s", a.provider, request.StepID),
 		},
 		State:   adapters.ExecutionStateSucceeded,
-		Summary: fmt.Sprintf("%s step ok", a.provider),
+		Summary: a.provider + " step ok",
 	}, nil
 }
 
 func (a builtinLocalAdapter) PollOrCollect(_ context.Context, handle adapters.ExecutionHandle) (*adapters.Execution, error) {
-	return &adapters.Execution{Handle: handle, State: adapters.ExecutionStateSucceeded, Summary: fmt.Sprintf("%s step ok", a.provider)}, nil
+	return &adapters.Execution{Handle: handle, State: adapters.ExecutionStateSucceeded, Summary: a.provider + " step ok"}, nil
 }
 
 func (a builtinLocalAdapter) Interrupt(_ context.Context, handle adapters.ExecutionHandle) (*adapters.Execution, error) {
@@ -50,12 +51,12 @@ func (a builtinLocalAdapter) Interrupt(_ context.Context, handle adapters.Execut
 }
 
 func (a builtinLocalAdapter) Resume(_ context.Context, request adapters.ResumeRequest) (*adapters.Execution, error) {
-	return &adapters.Execution{Handle: request.Handle, State: adapters.ExecutionStateSucceeded, Summary: fmt.Sprintf("%s step ok", a.provider)}, nil
+	return &adapters.Execution{Handle: request.Handle, State: adapters.ExecutionStateSucceeded, Summary: a.provider + " step ok"}, nil
 }
 
 func (a builtinLocalAdapter) NormalizeResult(_ context.Context, request adapters.NormalizeRequest) (*adapters.StepResult, error) {
 	if request.Execution == nil {
-		return nil, fmt.Errorf("execution is required")
+		return nil, errors.New("execution is required")
 	}
 
 	return &adapters.StepResult{

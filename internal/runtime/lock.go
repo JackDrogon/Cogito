@@ -76,7 +76,7 @@ func NewRepoLockManager(deps Dependencies) *RepoLockManager {
 
 	hostname := strings.TrimSpace(deps.Hostname)
 	if hostname == "" {
-		hostname, _ = os.Hostname()
+		hostname, _ = os.Hostname() //nolint:errcheck // fallback to empty string is acceptable
 	}
 
 	processRunning := deps.ProcessRunning
@@ -143,7 +143,7 @@ func (m *RepoLockManager) Acquire(opts AcquireOptions) (*RepoLock, error) {
 	}
 
 	if err := writeAtomicJSON(runLockPath, metadata); err != nil {
-		_ = removeFileIfMatches(repoLockPath, metadata)
+		_ = removeFileIfMatches(repoLockPath, metadata) //nolint:errcheck // best effort cleanup
 		return nil, err
 	}
 
@@ -167,15 +167,17 @@ func (m *RepoLockManager) acquireRepoLockFile(repoLockPath string, metadata Lock
 			if removeErr := removeStaleLock(repoLockPath, LockMetadata{}); removeErr != nil {
 				return wrapError(ErrorCodeLock, "reclaim corrupt repo lock", removeErr)
 			}
+
 			continue
 		}
 
 		if !m.isStale(existing) {
-			return wrapError(ErrorCodeLock, fmt.Sprintf("repo lock already held for %s by run %s", existing.RepoRoot, existing.RunID), errRepoLockHeld)
+			msg := fmt.Sprintf("repo lock already held for %s by run %s", existing.RepoRoot, existing.RunID)
+			return wrapError(ErrorCodeLock, msg, errRepoLockHeld)
 		}
 
 		if err := removeStaleLock(repoLockPath, existing); err != nil {
-			return wrapError(ErrorCodeLock, fmt.Sprintf("reclaim stale repo lock for run %s", existing.RunID), err)
+			return wrapError(ErrorCodeLock, "reclaim stale repo lock for run "+existing.RunID, err)
 		}
 	}
 
@@ -233,7 +235,7 @@ func ensureCleanWorktree(repoRoot string, allowDirty bool) error {
 	}
 
 	if strings.TrimSpace(output) != "" {
-		return newError(ErrorCodeDirtyWorktree, fmt.Sprintf("dirty worktree detected for %s", repoRoot))
+		return newError(ErrorCodeDirtyWorktree, "dirty worktree detected for "+repoRoot)
 	}
 
 	return nil
@@ -261,6 +263,7 @@ func resolveRepoRoot(repoPath string) (string, error) {
 func runGit(repoPath string, args ...string) (string, error) {
 	cmdArgs := append([]string{"-C", repoPath}, args...)
 	cmd := exec.Command("git", cmdArgs...)
+
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		message := strings.TrimSpace(string(output))
@@ -317,6 +320,7 @@ func writeExclusiveJSON(path string, value any) error {
 	}
 
 	data = append(data, '\n')
+
 	file, err := os.OpenFile(filepath.Clean(path), os.O_WRONLY|os.O_CREATE|os.O_EXCL, runtimeFileMode)
 	if err != nil {
 		return err
@@ -347,6 +351,7 @@ func writeAtomicJSON(path string, value any) error {
 
 	data = append(data, '\n')
 	tempPath := path + ".tmp"
+
 	file, err := os.OpenFile(tempPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, runtimeFileMode)
 	if err != nil {
 		return wrapError(ErrorCodeLock, "create temp lock file", err)
@@ -408,7 +413,7 @@ func removeFileIfMatches(path string, expected LockMetadata) error {
 			return nil
 		}
 
-		return wrapError(ErrorCodeLock, fmt.Sprintf("read lock metadata %s", path), err)
+		return wrapError(ErrorCodeLock, "read lock metadata "+path, err)
 	}
 
 	if metadata.RunID != expected.RunID || metadata.PID != expected.PID || metadata.AcquiredAt != expected.AcquiredAt {
@@ -416,7 +421,7 @@ func removeFileIfMatches(path string, expected LockMetadata) error {
 	}
 
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return wrapError(ErrorCodeLock, fmt.Sprintf("remove lock file %s", path), err)
+		return wrapError(ErrorCodeLock, "remove lock file "+path, err)
 	}
 
 	return syncDir(filepath.Dir(path))
@@ -442,5 +447,6 @@ func isProcessRunning(pid int) bool {
 	}
 
 	err := syscall.Kill(pid, 0)
+
 	return err == nil || errors.Is(err, syscall.EPERM)
 }

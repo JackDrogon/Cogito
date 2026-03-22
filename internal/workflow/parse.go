@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -56,7 +57,7 @@ func decodeRawWorkflow(data []byte) (rawWorkflow, error) {
 	}
 
 	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		if err != nil {
 			return rawWorkflow{}, classifyDecodeError(err)
 		}
@@ -226,6 +227,7 @@ func cloneStrings(values []string) []string {
 
 	cloned := make([]string, len(values))
 	copy(cloned, values)
+
 	return cloned
 }
 

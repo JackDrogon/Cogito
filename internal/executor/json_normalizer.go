@@ -28,6 +28,7 @@ func JSONOutputNormalizer() ResultNormalizer {
 		}
 
 		result.StructuredOutput = raw
+
 		return result, nil
 	})
 }

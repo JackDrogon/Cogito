@@ -12,6 +12,8 @@ import (
 	"github.com/JackDrogon/Cogito/internal/adapters/claude"
 )
 
+const testWorkspaceRepo = "/workspace/repo"
+
 func TestClaudeAdapterContract(t *testing.T) {
 	runner := &claudeContractRunner{}
 	adapter := claude.New(claude.Config{
@@ -27,7 +29,7 @@ func TestClaudeAdapterContract(t *testing.T) {
 	adapters.RunContractSuite(t, []adapters.ContractCase{{
 		Name:             "claude print terminal success path",
 		Adapter:          adapter,
-		StartRequest:     adapters.StartRequest{RunID: "run-234", StepID: "summarize", AttemptID: "attempt-2", WorkingDir: "/workspace/repo", Prompt: "Summarize the latest changes"},
+		StartRequest:     adapters.StartRequest{RunID: "run-234", StepID: "summarize", AttemptID: "attempt-2", WorkingDir: testWorkspaceRepo, Prompt: "Summarize the latest changes"},
 		WantCapabilities: adapters.CapabilityMatrix{MachineReadableLogs: true},
 		WantStartState:   adapters.ExecutionStateSucceeded,
 		NormalizeRequest: adapters.NormalizeRequest{RequireMachineReadableLogs: true},
@@ -55,8 +57,8 @@ func TestClaudeAdapterContract(t *testing.T) {
 	if execCall.Path != "/usr/local/bin/claude" {
 		t.Fatalf("exec path = %q, want %q", execCall.Path, "/usr/local/bin/claude")
 	}
-	if execCall.Dir != "/workspace/repo" {
-		t.Fatalf("exec dir = %q, want %q", execCall.Dir, "/workspace/repo")
+	if execCall.Dir != testWorkspaceRepo {
+		t.Fatalf("exec dir = %q, want %q", execCall.Dir, testWorkspaceRepo)
 	}
 	if got := execCall.Args; !reflect.DeepEqual(got, []string{"--print", "--output-format", "json", "Summarize the latest changes"}) {
 		t.Fatalf("exec args = %#v, want %#v", got, []string{"--print", "--output-format", "json", "Summarize the latest changes"})
@@ -73,7 +75,7 @@ func TestClaudeBinaryMissingIsExplicit(t *testing.T) {
 		Runner: &claudeContractRunner{},
 	})
 
-	_, err := adapter.Start(context.Background(), adapters.StartRequest{RunID: "run-234", StepID: "summarize", AttemptID: "attempt-2", Prompt: "Summarize"})
+	_, err := adapter.Start(t.Context(), adapters.StartRequest{RunID: "run-234", StepID: "summarize", AttemptID: "attempt-2", Prompt: "Summarize"})
 	if err == nil {
 		t.Fatal("Start() error = nil, want error")
 	}

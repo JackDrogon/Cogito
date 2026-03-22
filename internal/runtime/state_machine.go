@@ -295,7 +295,7 @@ func NewEngine(runID string, compiled *workflow.CompiledWorkflow, deps MachineDe
 		snapshot:       newZeroSnapshot(runID),
 	}
 
-	checkpoint, _, _ := deps.Store.LoadCheckpoint()
+	checkpoint, _, _ := deps.Store.LoadCheckpoint() //nolint:errcheck // checkpoint is optional
 
 	events, readErr := deps.Store.ReadEvents()
 	if readErr != nil {
@@ -310,6 +310,7 @@ func NewEngine(runID string, compiled *workflow.CompiledWorkflow, deps MachineDe
 
 		engine.repoPath, engine.workingDir = checkpointExecutionContext(checkpoint, engine.repoPath, engine.workingDir)
 		engine.snapshot = snapshot
+
 		return engine, nil
 	}
 
@@ -317,6 +318,7 @@ func NewEngine(runID string, compiled *workflow.CompiledWorkflow, deps MachineDe
 		if checkpoint != nil {
 			engine.repoPath, engine.workingDir = checkpointExecutionContext(checkpoint, engine.repoPath, engine.workingDir)
 		}
+
 		return engine, nil
 	}
 
@@ -328,8 +330,10 @@ func NewEngine(runID string, compiled *workflow.CompiledWorkflow, deps MachineDe
 	if checkpoint != nil {
 		engine.repoPath, engine.workingDir = checkpointExecutionContext(checkpoint, engine.repoPath, engine.workingDir)
 	}
+
 	engine.snapshot = replay.Snapshot
 	engine.transitions = replay.Transitions
+
 	return engine, nil
 }
 
@@ -345,6 +349,7 @@ func Replay(runID string, compiled *workflow.CompiledWorkflow, events []store.Ev
 
 	snapshot := newZeroSnapshot(runID)
 	transitions := make([]Transition, 0, len(events))
+
 	for _, event := range events {
 		if err := applyEvent(compiled, &snapshot, &transitions, event, ErrorCodeReplay); err != nil {
 			return nil, err
@@ -433,6 +438,7 @@ func (e *Engine) ExecuteNext(ctx context.Context) (bool, error) {
 			if err := e.persistRunTransition(store.EventRunSucceeded, RunStateRunning, RunStateSucceeded, "run succeeded"); err != nil {
 				return false, err
 			}
+
 			return true, nil
 		}
 
@@ -517,6 +523,7 @@ func (e *Engine) Cancel(message string) error {
 
 func (e *Engine) interruptActiveExecution(ctx context.Context) error {
 	activeStepID := ""
+
 	for _, stepID := range e.compiled.TopologicalOrder {
 		if e.snapshot.Steps[stepID].State != StepStateRunning {
 			continue
@@ -537,6 +544,7 @@ func (e *Engine) interruptActiveExecution(ctx context.Context) error {
 	if strings.TrimSpace(stepSnapshot.AttemptID) == "" {
 		return newError(ErrorCodeState, fmt.Sprintf("step %q missing attempt id", activeStepID))
 	}
+
 	if strings.TrimSpace(stepSnapshot.ProviderSessionID) == "" {
 		return newError(ErrorCodeState, fmt.Sprintf("step %q missing provider session id", activeStepID))
 	}
@@ -566,6 +574,7 @@ func (e *Engine) interruptActiveExecution(ctx context.Context) error {
 
 func (e *Engine) ReadyStepIDs() []string {
 	ready := make([]string, 0)
+
 	for _, stepID := range e.compiled.TopologicalOrder {
 		if e.snapshot.Steps[stepID].State == StepStateQueued {
 			ready = append(ready, stepID)
@@ -599,6 +608,7 @@ func (e *Engine) queueReadySteps() error {
 
 func (e *Engine) selectReadyPendingStepIDs() []string {
 	ready := make([]string, 0)
+
 	for _, stepID := range e.compiled.TopologicalOrder {
 		stepSnapshot := e.snapshot.Steps[stepID]
 		if stepSnapshot.State != StepStatePending {
@@ -607,6 +617,7 @@ func (e *Engine) selectReadyPendingStepIDs() []string {
 
 		step := e.compiled.Steps[e.compiled.StepIndex[stepID]]
 		dependenciesReady := true
+
 		for _, dependencyID := range step.Needs {
 			if e.snapshot.Steps[dependencyID].State != StepStateSucceeded {
 				dependenciesReady = false
@@ -629,9 +640,11 @@ func (e *Engine) executeStep(ctx context.Context, stepID string) error {
 	}
 
 	attemptID := e.ids.NewAttemptID(stepID)
+
 	if step.Kind == workflow.StepKindApproval {
 		providerSessionID := e.ids.NewSyntheticSessionID(stepID)
 		summary := defaultApprovalSummary(step, adapters.ExecutionStateWaitingApproval)
+
 		if err := e.persistStepTransition(store.EventStepStarted, stepID, StepStateQueued, StepStateRunning, attemptID, providerSessionID, summary, ""); err != nil {
 			return err
 		}
@@ -643,6 +656,7 @@ func (e *Engine) executeStep(ctx context.Context, stepID string) error {
 	if err != nil {
 		return err
 	}
+
 	if handled {
 		return nil
 	}
@@ -768,15 +782,18 @@ func (e *Engine) requestExceptionalApproval(ctx context.Context, step workflow.C
 	if err != nil {
 		return false, err
 	}
+
 	if !required {
 		return false, nil
 	}
 
 	providerSessionID := e.ids.NewSyntheticSessionID(step.ID)
+
 	summary := strings.TrimSpace(decision.Summary)
 	if summary == "" {
 		summary = "approval required by policy"
 	}
+
 	if err := e.persistStepTransition(store.EventStepStarted, step.ID, StepStateQueued, StepStateRunning, attemptID, providerSessionID, summary, ""); err != nil {
 		return true, err
 	}
@@ -890,6 +907,7 @@ func (e *Engine) continueApprovedStep(ctx context.Context, pending pendingApprov
 	}
 
 	var execution *adapters.Execution
+
 	switch pending.Trigger {
 	case ApprovalTriggerExplicit, ApprovalTriggerAdapter:
 		execution, err = driver.Resume(ctx, pending.Step, handle, e.Snapshot())
@@ -934,7 +952,9 @@ func (e *Engine) findPendingApproval() (pendingApproval, error) {
 	}
 
 	var pending pendingApproval
+
 	found := false
+
 	for _, stepID := range e.compiled.TopologicalOrder {
 		stepSnapshot := e.snapshot.Steps[stepID]
 		if stepSnapshot.State != StepStateWaitingApproval {
@@ -1067,6 +1087,7 @@ func (e *Engine) persistEvent(event store.Event) error {
 	previewSnapshot := cloneSnapshot(e.snapshot)
 	previewEvent := cloneEvent(event)
 	previewEvent.Sequence = previewSnapshot.LastSequence + 1
+
 	if err := applyEvent(e.compiled, &previewSnapshot, nil, previewEvent, ErrorCodeState); err != nil {
 		return err
 	}
@@ -1292,6 +1313,7 @@ func NewApprovalModePolicy(mode ApprovalMode) ApprovalPolicy {
 
 func (p approvalModePolicy) DecideGate(_ context.Context, request ApprovalGateRequest) (ApprovalDecisionResult, error) {
 	var decision ApprovalDecision
+
 	switch p.mode {
 	case ApprovalModeApprove:
 		decision = ApprovalDecisionApprove
@@ -1307,6 +1329,7 @@ func (p approvalModePolicy) DecideGate(_ context.Context, request ApprovalGateRe
 	if summary == "" {
 		summary = defaultApprovalSummary(request.Step, adapters.ExecutionStateWaitingApproval)
 	}
+
 	if decision != ApprovalDecisionWait {
 		summary = approvalDecisionSummary(decision, request.Step)
 	}
@@ -1352,6 +1375,7 @@ func (g *defaultIDGenerator) next(prefix, stepID string, bucket map[string]int) 
 	defer g.mu.Unlock()
 
 	bucket[stepID]++
+
 	return fmt.Sprintf("%s-%s-%02d", prefix, stepID, bucket[stepID])
 }
 
@@ -1383,6 +1407,7 @@ func applyEvent(compiled *workflow.CompiledWorkflow, snapshot *Snapshot, transit
 	data := cloneStringMap(event.Data)
 	fromState := strings.TrimSpace(data[dataFromState])
 	toState := strings.TrimSpace(data[dataToState])
+
 	occurredAt := strings.TrimSpace(data[dataOccurredAt])
 	if occurredAt == "" {
 		return newError(code, fmt.Sprintf("event %s missing %s", event.Type, dataOccurredAt))
@@ -1396,6 +1421,7 @@ func applyEvent(compiled *workflow.CompiledWorkflow, snapshot *Snapshot, transit
 	case store.EventRunCreated, store.EventRunStarted, store.EventRunPaused, store.EventRunWaitingApproval, store.EventRunSucceeded, store.EventRunFailed, store.EventRunCanceled:
 		from := RunState(fromState)
 		to := RunState(toState)
+
 		if err := ensureRunTransition(snapshot.State, from, to); err != nil {
 			return wrapError(code, "invalid transition order", err)
 		}
@@ -1430,6 +1456,7 @@ func applyEvent(compiled *workflow.CompiledWorkflow, snapshot *Snapshot, transit
 		current := snapshot.Steps[stepID]
 		from := StepState(fromState)
 		to := StepState(toState)
+
 		if err := ensureStepTransition(current.State, from, to); err != nil {
 			return wrapError(code, "invalid transition order", err)
 		}
@@ -1481,6 +1508,7 @@ func applyEvent(compiled *workflow.CompiledWorkflow, snapshot *Snapshot, transit
 
 	snapshot.LastSequence = event.Sequence
 	snapshot.UpdatedAt = occurredAt
+
 	return nil
 }
 
@@ -1550,6 +1578,7 @@ func cancelActiveSteps(snapshot *Snapshot) {
 
 func checkpointFromSnapshot(snapshot Snapshot, repoPath, workingDir string) *store.Checkpoint {
 	repoPath, workingDir = normalizeExecutionContext(repoPath, workingDir)
+
 	steps := make(map[string]store.StepCheckpoint, len(snapshot.Steps))
 	for stepID, step := range snapshot.Steps {
 		steps[stepID] = store.StepCheckpoint{
@@ -1603,6 +1632,7 @@ func snapshotFromCheckpoint(runID string, compiled *workflow.CompiledWorkflow, c
 
 	for _, step := range compiled.Steps {
 		stored := checkpoint.Steps[step.ID]
+
 		stepState := StepState(strings.TrimSpace(stored.State))
 		if stepState == "" {
 			stepState = StepStatePending
@@ -1644,9 +1674,11 @@ func checkpointExecutionContext(checkpoint *store.Checkpoint, repoPath, workingD
 func normalizeExecutionContext(repoPath, workingDir string) (string, string) {
 	repoPath = strings.TrimSpace(repoPath)
 	workingDir = strings.TrimSpace(workingDir)
+
 	if repoPath == "" {
 		repoPath = workingDir
 	}
+
 	if workingDir == "" {
 		workingDir = repoPath
 	}
@@ -1731,6 +1763,7 @@ func sanitizeIDPart(value string) string {
 	}
 
 	replacer := strings.NewReplacer(" ", "-", "/", "-", "\\", "-", ":", "-")
+
 	return replacer.Replace(value)
 }
 
@@ -1757,6 +1790,7 @@ func cloneTransitions(transitions []Transition) []Transition {
 
 	cloned := make([]Transition, len(transitions))
 	copy(cloned, transitions)
+
 	return cloned
 }
 

@@ -16,6 +16,7 @@ func (s *Store) SaveCheckpoint(checkpoint *Checkpoint) error {
 
 	sanitized := sanitizeCheckpoint(checkpoint)
 	sanitized.RunID = s.layout.RunID
+
 	return writeAtomicJSON(s.layout.CheckpointPath, sanitized, ErrorCodeCheckpoint)
 }
 

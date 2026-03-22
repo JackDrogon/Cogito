@@ -1,7 +1,6 @@
 package adapters
 
 import (
-	"context"
 	"encoding/json"
 	"reflect"
 	"testing"
@@ -32,9 +31,11 @@ type ContractCase struct {
 func RunContractSuite(t *testing.T, cases []ContractCase) {
 	t.Helper()
 
-	for _, tc := range cases {
+	for i := range cases {
+		tc := &cases[i]
 		t.Run(tc.Name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
+
 			capabilities := tc.Adapter.DescribeCapabilities()
 			if !reflect.DeepEqual(capabilities, tc.WantCapabilities) {
 				t.Fatalf("DescribeCapabilities() = %+v, want %+v", capabilities, tc.WantCapabilities)
@@ -46,6 +47,7 @@ func RunContractSuite(t *testing.T, cases []ContractCase) {
 			}
 
 			assertHandleEcho(t, execution.Handle, tc.StartRequest)
+
 			if execution.State != tc.WantStartState {
 				t.Fatalf("Start().State = %q, want %q", execution.State, tc.WantStartState)
 			}
@@ -63,6 +65,7 @@ func RunContractSuite(t *testing.T, cases []ContractCase) {
 
 			normalizeRequest := tc.NormalizeRequest
 			normalizeRequest.Execution = execution
+
 			result, err := tc.Adapter.NormalizeResult(ctx, normalizeRequest)
 			if err != nil {
 				t.Fatalf("NormalizeResult() error = %v", err)
@@ -122,6 +125,7 @@ func RunContractSuite(t *testing.T, cases []ContractCase) {
 				if tc.WantResumeResult != nil {
 					resumeNormalize := tc.ResumeNormalize
 					resumeNormalize.Execution = resumeExecution
+
 					result, err := tc.Adapter.NormalizeResult(ctx, resumeNormalize)
 					if err != nil {
 						t.Fatalf("NormalizeResult() after resume error = %v", err)
