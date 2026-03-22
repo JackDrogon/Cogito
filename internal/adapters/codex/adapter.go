@@ -23,13 +23,15 @@ const (
 )
 
 func init() {
-	shared.MustRegister(shared.Registration{
+	if err := shared.Register(shared.Registration{
 		Name:         ProviderName,
 		Capabilities: Capabilities(),
 		New: func() shared.Adapter {
 			return New(Config{})
 		},
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 type Config struct {

@@ -669,7 +669,7 @@ func TestCancelInterruptsActiveProviderBeforePersistingRunCanceled(t *testing.T)
 		t.Fatalf("NewEngine() error = %v", err)
 	}
 
-	if err := engine.Cancel(""); err != nil {
+	if err := engine.Cancel(t.Context(), ""); err != nil {
 		t.Fatalf("Cancel() error = %v", err)
 	}
 

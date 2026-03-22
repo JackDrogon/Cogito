@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -202,7 +203,7 @@ func TestExecuteWorkflowRunUsesRepoLockAndDirtyGuard(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- executeWorkflowRun(workflowPath, &sharedFlags{repo: fixture.repoDir, stateDir: stateDir, allowDirty: false}, ioDiscard{})
+		errCh <- executeWorkflowRun(context.Background(), workflowPath, &sharedFlags{repo: fixture.repoDir, stateDir: stateDir, allowDirty: false}, ioDiscard{})
 	}()
 
 	deadline := time.Now().Add(2 * time.Second)
@@ -224,7 +225,7 @@ func TestExecuteWorkflowRunUsesRepoLockAndDirtyGuard(t *testing.T) {
 	}
 
 	writeAppFile(t, filepath.Join(fixture.repoDir, "tracked.txt"), []byte("dirty now\n"))
-	err := executeWorkflowRun(workflowPath, &sharedFlags{repo: fixture.repoDir, stateDir: filepath.Join(fixture.runsRoot, "run-dirty")}, ioDiscard{})
+	err := executeWorkflowRun(context.Background(), workflowPath, &sharedFlags{repo: fixture.repoDir, stateDir: filepath.Join(fixture.runsRoot, "run-dirty")}, ioDiscard{})
 	if err == nil {
 		t.Fatal("executeWorkflowRun() dirty error = nil, want dirty worktree rejection")
 	}
@@ -232,7 +233,7 @@ func TestExecuteWorkflowRunUsesRepoLockAndDirtyGuard(t *testing.T) {
 		t.Fatalf("executeWorkflowRun() error = %v, want dirty worktree", err)
 	}
 
-	if err := executeWorkflowRun(workflowPath, &sharedFlags{repo: fixture.repoDir, stateDir: filepath.Join(fixture.runsRoot, "run-dirty-allowed"), allowDirty: true}, ioDiscard{}); err != nil {
+	if err := executeWorkflowRun(context.Background(), workflowPath, &sharedFlags{repo: fixture.repoDir, stateDir: filepath.Join(fixture.runsRoot, "run-dirty-allowed"), allowDirty: true}, ioDiscard{}); err != nil {
 		t.Fatalf("executeWorkflowRun() with allowDirty error = %v", err)
 	}
 }

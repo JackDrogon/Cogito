@@ -24,7 +24,7 @@ import (
 
 const providerLogsDir = "provider-logs"
 
-func executeWorkflowRun(workflowPath string, flags *sharedFlags, stdout io.Writer) (err error) {
+func executeWorkflowRun(ctx context.Context, workflowPath string, flags *sharedFlags, stdout io.Writer) (err error) {
 	if flags == nil {
 		return errors.New("run flags are required")
 	}
@@ -81,7 +81,7 @@ func executeWorkflowRun(workflowPath string, flags *sharedFlags, stdout io.Write
 		return err
 	}
 
-	if err := engine.ExecuteAll(context.Background()); err != nil {
+	if err := engine.ExecuteAll(ctx); err != nil {
 		return err
 	}
 
@@ -95,7 +95,7 @@ func executeWorkflowRun(workflowPath string, flags *sharedFlags, stdout io.Write
 	return err
 }
 
-func executeResumeRun(flags *sharedFlags, stdout io.Writer) error {
+func executeResumeRun(ctx context.Context, flags *sharedFlags, stdout io.Writer) error {
 	runStore, _, engine, err := loadExistingRunEngine(flags.stateDir, flags)
 	if err != nil {
 		return err
@@ -105,7 +105,7 @@ func executeResumeRun(flags *sharedFlags, stdout io.Writer) error {
 		return err
 	}
 
-	if err := engine.ExecuteAll(context.Background()); err != nil {
+	if err := engine.ExecuteAll(ctx); err != nil {
 		return err
 	}
 
@@ -133,13 +133,13 @@ func executeReplay(eventsPath string, stdout io.Writer) error {
 	return err
 }
 
-func executeCancelRun(stateDir string, stdout io.Writer) error {
+func executeCancelRun(ctx context.Context, stateDir string, stdout io.Writer) error {
 	_, _, engine, err := loadExistingRunEngine(stateDir, nil)
 	if err != nil {
 		return err
 	}
 
-	if err := engine.Cancel(""); err != nil {
+	if err := engine.Cancel(ctx, ""); err != nil {
 		return err
 	}
 

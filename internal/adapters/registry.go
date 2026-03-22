@@ -44,12 +44,6 @@ func Register(reg Registration) error {
 	return nil
 }
 
-func MustRegister(reg Registration) {
-	if err := Register(reg); err != nil {
-		panic(err)
-	}
-}
-
 func Lookup(name string) (Registration, bool) {
 	registryMu.RLock()
 	defer registryMu.RUnlock()

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -14,7 +15,7 @@ import (
 	"github.com/JackDrogon/Cogito/internal/workflow"
 )
 
-type commandHandler func(args []string, stdout io.Writer) error
+type commandHandler func(ctx context.Context, args []string, stdout io.Writer) error
 
 type sharedFlags struct {
 	repo            string
@@ -49,14 +50,14 @@ func printUsage(stdout io.Writer) {
 }
 
 // Run executes the CLI application with the provided arguments.
-func Run(args []string, stdout io.Writer) error {
+func Run(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) > 0 && isSubcommandToken(args[0]) {
 		handler, ok := rootCommands[args[0]]
 		if !ok {
 			return fmt.Errorf("unknown subcommand: %s", args[0])
 		}
 
-		return handler(args[1:], stdout)
+		return handler(ctx, args[1:], stdout)
 	}
 
 	fs := flag.NewFlagSet("Cogito", flag.ContinueOnError)
@@ -82,7 +83,7 @@ func Run(args []string, stdout io.Writer) error {
 	return nil
 }
 
-func runWorkflowCommand(args []string, stdout io.Writer) error {
+func runWorkflowCommand(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) == 0 {
 		return errors.New("workflow subcommand is required")
 	}
@@ -114,13 +115,13 @@ func runWorkflowCommand(args []string, stdout io.Writer) error {
 
 	switch args[0] {
 	case "validate":
-		return runWorkflowValidateCommand(args[1:], stdout)
+		return runWorkflowValidateCommand(ctx, args[1:], stdout)
 	default:
 		return fmt.Errorf("unknown workflow subcommand: %s", args[0])
 	}
 }
 
-func runWorkflowValidateCommand(args []string, stdout io.Writer) error {
+func runWorkflowValidateCommand(_ context.Context, args []string, stdout io.Writer) error {
 	_, remainingArgs, err := parseSharedFlags("workflow validate", args, stdout)
 	if err != nil {
 		return err
@@ -143,7 +144,7 @@ func runWorkflowValidateCommand(args []string, stdout io.Writer) error {
 	return err
 }
 
-func runRunCommand(args []string, stdout io.Writer) error {
+func runRunCommand(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) > 0 && isSubcommandToken(args[0]) {
 		flags, remainingArgs, err := parseSharedFlags("run", args[1:], stdout)
 		if err != nil {
@@ -158,7 +159,7 @@ func runRunCommand(args []string, stdout io.Writer) error {
 			return fmt.Errorf("run does not accept extra positional arguments: %v", remainingArgs)
 		}
 
-		return executeWorkflowRun(args[0], flags, stdout)
+		return executeWorkflowRun(ctx, args[0], flags, stdout)
 	}
 
 	flags, remainingArgs, err := parseSharedFlags("run", args, stdout)
@@ -174,10 +175,10 @@ func runRunCommand(args []string, stdout io.Writer) error {
 		return errors.New("run expects exactly 1 file argument")
 	}
 
-	return executeWorkflowRun(remainingArgs[0], flags, stdout)
+	return executeWorkflowRun(ctx, remainingArgs[0], flags, stdout)
 }
 
-func runStatusCommand(args []string, stdout io.Writer) error {
+func runStatusCommand(_ context.Context, args []string, stdout io.Writer) error {
 	flags, remainingArgs, err := parseSharedFlags("status", args, stdout)
 	if err != nil {
 		return err
@@ -209,7 +210,7 @@ func runStatusCommand(args []string, stdout io.Writer) error {
 	return nil
 }
 
-func runResumeCommand(args []string, stdout io.Writer) error {
+func runResumeCommand(ctx context.Context, args []string, stdout io.Writer) error {
 	flags, remainingArgs, err := parseSharedFlags("resume", args, stdout)
 	if err != nil {
 		return err
@@ -223,10 +224,10 @@ func runResumeCommand(args []string, stdout io.Writer) error {
 		return fmt.Errorf("resume does not accept positional arguments: %v", remainingArgs)
 	}
 
-	return executeResumeRun(flags, stdout)
+	return executeResumeRun(ctx, flags, stdout)
 }
 
-func runReplayCommand(args []string, stdout io.Writer) error {
+func runReplayCommand(_ context.Context, args []string, stdout io.Writer) error {
 	_, remainingArgs, err := parseSharedFlags("replay", args, stdout)
 	if err != nil {
 		return err
@@ -243,7 +244,7 @@ func runReplayCommand(args []string, stdout io.Writer) error {
 	return executeReplay(remainingArgs[0], stdout)
 }
 
-func runCancelCommand(args []string, stdout io.Writer) error {
+func runCancelCommand(ctx context.Context, args []string, stdout io.Writer) error {
 	flags, remainingArgs, err := parseSharedFlags("cancel", args, stdout)
 	if err != nil {
 		return err
@@ -257,7 +258,7 @@ func runCancelCommand(args []string, stdout io.Writer) error {
 		return fmt.Errorf("cancel does not accept positional arguments: %v", remainingArgs)
 	}
 
-	return executeCancelRun(flags.stateDir, stdout)
+	return executeCancelRun(ctx, flags.stateDir, stdout)
 }
 
 func parseSharedFlags(commandName string, args []string, stdout io.Writer) (*sharedFlags, []string, error) {

@@ -173,7 +173,7 @@ func ensureFile(path string, content []byte) error {
 	return nil
 }
 
-func writeAtomicJSON(path string, value any, code ErrorCode) error {
+func writeAtomicJSON(path string, value any, code ErrorCode) (err error) {
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return wrapError(code, "marshal JSON", err)
@@ -188,25 +188,33 @@ func writeAtomicJSON(path string, value any, code ErrorCode) error {
 	if err != nil {
 		return wrapError(code, "create temp file", err)
 	}
+	closed := false
+	defer func() {
+		if closed {
+			return
+		}
 
-	if _, err := file.Write(data); err != nil {
-		file.Close()
+		if closeErr := file.Close(); closeErr != nil && err == nil {
+			err = wrapError(code, "close temp file", closeErr)
+		}
+	}()
+
+	if _, err = file.Write(data); err != nil {
 		return wrapError(code, "write temp file", err)
 	}
 
-	if err := file.Sync(); err != nil {
-		file.Close()
+	if err = file.Sync(); err != nil {
 		return wrapError(code, "sync temp file", err)
 	}
 
-	if err := file.Chmod(persistedFileMode); err != nil {
-		file.Close()
+	if err = file.Chmod(persistedFileMode); err != nil {
 		return wrapError(code, "set temp file permissions", err)
 	}
 
-	if err := file.Close(); err != nil {
+	if err = file.Close(); err != nil {
 		return wrapError(code, "close temp file", err)
 	}
+	closed = true
 
 	if err := os.Rename(tempPath, path); err != nil {
 		return wrapError(code, "rename temp file", err)

@@ -497,7 +497,7 @@ func (e *Engine) Resume(message string) error {
 	return e.queueReadySteps()
 }
 
-func (e *Engine) Cancel(message string) error {
+func (e *Engine) Cancel(ctx context.Context, message string) error {
 	if err := e.ensureInitialized(); err != nil {
 		return err
 	}
@@ -510,7 +510,7 @@ func (e *Engine) Cancel(message string) error {
 	switch e.snapshot.State {
 	case RunStatePending, RunStateRunning, RunStateWaitingApproval, RunStatePaused:
 		if e.snapshot.State == RunStateRunning {
-			if err := e.interruptActiveExecution(context.Background()); err != nil {
+			if err := e.interruptActiveExecution(ctx); err != nil {
 				return err
 			}
 		}

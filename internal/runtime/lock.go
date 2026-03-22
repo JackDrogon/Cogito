@@ -313,7 +313,7 @@ func ensureDir(path string) error {
 	return nil
 }
 
-func writeExclusiveJSON(path string, value any) error {
+func writeExclusiveJSON(path string, value any) (err error) {
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return err
@@ -325,25 +325,34 @@ func writeExclusiveJSON(path string, value any) error {
 	if err != nil {
 		return err
 	}
+	closed := false
+	defer func() {
+		if closed {
+			return
+		}
 
-	if _, err := file.Write(data); err != nil {
-		file.Close()
+		if closeErr := file.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
+
+	if _, err = file.Write(data); err != nil {
 		return err
 	}
 
-	if err := file.Sync(); err != nil {
-		file.Close()
+	if err = file.Sync(); err != nil {
 		return err
 	}
 
-	if err := file.Close(); err != nil {
+	if err = file.Close(); err != nil {
 		return err
 	}
+	closed = true
 
 	return syncDir(filepath.Dir(path))
 }
 
-func writeAtomicJSON(path string, value any) error {
+func writeAtomicJSON(path string, value any) (err error) {
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return wrapError(ErrorCodeLock, "marshal lock metadata", err)
@@ -356,20 +365,29 @@ func writeAtomicJSON(path string, value any) error {
 	if err != nil {
 		return wrapError(ErrorCodeLock, "create temp lock file", err)
 	}
+	closed := false
+	defer func() {
+		if closed {
+			return
+		}
 
-	if _, err := file.Write(data); err != nil {
-		file.Close()
+		if closeErr := file.Close(); closeErr != nil && err == nil {
+			err = wrapError(ErrorCodeLock, "close temp lock file", closeErr)
+		}
+	}()
+
+	if _, err = file.Write(data); err != nil {
 		return wrapError(ErrorCodeLock, "write temp lock file", err)
 	}
 
-	if err := file.Sync(); err != nil {
-		file.Close()
+	if err = file.Sync(); err != nil {
 		return wrapError(ErrorCodeLock, "sync temp lock file", err)
 	}
 
-	if err := file.Close(); err != nil {
+	if err = file.Close(); err != nil {
 		return wrapError(ErrorCodeLock, "close temp lock file", err)
 	}
+	closed = true
 
 	if err := os.Rename(tempPath, path); err != nil {
 		return wrapError(ErrorCodeLock, "rename temp lock file", err)
