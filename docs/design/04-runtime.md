@@ -1,163 +1,238 @@
 # Runtime State Machine
 
-The Cogito runtime is built around a deterministic state machine that manages the lifecycle of workflow runs and individual steps. It ensures consistent execution, supports manual and automated approval gates, and provides event-driven replay for recovery.
+The runtime package is the execution core of Cogito. It advances a compiled
+workflow by persisting events, folding them into an in-memory `Snapshot`, and
+rewriting `checkpoint.json` after every durable transition.
 
-## Overview
+The earlier summary of runtime goals is still accurate:
 
-The execution engine (`internal/runtime/Engine`) maintains a `Snapshot` of the current state, which is updated by applying a sequence of events. This architecture allows for:
+- **Deterministic scheduling** - ready steps are discovered from a stable topological order
+- **State integrity** - transitions are validated against explicit allow-lists
+- **Resilience** - snapshot state can be rebuilt from durable event history
 
-- **Deterministic Scheduling**: Steps are selected for execution based on a strict topological order defined by the workflow graph.
-- **State Integrity**: All state transitions are validated against predefined allow-lists for both runs and steps.
-- **Resilience**: The state can be completely reconstructed from an event log, enabling recovery from process failures.
+## Core Model
+
+`runtime.Engine` receives:
+
+- a `workflow.CompiledWorkflow`
+- an event store
+- adapter lookup and command execution collaborators
+- an approval policy
+- repo/working directory context
+
+The engine never mutates state optimistically. It first previews whether an event
+would be valid, then appends the event, applies it to the live snapshot, and saves
+the checkpoint.
 
 ## Run States
 
-A workflow run follows a lifecycle from creation to a terminal state.
+Run lifecycle states are defined in `internal/runtime/state_machine.go`:
 
-### Run Lifecycle Diagram
+- `pending`
+- `running`
+- `waiting_approval`
+- `paused`
+- `succeeded`
+- `failed`
+- `canceled`
 
-```mermaid
-stateDiagram-v2
-    [*] --> pending
-    pending --> running: Start
-    pending --> canceled: Cancel
-    running --> waiting_approval: Approval Gate
-    running --> paused: Pause
-    running --> succeeded: All Steps Done
-    running --> failed: Step Failure
-    running --> canceled: Cancel
-    waiting_approval --> running: Approve
-    waiting_approval --> paused: Pause
-    waiting_approval --> failed: Deny / Timeout
-    waiting_approval --> canceled: Cancel
-    paused --> running: Resume
-    paused --> canceled: Cancel
-    succeeded --> [*]
-    failed --> [*]
-    canceled --> [*]
+### Allowed run transitions
+
+```text
+pending -> running, canceled
+running -> waiting_approval, paused, succeeded, failed, canceled
+waiting_approval -> running, paused, failed, canceled
+paused -> running, canceled
 ```
 
-### State Descriptions
+Terminal states have no outbound transitions.
 
-| State | Description |
-| :--- | :--- |
-| `pending` | The run has been created but has not yet started execution. |
-| `running` | The engine is actively scheduling and executing steps. |
-| `waiting_approval` | Execution is suspended until an external approval decision is provided. |
-| `paused` | The run has been manually suspended. |
-| `succeeded` | Terminal state: All steps in the workflow have completed successfully. |
-| `failed` | Terminal state: One or more steps failed, or the run was denied approval. |
-| `canceled` | Terminal state: The run was manually terminated before completion. |
+### State descriptions
+
+- `pending` - run exists but execution has not advanced yet
+- `running` - runtime is actively queueing or executing work
+- `waiting_approval` - execution is paused on an approval gate
+- `paused` - run was interrupted or explicitly paused and can later resume
+- `succeeded` - all steps completed successfully
+- `failed` - a step failed, approval was denied, or runtime could not continue safely
+- `canceled` - run was explicitly canceled
 
 ## Step States
 
-Each step in the workflow progresses through its own state machine. Steps are managed by the engine in the context of the overall run.
+Step lifecycle states are:
 
-### Step Transition Table
+- `pending`
+- `queued`
+- `running`
+- `waiting_approval`
+- `succeeded`
+- `failed`
+- `canceled`
 
-| From State | To State | Trigger |
-| :--- | :--- | :--- |
-| `pending` | `queued` | Dependencies met, step ready for execution. |
-| `pending` | `canceled` | Run canceled. |
-| `queued` | `running` | Step picked up by the execution driver. |
-| `queued` | `canceled` | Run canceled. |
-| `running` | `waiting_approval` | Step requires explicit or adapter-driven approval. |
-| `running` | `queued` | Step interrupted and marked for retry. |
-| `running` | `succeeded` | Execution completed successfully. |
-| `running` | `failed` | Execution failed. |
-| `running` | `canceled` | Run canceled. |
-| `waiting_approval` | `running` | Approval granted, step resumes. |
-| `waiting_approval` | `queued` | Step interrupted and marked for retry. |
-| `waiting_approval` | `succeeded` | Approval granted (for manual approval steps). |
-| `waiting_approval` | `failed` | Approval denied or timed out. |
-| `waiting_approval` | `canceled` | Run canceled. |
+### Allowed step transitions
+
+```text
+pending -> queued, canceled
+queued -> running, canceled
+running -> waiting_approval, queued, succeeded, failed, canceled
+waiting_approval -> running, queued, succeeded, failed, canceled
+failed -> queued, canceled
+```
+
+This means failed steps are structurally retryable, although the current CLI does
+not expose a dedicated retry command.
+
+## Initialization and Replay
+
+When `NewEngine` is created, runtime loads checkpoint and event history from the
+store and chooses one of three initialization paths:
+
+1. **checkpoint only** - if checkpoint exists and is at least as fresh as the event log
+2. **event replay** - if events are newer than the checkpoint
+3. **empty snapshot** - if there is no persisted history yet
+
+If no snapshot exists, the first runtime action is `RunCreated`, which also
+initializes all compiled steps into `pending` state.
 
 ## Scheduling
 
-Cogito uses a deterministic scheduling strategy to select the next steps for execution.
+Scheduling is deterministic and topological.
 
-### Topological Order
-The workflow graph is compiled into a topological order. The engine iterates through this order to ensure that dependencies are respected. A step is only moved from `pending` to `queued` when all steps listed in its `needs` field have achieved the `succeeded` state.
+### Ready-step selection
 
-```go
-func (e *Engine) selectReadyPendingStepIDs() []string {
-	ready := make([]string, 0)
-	for _, stepID := range e.compiled.TopologicalOrder {
-		stepSnapshot := e.snapshot.Steps[stepID]
-		if stepSnapshot.State != StepStatePending {
-			continue
-		}
+Runtime scans `compiled.TopologicalOrder` and selects steps that are:
 
-		step := e.compiled.Steps[e.compiled.StepIndex[stepID]]
-		dependenciesReady := true
-		for _, dependencyID := range step.Needs {
-			if e.snapshot.Steps[dependencyID].State != StepStateSucceeded {
-				dependenciesReady = false
-				break
-			}
-		}
+- still `pending`
+- and have all dependencies in `succeeded`
 
-		if dependenciesReady {
-			ready = append(ready, stepID)
-		}
-	}
-	return ready
-}
+Those steps are persisted as `StepQueued` in declaration/topological order.
+
+### Execution policy
+
+The engine then reads all queued step IDs and executes only the first queued step
+for that engine tick. As a result:
+
+- multiple steps can be ready at once
+- their queued order is deterministic
+- actual execution is sequential within one run
+
+This preserves the old "parallel readiness, sequential execution" explanation,
+which was accurate and remains an important distinction for readers.
+
+## Execution Flow
+
+```text
+RunCreated
+  -> RunStarted
+     -> StepQueued (all newly ready steps)
+        -> StepStarted
+           -> one of:
+              - StepSucceeded -> maybe queue dependents
+              - StepFailed -> RunFailed
+              - StepRetried -> RunPaused
+              - ApprovalRequested -> RunWaitingApproval
 ```
-
-### Deterministic Selection
-While multiple steps might be ready at the same time, the engine currently processes them one by one according to their position in the `TopologicalOrder`. This ensures that the execution sequence is predictable and repeatable across replays.
 
 ## Approval Integration
 
-Approval gates can be triggered in three ways:
+Runtime supports three approval triggers:
 
-1. **Explicit**: An `approval` kind step is defined in the workflow YAML.
-2. **Adapter**: A step adapter (e.g., a deployment agent) signals that it requires external authorization during execution.
-3. **Policy**: An automated `ApprovalPolicy` determines that a step requires manual intervention based on the current context or metadata.
+- `explicit` - `kind: approval` workflow step
+- `adapter` - provider returns `waiting_approval`
+- `policy` - `ApprovalPolicy.EvaluateException` injects a gate before normal execution
 
-### Approval Decisions
+### Entering approval
 
-When a run enters `waiting_approval`, it remains there until a decision is recorded via `GrantApproval`, `DenyApproval`, or `TimeoutApproval`.
+Approval entry always persists two events in order:
 
-```go
-type ApprovalDecision string
+1. `ApprovalRequested`
+2. `RunWaitingApproval`
 
-const (
-	ApprovalDecisionWait    ApprovalDecision = "wait"
-	ApprovalDecisionApprove ApprovalDecision = "approve"
-	ApprovalDecisionDeny    ApprovalDecision = "deny"
-	ApprovalDecisionTimeout ApprovalDecision = "timeout"
-)
-```
+The waiting step stores:
 
-- **Approve**: Resumes execution. If it was an `approval` step, it marks it as `succeeded`. If it was an adapter-driven gate, the engine calls `Resume` on the adapter.
-- **Deny / Timeout**: Transitions the step and the run to the `failed` state.
+- `attempt_id`
+- `provider_session_id`
+- `approval_id`
+- `approval_trigger`
+- `summary`
 
-## Replay
+### Resolving approval
 
-The `Replay` mechanism is the source of truth for the runtime state. Instead of relying on a mutable database record, Cogito reconstructs the `Snapshot` by playing back events from the `EventStore`.
+Runtime exposes:
 
-```go
-func Replay(runID string, compiled *workflow.CompiledWorkflow, events []store.Event) (*ReplayResult, error) {
-	snapshot := newZeroSnapshot(runID)
-	transitions := make([]Transition, 0, len(events))
-	for _, event := range events {
-		if err := applyEvent(compiled, &snapshot, &transitions, event, ErrorCodeReplay); err != nil {
-			return nil, err
-		}
-	}
-	return &ReplayResult{
-		Snapshot:    snapshot,
-		Transitions: transitions,
-	}, nil
-}
-```
+- `GrantApproval`
+- `DenyApproval`
+- `TimeoutApproval`
 
-### Validation during Replay
-During replay, every event is validated:
-- **Sequence**: Events must have strictly increasing, contiguous sequence numbers.
-- **Transitions**: Every state change must be valid according to the `allowedRunTransitions` and `allowedStepTransitions` maps.
-- **Context**: Step IDs and Run IDs in events must match the compiled workflow and the current run context.
+Resolution behavior:
 
-This strict validation ensures that the state machine cannot reach an inconsistent state, even if the event log is corrupted or manually tampered with.
+- **approve** -> `ApprovalGranted`, run returns to `running`, then the step continues
+- **deny** -> `ApprovalDenied`, step becomes `failed`, run becomes `failed`
+- **timeout** -> `ApprovalTimedOut`, step becomes `failed`, run becomes `failed`
+
+### Continuation rules by trigger
+
+- `explicit` -> step resumes via the approval driver and becomes `succeeded`
+- `adapter` -> runtime calls the driver's `Resume`
+- `policy` -> runtime starts the driver from scratch using the same attempt ID
+
+This distinction is important because policy approval happens before a real provider
+session exists, while adapter-triggered approval happens during provider execution.
+
+## Pause and cancel behavior
+
+### Pause
+
+- A running run can be paused explicitly.
+- If a step returns `interrupted`, runtime persists `StepRetried` and sets the run to `paused`.
+
+### Cancel
+
+- `pending`, `running`, `waiting_approval`, and `paused` runs can be canceled.
+- If the run is actively `running`, runtime first attempts to interrupt the active step.
+- `RunCanceled` also marks all non-terminal steps as `canceled` when events are folded.
+
+## Snapshot Contents
+
+The in-memory `Snapshot` stores:
+
+- `run_id`
+- `state`
+- `last_sequence`
+- `updated_at`
+- step snapshots keyed by step ID
+
+Each `StepSnapshot` stores:
+
+- `state`
+- `attempt_id`
+- `provider_session_id`
+- `approval_id`
+- `approval_trigger`
+- `summary`
+
+## Replay Guarantees
+
+Replay validates more than just JSON shape.
+
+- event `run_id` must match the replayed run
+- sequences must be contiguous
+- referenced step IDs must exist in the compiled workflow
+- every transition must be allowed by the transition tables
+- `occurred_at` must exist in event data
+
+If any event violates those rules, replay fails instead of silently producing a
+best-effort state.
+
+This preserves the original replay contract: replay is not a best-effort viewer,
+it is a validation boundary for durable runtime history.
+
+## Status and Replay Views
+
+The runtime package also produces view models consumed by the CLI:
+
+- `RunStatusView` - run ID, run state, and per-step summaries in topological order
+- `ReplayView` - replayed transitions plus final step statuses
+
+These views are intentionally derived from the same compiled workflow + snapshot /
+replay result pair, so inspection paths stay aligned with execution paths.

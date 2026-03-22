@@ -2,232 +2,252 @@
 
 ## Overview
 
-Cogito workflows are defined in YAML using a versioned schema. Workflows are **static DAGs** - the graph structure is fixed at parse time and cannot be modified during execution.
+Cogito workflows are defined in YAML and compiled into a static directed acyclic
+graph before execution starts. The implementation lives in `internal/workflow`
+and uses strict field validation, so this document describes the exact schema that
+is currently accepted by the parser.
 
-## Schema Version: `cogito/v1alpha1`
+## Top-Level Document
 
-### Top-Level Structure
+The parser accepts exactly one YAML document with these top-level fields:
 
 ```yaml
 apiVersion: cogito/v1alpha1
 kind: Workflow
 metadata:
-  name: example-workflow
-  description: Optional description
+  name: example
 vars:
-  key: value
+  repo_path: /workspace/repo
 steps:
-  - id: step-1
+  - id: review
     kind: agent
-    # ... step-specific fields
+    agent: codex
+    prompt: Review the repository
 ```
 
-### Metadata
+### Supported top-level fields
+
+- `apiVersion` - required, must be `cogito/v1alpha1`
+- `kind` - required, must be `Workflow`
+- `metadata.name` - required
+- `vars` - optional string map
+- `steps` - required non-empty array
+
+`metadata.description` and other additional fields are not currently accepted.
+The YAML decoder runs with `KnownFields(true)`, so unknown fields fail validation.
+
+## Variable Model
+
+`vars` is parsed and preserved as `map[string]string`, but the current execution
+path does not perform runtime interpolation inside step fields. In other words,
+values are stored in the resolved workflow, but strings such as `${repo_path}` are
+not expanded automatically by the workflow package today.
+
+Use `vars` as metadata for now, not as a guaranteed substitution mechanism.
+
+## Step Shape
+
+Each step uses a flat shape. The implementation does not support nested objects
+such as `agent: { prompt: ... }` or `command: { command: ... }`.
+
+### Common fields
 
 ```yaml
-metadata:
-  name: string          # Required: workflow identifier
-  description: string   # Optional: human-readable description
+- id: unique-step-id
+  kind: agent | command | approval
+  needs: [optional, dependencies]
 ```
 
-### Variables
+- `id` - required, unique within the workflow
+- `kind` - required, one of `agent`, `command`, `approval`
+- `needs` - optional list of prerequisite step IDs
+
+## Step kinds
+
+### Agent step
 
 ```yaml
-vars:
-  repo_path: /path/to/repo
-  timeout: 300
-```
-
-Variables are resolved once at run start and substituted into step configurations. Variable syntax: `${var_name}`.
-
-## Step Kinds
-
-### 1. Agent Step
-
-Execute a task using an AI coding agent.
-
-```yaml
-- id: implement-feature
+- id: implement
   kind: agent
-  agent:
-    agent: codex              # Provider: codex, claude, opencode
-    prompt: "Implement login feature"
-    timeout: 600              # Optional: step timeout in seconds
-  needs: [previous-step]      # Optional: dependencies
+  agent: codex
+  prompt: Implement the requested change
+  needs: [prepare]
 ```
 
-**Fields:**
-- `agent.agent`: Provider name (must be registered)
-- `agent.prompt`: Task description for the agent
-- `agent.timeout`: Execution timeout (default: 300s)
+Required fields:
 
-### 2. Command Step
+- `agent` - provider name
+- `prompt` - prompt passed to the adapter
 
-Execute a shell command.
+Forbidden fields for this kind:
+
+- `command`
+- `message`
+
+### Command step
 
 ```yaml
-- id: run-tests
+- id: test
   kind: command
-  command:
-    command: "go test ./..."  # Command string (parsed, not shell-executed)
-    working_dir: ${repo_path} # Optional: working directory
-    timeout: 120              # Optional: timeout in seconds
-  needs: [implement-feature]
+  command: go test ./...
+  needs: [implement]
 ```
 
-**Fields:**
-- `command.command`: Command string (tokenized, not passed to shell)
-- `command.working_dir`: Working directory (default: repo root)
-- `command.timeout`: Execution timeout (default: 60s)
+Required fields:
 
-**Security Note**: Commands are parsed into argv arrays, not executed via shell. No shell expansion, globbing, or piping.
+- `command` - raw command string
 
-### 3. Approval Step
+Forbidden fields for this kind:
 
-Explicit human approval gate.
+- `agent`
+- `prompt`
+- `message`
+
+Notes:
+
+- The command string is parsed by `internal/executor/command_parser.go` rather
+  than executed through a shell pipeline.
+- Per-step `working_dir` and per-step timeout fields are not part of the current DSL.
+
+Security note:
+
+- command steps are tokenized into argv form rather than passed wholesale to a shell
+- this means shell expansion, pipelines, and glob semantics are not part of the DSL contract
+
+### Approval step
 
 ```yaml
-- id: approve-deployment
+- id: approve-release
   kind: approval
-  approval:
-    message: "Deploy to production?"
-    timeout: 3600             # Optional: approval timeout
-  needs: [run-tests]
+  message: Approve release deployment?
+  needs: [test]
 ```
 
-**Fields:**
-- `approval.message`: Prompt shown to user
-- `approval.timeout`: How long to wait for approval (default: no timeout)
+Required fields:
 
-## Dependency Specification
+- `message` - summary shown when the runtime requests approval
 
-```yaml
-steps:
-  - id: step-a
-    kind: agent
-    # ... no dependencies, runs first
+Forbidden fields for this kind:
 
-  - id: step-b
-    kind: agent
-    needs: [step-a]           # Runs after step-a completes
+- `agent`
+- `prompt`
+- `command`
 
-  - id: step-c
-    kind: agent
-    needs: [step-a, step-b]   # Runs after both complete
-```
-
-**Rules:**
-- Dependencies must reference existing step IDs
-- Circular dependencies are rejected at validation time
-- Steps with no dependencies run first (in declaration order)
-- Steps with satisfied dependencies run in topological order
+Approval steps are modeled as first-class steps. They are queued like other steps,
+move into `waiting_approval`, and become `succeeded` only after approval is granted.
 
 ## Validation Rules
 
-### Schema Validation
+### Schema validation
+
 - `apiVersion` must be `cogito/v1alpha1`
 - `kind` must be `Workflow`
-- `metadata.name` is required
-- Each step must have unique `id`
-- Step `kind` must be one of: `agent`, `command`, `approval`
+- `metadata.name` must be non-empty
+- at least one step must exist
+- every step must have `id` and `kind`
+- step-kind required fields must be present and non-empty
+- step-kind forbidden fields must be absent
+- unknown YAML fields are rejected
 
-### Semantic Validation
-- All `needs` references must point to existing steps
-- No circular dependencies
-- Unknown fields are rejected (strict parsing)
+### Semantic validation
 
-### DAG Validation
-- Topological sort must succeed (no cycles)
-- All steps must be reachable from roots
+- step IDs must be unique
+- dependency IDs in `needs` must be non-empty
+- dependency IDs must reference existing steps
+- duplicate dependency IDs in one step are rejected
+
+### DAG validation
+
+- the compiled dependency graph must be acyclic
+- topological sorting must cover every step
+
+If a cycle exists, the error reports the remaining step IDs involved in the cycle.
+
+## Execution Order
+
+Declaration order matters when several steps are simultaneously eligible.
+
+- root steps are discovered in declaration order
+- dependents are sorted in declaration order
+- the compiled workflow stores `TopologicalOrder`
+- runtime queues all newly ready steps, then executes the first queued step during each engine tick
+
+This means the workflow graph can express parallel readiness, but the current
+engine still executes ready work one step at a time per run.
 
 ## Example Workflows
 
-### Simple Linear Workflow
+### Simple review workflow
 
 ```yaml
 apiVersion: cogito/v1alpha1
 kind: Workflow
 metadata:
-  name: simple-workflow
+  name: review-change
+steps:
+  - id: inspect
+    kind: agent
+    agent: claude
+    prompt: Inspect the repository and summarize the change
+
+  - id: test
+    kind: command
+    command: go test ./...
+    needs: [inspect]
+
+  - id: approve
+    kind: approval
+    message: Approve merging this change?
+    needs: [test]
+
+  - id: finalize
+    kind: agent
+    agent: codex
+    prompt: Prepare the final merge summary
+    needs: [approve]
+```
+
+### Fan-out / fan-in workflow
+
+```yaml
+apiVersion: cogito/v1alpha1
+kind: Workflow
+metadata:
+  name: split-checks
 steps:
   - id: prepare
     kind: command
-    command:
-      command: "echo Preparing"
+    command: go mod download
 
-  - id: review
-    kind: agent
-    agent:
-      agent: codex
-      prompt: "Review code quality"
+  - id: unit
+    kind: command
+    command: go test ./internal/...
     needs: [prepare]
-```
 
-### Parallel Execution
-
-```yaml
-apiVersion: cogito/v1alpha1
-kind: Workflow
-metadata:
-  name: parallel-workflow
-steps:
-  - id: setup
+  - id: integration
     kind: command
-    command:
-      command: "echo Setup"
-
-  - id: test-unit
-    kind: command
-    command:
-      command: "go test ./internal/..."
-    needs: [setup]
-
-  - id: test-integration
-    kind: command
-    command:
-      command: "go test ./e2e/..."
-    needs: [setup]
+    command: go test ./cmd/...
+    needs: [prepare]
 
   - id: report
     kind: agent
-    agent:
-      agent: codex
-      prompt: "Generate test report"
-    needs: [test-unit, test-integration]
+    agent: opencode
+    prompt: Summarize the test results
+    needs: [unit, integration]
 ```
 
-### Approval Gate
+Both `unit` and `integration` can become ready after `prepare`, but execution will
+still be deterministic and sequential in the current runtime.
 
-```yaml
-apiVersion: cogito/v1alpha1
-kind: Workflow
-metadata:
-  name: approval-workflow
-steps:
-  - id: build
-    kind: command
-    command:
-      command: "go build ./..."
+## Unsupported Features
 
-  - id: approve-deploy
-    kind: approval
-    approval:
-      message: "Deploy to production?"
-    needs: [build]
+The following features are not implemented in the current parser/runtime contract:
 
-  - id: deploy
-    kind: command
-    command:
-      command: "kubectl apply -f deploy.yaml"
-    needs: [approve-deploy]
-```
-
-## Limitations (V1)
-
-**Not Supported:**
-- Dynamic step generation
-- Conditional branches
-- Loops or iteration
-- Nested workflows
-- Runtime graph mutation
-- Provider-specific fields outside the schema
+- dynamic step generation
+- conditional execution
+- loops
+- nested workflows
+- step-level environment objects
+- step-level timeout fields in YAML
+- nested `agent`, `command`, or `approval` config blocks
+- guaranteed runtime variable interpolation

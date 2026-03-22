@@ -4,19 +4,27 @@ A CLI-first multi-agent workflow orchestrator for deterministic, auditable AI co
 
 ## Overview
 
-Cogito executes static, template-based workflows across multiple AI coding providers (Codex, Claude, OpenCode) with full event sourcing, checkpoint recovery, and human-in-the-loop approval gates.
+Cogito executes static YAML workflows across local command steps and provider-backed
+agent steps. The current implementation is local-first and file-backed: by
+default, runs persist their workflow, event log, checkpoint, artifacts, and lock
+metadata under `ref/tmp/`, while `--state-dir` can relocate a run when needed.
 
-**Key Features:**
-- 🔄 **Deterministic Execution** - Reproducible runs from event logs
-- 📦 **Provider-Agnostic** - Unified interface for multiple AI providers
-- 💾 **Event Sourcing** - Complete audit trail with replay capability
-- ⏸️ **Resumable** - Pause, resume, and recover from failures
-- 🚦 **Approval Gates** - Human-in-the-loop control at critical steps
-- 🔒 **Local-First** - File-backed storage, no daemon required
+-**Key Features:**
+-- 🔄 **Deterministic Execution** - Reproducible runs from event logs
+-- 📦 **Provider-Agnostic** - Unified interface for multiple AI providers
+-- 💾 **Event Sourcing** - Complete audit trail with replay capability
+-- ⏸️ **Resumable** - Pause, resume, and recover from failures
+-- 🚦 **Approval Gates** - Human-in-the-loop control at critical steps
+-- 🔒 **Local-First** - File-backed storage, no daemon required
 
-## Quick Start
+Key properties:
+- deterministic scheduling from a compiled DAG and append-only event history
+- provider-agnostic agent execution through a common adapter SPI
+- resumable runs through checkpoint recovery and replay
+- approval gates for explicit workflow pauses, adapter requests, and policy exceptions
+- repository locking and dirty-worktree protection for safer automation
 
-### Installation
+## Installation
 
 ```bash
 go install github.com/JackDrogon/Cogito/cmd/cogito@latest
@@ -30,61 +38,138 @@ cd Cogito
 just build
 ```
 
-### Basic Usage
+## Quick Start
+
+### Validate a workflow
 
 ```bash
-# Validate a workflow
 cogito workflow validate workflow.yaml
-
-# Execute a workflow
-cogito run workflow.yaml --state-dir ./run-output
-
-# Check status
-cogito status --state-dir ./run-output
-
-# Resume a paused workflow
-cogito resume --state-dir ./run-output
-
-# Replay from event log
-cogito replay ./run-output/events.jsonl
 ```
 
+### Execute a workflow
+
+```bash
+cogito run workflow.yaml --state-dir ./ref/tmp/runs/run-123
+```
+
+### Inspect, resume, approve, cancel, and replay
+
+```bash
+cogito status --state-dir ./ref/tmp/runs/run-123
+cogito resume --state-dir ./ref/tmp/runs/run-123
+cogito approve --state-dir ./ref/tmp/runs/run-123
+cogito cancel --state-dir ./ref/tmp/runs/run-123
+cogito replay ./ref/tmp/runs/run-123/events.jsonl
+```
+
+These examples use an explicit `--state-dir` so the run ID is stable and easy to
+inspect. When omitted, Cogito generates `ref/tmp/runs/run-<timestamp>`.
+
 ## Workflow Example
+
+The current DSL uses flat step fields rather than nested `agent` / `command`
+configuration objects.
 
 ```yaml
 apiVersion: cogito/v1alpha1
 kind: Workflow
 metadata:
-  name: deploy-app
+  name: review-change
 steps:
-  - id: build
-    kind: command
-    command: "go build -o app ."
-    
+  - id: inspect
+    kind: agent
+    agent: claude
+    prompt: Inspect the repository and summarize the change
+
   - id: test
     kind: command
-    command: "go test ./..."
-    needs: ["build"]
-    
-  - id: approve-deploy
+    command: go test ./...
+    needs: [inspect]
+
+  - id: approve
     kind: approval
-    needs: ["test"]
-    message: "Approve production deployment?"
-    
-  - id: deploy
+    message: Approve merging this change?
+    needs: [test]
+
+  - id: finalize
     kind: agent
-    needs: ["approve-deploy"]
-    agent: "deployer"
-    prompt: "Deploy the built application to production"
+    agent: codex
+    prompt: Prepare the final merge summary
+    needs: [approve]
 ```
 
 ## Architecture
 
-Cogito is built on three core components:
+Cogito is built around three core concerns:
 
-1. **Workflow Engine** - Parses YAML, validates DAG, schedules steps
-2. **Runtime State Machine** - Manages execution state with event sourcing
-3. **Adapter SPI** - Provider-agnostic interface for AI agents
+1. **Workflow Engine** - validates YAML, compiles the DAG, and preserves execution order
+2. **Runtime State Machine** - manages event-sourced run and step transitions
+3. **Adapter / Execution Boundary** - runs agent providers and local commands behind stable interfaces
+
+Those concerns are implemented as five cooperating layers:
+
+1. **CLI / App Layer** - parses commands, resolves flags, wires runtime dependencies
+2. **Workflow Layer** - validates YAML and compiles a static DAG
+3. **Runtime Layer** - drives the event-sourced run and step state machines
+4. **Store Layer** - persists `events.jsonl`, `checkpoint.json`, `artifacts.json`, and `workflow.json`
+5. **Execution Layer** - runs provider adapters and local command steps
+
+The current engine is deterministic and sequential per run: multiple steps can be
+ready at once, but one queued step is executed at a time in topological order.
+
+## Design Principles
+
+1. **Local-First** - run state is file-backed, with `ref/tmp/` as the default layout
+2. **Deterministic** - ordering is reproducible from the compiled graph and event log
+3. **Provider-Agnostic** - runtime targets one adapter SPI instead of hard-coding providers
+4. **Auditable** - meaningful transitions are persisted before checkpoint updates
+
+## Run Layout
+
+```text
+ref/tmp/
+├── locks/
+│   └── <repo>.lock.json
+└── runs/
+    └── <run-id>/
+        ├── workflow.json
+        ├── events.jsonl
+        ├── checkpoint.json
+        ├── artifacts.json
+        ├── locks/
+        │   └── repo.lock.json
+        └── provider-logs/
+            └── <step-id>/
+                ├── <attempt>-stdout.log
+                └── <attempt>-stderr.log
+```
+
+## CLI Commands
+
+Implemented commands:
+
+- `cogito workflow validate <file>`
+- `cogito run <file>`
+- `cogito status --state-dir <dir>`
+- `cogito resume --state-dir <dir>`
+- `cogito approve --state-dir <dir>`
+- `cogito cancel --state-dir <dir>`
+- `cogito replay <events.jsonl>`
+
+Shared execution flags include `--repo`, `--state-dir`, `--approval`,
+`--provider-timeout`, and `--allow-dirty`.
+
+## Provider Support
+
+Built-in adapters are registered for:
+
+- `codex`
+- `claude`
+- `opencode`
+
+These adapters currently wrap provider CLIs and expose machine-readable logs. The
+SPI also models interrupt/resume capabilities, but provider-native support for
+those flows is not fully implemented in the built-in adapters yet.
 
 ## Documentation
 
@@ -95,21 +180,23 @@ Cogito is built on three core components:
 - [Adapter SPI](./docs/design/05-adapters.md)
 - [CLI Commands](./docs/design/06-cli.md)
 - [Approval Gates](./docs/design/07-approval.md)
+- [Error Model](./docs/design/08-errors.md)
 
 ## Project Structure
 
-```
+```text
 cogito/
 ├── cmd/cogito/              # CLI entrypoint
 ├── internal/
-│   ├── workflow/            # Workflow parsing and validation
-│   ├── runtime/             # State machine and execution engine
-│   ├── store/               # Event log and checkpoint storage
-│   ├── adapters/            # Provider adapters
-│   ├── executor/            # Process supervision
-│   └── app/                 # CLI command routing
-├── docs/design/             # Design documentation
-└── justfile                 # Development commands
+│   ├── app/                 # command routing, wiring, presenters
+│   ├── workflow/            # YAML parsing and DAG compilation
+│   ├── runtime/             # state machine, approvals, replay, locks
+│   ├── store/               # file-backed persistence
+│   ├── adapters/            # provider adapter SPI and implementations
+│   ├── executor/            # local command supervision
+│   └── version/             # version reporting
+├── docs/design/             # design documentation
+└── justfile                 # development commands
 ```
 
 ## Development
@@ -128,23 +215,17 @@ just lint     # Run linter
 just cover    # Coverage report
 ```
 
-## Design Principles
+## Error Handling
 
-1. **Local-First** - File-backed, no daemon
-2. **Deterministic** - Reproducible from events
-3. **Provider-Agnostic** - Unified interface
-4. **Auditable** - Complete event log
+Subsystems expose structured errors with stable codes (`workflow`, `runtime`,
+`store`, `adapters`, `executor`). The CLI prints surfaced errors to stderr and
+returns exit code `1` on failure.
 
-## Storage Model
+For runs that settle into the `failed` state, the app layer may surface the latest
+durable event summary as `run failed: <message>` rather than only returning the
+first in-process error.
 
-```
-ref/tmp/runs/<run-id>/
-├── workflow.json
-├── events.jsonl
-├── checkpoint.json
-├── artifacts.json
-└── locks/
-```
+See `docs/design/08-errors.md` for the full error taxonomy and propagation model.
 
 ## License
 

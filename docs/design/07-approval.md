@@ -1,140 +1,172 @@
-# 审批门禁系统 (Approval Gate System)
+# Approval Gates
 
-审批门禁系统为 Cogito 提供“人机协同” (Human-in-the-loop) 的能力。它允许工作流在关键节点暂停，等待外部信号（如人工干预或策略评估）后再继续执行。
+Approval is how Cogito pauses an otherwise deterministic workflow and waits for a
+human or policy decision before continuing. The implementation lives in
+`internal/runtime/approval*.go` and is integrated directly into the runtime state
+machine instead of being modeled as a separate external service.
 
-## 概述
+## Approval Triggers
 
-审批门禁不仅仅是一个简单的“暂停”指令，它是一个完整的状态管理子系统，负责审批请求的生命周期、上下文持久化以及与不同触发源的交互。
+Cogito currently supports three approval triggers.
 
-## 触发类型 (Trigger Types)
+### 1. Explicit workflow approval
 
-系统支持三种不同的审批触发模式：
-
-### 1. 显式触发 (Explicit)
-通过在工作流 YAML 中定义 `kind: approval` 的步骤来显式声明审批门禁。这是最常见的用法，用于在关键步骤（如生产部署）前强制人工介入。
+An `approval` step in YAML creates a first-class workflow gate:
 
 ```yaml
-- id: prod-deploy-gate
+- id: approve-release
   kind: approval
-  message: "Confirm production deployment"
+  message: Approve release deployment?
 ```
 
-### 2. 适配器触发 (Adapter)
-由执行适配器（如 Agent 或外部集成）在运行过程中动态触发。当适配器返回 `ExecutionStateWaitingApproval` 状态时，运行时会自动挂起该步骤并进入审批流程。
+Runtime starts the approval step, synthesizes a provider session ID, and requests
+approval using the step message as the default summary.
 
-### 3. 策略触发 (Policy)
-通过 `ApprovalPolicy` 强制执行的审批。即使工作流本身没有定义审批步骤，全局策略也可以根据运行时快照（如高风险操作）注入异常审批请求。
+### 2. Adapter-triggered approval
 
-## 决策流 (Decision Flow)
+If a provider step normalizes to `ExecutionStateWaitingApproval`, runtime treats it
+as an approval gate and transitions the step into `waiting_approval`.
 
-一旦进入审批状态，工作流会处于 `waiting_approval` 运行状态。系统支持以下决策：
+This is how a provider can request human input in the middle of a step.
 
-- **批准 (Approve)**: 工作流恢复执行，该步骤标记为成功或继续其后续流程。
-- **拒绝 (Deny)**: 该步骤失败，整个工作流进入失败状态并停止后续执行。
-- **超时 (Timeout)**: 在规定时间内未收到决策时自动触发，通常视为拒绝处理。
+### 3. Policy-triggered approval
 
-## 持久化 (Persistence)
+Before starting a non-approval step, runtime asks `ApprovalPolicy.EvaluateException`
+whether an exceptional approval gate should be inserted.
 
-审批状态必须在进程重启后能够恢复，Cogito 通过以下方式确保一致性：
+If the policy says approval is required:
 
-### Checkpoint 持久化
-每个步骤的 `StepCheckpoint` 包含以下字段：
-- `approval_id`: 本次审批请求的唯一标识。
-- `approval_trigger`: 触发来源（explicit/adapter/policy）。
-- `summary`: 审批请求的描述文字。
+- runtime synthesizes a provider session ID
+- marks the step as started
+- emits `ApprovalRequested`
+- moves the run to `waiting_approval`
 
-### 事件溯源 (Events)
-审批生命周期产生以下关键事件：
-- `ApprovalRequested`: 记录审批请求的生成及其触发上下文。
-- `ApprovalGranted`: 记录批准决定及相关备注。
-- `ApprovalDenied`: 记录拒绝原因。
-- `ApprovalTimedOut`: 记录超时发生。
+This creates a gate before the real step execution begins.
 
-## 实现细节
+## Approval Modes
 
-### 状态机转换
-运行时的状态机定义了严格的审批转换路径：
-- `RunStateRunning` -> `RunStateWaitingApproval`
-- `RunStateWaitingApproval` -> `RunStateRunning` (批准)
-- `RunStateWaitingApproval` -> `RunStateFailed` (拒绝/超时)
+The default built-in policy is `approvalModePolicy`, configured from `--approval`.
 
-### 引擎交互
-`Engine` 提供了 `GrantApproval`、`DenyApproval` 和 `TimeoutApproval` 接口供 CLI 或 API 调用。这些调用会触发事件追加，并通过 `Replay` 机制恢复执行上下文。
+Supported modes:
 
-## 示例
+- `auto` - request approval and wait
+- `approve` - auto-approve immediately
+- `deny` - auto-deny immediately
 
-以下是一个典型的包含审批门禁的部署工作流片段：
+An empty CLI flag resolves to `auto`.
 
-```yaml
-apiVersion: cogito/v1alpha1
-kind: Workflow
-metadata:
-  name: secured-deploy
-steps:
-  - id: build
-    kind: command
-    command: "go build ."
-    
-  - id: approve-test-deploy
-    kind: approval
-    needs: ["build"]
-    message: "Approve deployment to test environment"
-    
-  - id: deploy-test
-    kind: agent
-    needs: ["approve-test-deploy"]
-    agent: "deployer"
-    prompt: "Deploy built artifacts to testing"
+## Persisted Approval Data
+
+Approval state is stored inside both the event log and step checkpoint data.
+
+### Step checkpoint fields
+
+When a step is waiting for approval, its checkpoint includes:
+
+- `approval_id`
+- `approval_trigger`
+- `attempt_id`
+- `provider_session_id`
+- `summary`
+
+### Approval-related event types
+
+- `ApprovalRequested`
+- `ApprovalGranted`
+- `ApprovalDenied`
+- `ApprovalTimedOut`
+
+Approval events also carry transition metadata such as:
+
+- `from_state`
+- `to_state`
+- `provider_session_id`
+- `approval_trigger`
+- `summary`
+- `occurred_at`
+
+## Runtime State Changes
+
+Entering approval always affects both the step and the run.
+
+### Enter approval
+
+```text
+Step: running -> waiting_approval
+Run:  running -> waiting_approval
 ```
 
-审批门禁系统不仅能暂停流程，还能保存执行上下文，使得工作流可以在不同的会话甚至不同的机器上无缝恢复。这对于长时间运行的部署或需要跨时区审批的任务至关重要。
+### Resolve approval
 
-### 状态转换矩阵
+#### Approve
 
-| 源状态 | 事件 | 目标状态 | 说明 |
-| :--- | :--- | :--- | :--- |
-| Running | EventRunWaitingApproval | WaitingApproval | 进入审批挂起 |
-| WaitingApproval | EventApprovalGranted | Running | 审批通过，恢复执行 |
-| WaitingApproval | EventApprovalDenied | Failed | 审批拒绝，停止执行 |
-| WaitingApproval | EventApprovalTimedOut | Failed | 审批超时，自动失败 |
-
-### 故障恢复机制
-
-当引擎重新加载处于 `waiting_approval` 状态的 Checkpoint 时：
-1. 它会根据 `approval_trigger` 重新构建审批处理器。
-2. 恢复 `approval_id` 以便后续的 `Grant/Deny` 操作能匹配到正确的门禁。
-3. 如果 trigger 是 `adapter`，它会调用适配器的 `PollOrCollect` 检查外部状态。
-4. 如果 trigger 是 `policy`，它会重新评估策略，看是否仍然需要人工介入。
-
-这种机制保证了审批系统不仅仅是一个标志位，而是一个有状态的、可恢复的任务节点。
-
-## 事件数据结构示例
-
-一个典型的 `ApprovalRequested` 事件数据如下：
-
-```json
-{
-  "sequence": 42,
-  "type": "ApprovalRequested",
-  "step_id": "deploy-prod",
-  "approval_id": "approval-deploy-prod-01",
-  "data": {
-    "approval_trigger": "explicit",
-    "from_state": "running",
-    "to_state": "waiting_approval",
-    "summary": "Confirm production deployment",
-    "occurred_at": "2026-03-22T10:00:00Z"
-  }
-}
+```text
+Step: waiting_approval -> running
+Run:  waiting_approval -> running
 ```
 
-## 开发者指南
+After that transition, runtime continues the step according to the trigger type.
 
-实现新的审批策略或集成外部审批系统时，请遵循以下原则：
-- **幂等性**: 审批决定应该是幂等的，多次发送相同的批准请求不应产生副作用。
-- **透明度**: 所有决策必须记录在事件日志中，包括决策者的身份（如果可用）和决策理由。
-- **原子性**: 审批状态的更新与工作流状态的转换必须是原子操作，通过 Checkpoint 机制保证。
+#### Deny / timeout
 
-## 总结
+```text
+Step: waiting_approval -> failed
+Run:  waiting_approval -> failed
+```
 
-通过将审批逻辑从核心调度器中分离出来，Cogito 能够灵活地处理从简单的命令行确认到复杂的分布式策略评估等各种审批场景，同时保持了核心引擎的简洁和可测试性。
+Both deny and timeout are terminal for the current run.
+
+## Continuation Strategy by Trigger
+
+This is the most important implementation detail to understand when debugging
+approval behavior.
+
+### Explicit approval step
+
+After approval is granted, runtime resumes the synthetic approval driver. That
+driver returns a succeeded execution, so the approval step completes successfully.
+
+### Adapter-triggered approval
+
+After approval is granted, runtime resumes the step driver with the existing
+`ExecutionHandle`, which gives the provider adapter a chance to continue the same
+provider session.
+
+### Policy-triggered approval
+
+After approval is granted, runtime starts the step driver rather than resuming it.
+This is because policy approval happened before any real provider or command work
+had started.
+
+## CLI Integration
+
+The CLI currently exposes one approval-resolution command:
+
+```bash
+cogito approve --state-dir ./ref/tmp/runs/run-123
+```
+
+That command calls `engine.GrantApproval(ctx, "approved via CLI")` and then keeps
+executing until the run settles again.
+
+There is currently no dedicated CLI for deny or timeout, although runtime has the
+internal APIs `DenyApproval` and `TimeoutApproval`.
+
+## Failure Modes
+
+Approval handling can fail for several reasons:
+
+- run is not actually in `waiting_approval`
+- no waiting step can be found
+- more than one waiting approval is present (not supported)
+- waiting step is missing `approval_id`
+- a provider driver cannot resume after approval
+
+These failures are treated as runtime execution errors rather than silent no-ops.
+
+## Current Constraints
+
+- only one pending approval is supported at a time
+- deny/timeout do not have dedicated CLI commands
+- policy-triggered approval can gate a step before real provider execution exists
+- adapter-level resume depends on future provider capability work for full fidelity

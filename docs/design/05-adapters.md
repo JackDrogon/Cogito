@@ -1,173 +1,223 @@
 # Adapter SPI
 
-The Adapter Service Provider Interface (SPI) provides a provider-agnostic way to execute agent steps. It decouples the core execution engine from specific agent implementations like Codex, Claude, or OpenCode. This architecture ensures that Cogito can support new AI providers by simply adding a new adapter without modifying the core runtime.
+Cogito uses an adapter service-provider interface to keep workflow orchestration
+independent from concrete AI tools such as Codex, Claude, and OpenCode.
 
-## Overview
+The current implementation lives in `internal/adapters` and is designed around a
+staged lifecycle rather than a single blocking call.
 
-Adapters act as the translation layer between Cogito's internal execution model and various external agent environments. Each adapter manages the lifecycle of a single execution step, handling process invocation, output streaming, and result parsing.
+The original three design goals are still a useful way to read the SPI:
 
-The SPI is designed around three core concepts:
-1. **Abstraction**: Hiding provider-specific CLI flags or API details.
-2. **Feature Detection**: Using a capability matrix to handle varying provider features.
-3. **Consistency**: Normalizing diverse outputs into a standard step result.
+1. **Abstraction** - hide provider-specific CLI details behind a stable interface
+2. **Feature detection** - model optional behavior through a capability matrix
+3. **Consistency** - normalize provider output into one workflow-facing result type
 
 ## Adapter Interface
 
-The `Adapter` interface defines the contract for all provider implementations:
-
 ```go
 type Adapter interface {
-    // DescribeCapabilities returns the static capabilities supported by this adapter.
     DescribeCapabilities() CapabilityMatrix
-
-    // Start initiates a new execution step.
     Start(ctx context.Context, request StartRequest) (*Execution, error)
-
-    // PollOrCollect retrieves the current state of an ongoing execution.
     PollOrCollect(ctx context.Context, handle ExecutionHandle) (*Execution, error)
-
-    // Interrupt stops a running execution.
     Interrupt(ctx context.Context, handle ExecutionHandle) (*Execution, error)
-
-    // Resume continues an execution that was waiting for input.
     Resume(ctx context.Context, request ResumeRequest) (*Execution, error)
-
-    // NormalizeResult converts an Execution snapshot into a standard StepResult.
     NormalizeResult(ctx context.Context, request NormalizeRequest) (*StepResult, error)
 }
 ```
 
-### Method Details
+## Lifecycle Contract
 
-- **Start**: Takes a `StartRequest` containing `RunID`, `StepID`, and the `Prompt`. It returns an `Execution` object which includes a `ProviderSessionID` used for subsequent calls.
-- **PollOrCollect**: Used for long-running steps. The engine polls this method until the execution state is terminal (Succeeded, Failed, or Interrupted).
-- **Interrupt**: Attempts to gracefully stop a running process. This is essential for user cancellations and timeouts.
-- **Resume**: Used when an agent hits an "Approval Gate" or needs user clarification. It sends the user's response back to the provider session.
-- **NormalizeResult**: The final step in the execution lifecycle. It validates the output against the engine's requirements (e.g., ensuring structured output is present if requested).
+### 1. `Start`
+
+Starts provider execution and returns an initial `Execution`.
+
+`StartRequest` includes:
+
+- `RunID`
+- `StepID`
+- `AttemptID`
+- `WorkingDir`
+- `Prompt`
+
+### 2. `PollOrCollect`
+
+Returns the current provider-facing execution snapshot. Runtime keeps polling until
+the execution state becomes normalizable.
+
+### 3. `Interrupt` / `Resume`
+
+These methods exist in the SPI, but runtime checks capabilities before relying on
+them. Today, the built-in provider adapters do not implement provider-native
+interrupt or resume and will return capability errors when asked.
+
+### 4. `NormalizeResult`
+
+Transforms a provider-facing `Execution` into a workflow-facing `StepResult`.
+This is the boundary where provider-specific output becomes runtime-safe status,
+output text, artifact refs, and logs.
 
 ## Capability Matrix
 
-Not all adapters support every feature. The `CapabilityMatrix` allows adapters to declare their supported features, enabling the engine to fail fast if a workflow requires unsupported capabilities.
+Capabilities are represented by booleans on `CapabilityMatrix`:
 
-| Capability | Description |
-|------------|-------------|
-| `structured_output` | Provider can return machine-readable JSON results. |
-| `resume` | Provider supports pausing and resuming sessions. |
-| `interrupt` | Provider supports stopping a running task mid-execution. |
-| `artifact_refs` | Provider can identify and link to files created or modified. |
-| `machine_readable_logs` | Provider emits structured logs during execution. |
+- `structured_output`
+- `resume`
+- `interrupt`
+- `artifact_refs`
+- `machine_readable_logs`
 
-### Capability Enforcement
+`CapabilityMatrix.Require` is used to fail fast when runtime needs a feature that
+an adapter does not support.
 
-The engine uses the `Require` helper to check for mandatory features:
+| Capability | Meaning in Cogito |
+|------------|-------------------|
+| `structured_output` | Adapter can provide machine-readable structured payloads |
+| `resume` | Adapter can continue an existing provider session |
+| `interrupt` | Adapter can stop a running provider session |
+| `artifact_refs` | Adapter can report artifact references directly |
+| `machine_readable_logs` | Adapter emits logs that runtime can preserve structurally |
+
+## Current Built-in Providers
+
+Three adapters are registered via package `init()`:
+
+- `codex`
+- `claude`
+- `opencode`
+
+### Shared current behavior
+
+All three adapters currently:
+
+- register themselves with the process-local registry
+- shell out to the provider CLI
+- persist the returned execution in an in-memory session map
+- support `PollOrCollect` by replaying the cached session snapshot
+- expose `machine_readable_logs` capability
+- do **not** currently implement provider-native `interrupt` or `resume`
+
+### Provider-specific command style
+
+- **Codex**: `codex exec --json --color never --output-last-message <path> <prompt>`
+- **Claude**: `claude --print --output-format json <prompt>`
+- **OpenCode**: `opencode run --json <prompt>` or `opencode-desktop run --json <prompt>`
+
+The older docs also emphasized that adapters translate between Cogito's internal
+execution model and provider-specific environments. That remains accurate: each
+adapter owns CLI invocation, output parsing, and conversion into `Execution` /
+`StepResult`.
+
+## Execution Data Types
+
+### `Execution`
+
+Represents provider-facing state during or after execution.
+
+Important fields:
+
+- `Handle`
+- `State`
+- `Summary`
+- `OutputText`
+- `StructuredOutput`
+- `ArtifactRefs`
+- `Logs`
+
+### `StepResult`
+
+Represents the normalized result consumed by runtime. It mirrors the major fields
+of `Execution`, but uses `Status` instead of `State` to emphasize the transition
+from provider state to workflow result.
+
+### `ExecutionState`
+
+The SPI defines these states:
+
+- `running`
+- `succeeded`
+- `failed`
+- `interrupted`
+- `waiting_approval`
+
+States considered normalizable by runtime are:
+
+- `succeeded`
+- `failed`
+- `interrupted`
+- `waiting_approval`
+
+## Registry Model
+
+Adapters are discovered through a process-local registry.
 
 ```go
-func (m CapabilityMatrix) Require(capability Capability) error {
-    if m.Supports(capability) {
-        return nil
-    }
-    return unsupportedCapabilityError(capability)
+type Registration struct {
+    Name         string
+    Capabilities CapabilityMatrix
+    New          Factory
 }
 ```
 
-## Provider Implementations
+The registry supports:
 
-Adapters are implemented in `internal/adapters/[provider]`.
+- `Register`
+- `Lookup`
+- `RegisteredNames`
 
-### Codex Adapter
-The Codex adapter wraps the `codex` CLI. It maps `Start` to `codex exec`.
-- **Strengths**: Native support for local file manipulation and multi-step reasoning.
-- **Implementation**: Captures stdout/stderr via a JSON event stream.
-- **Capabilities**: Focuses on `machine_readable_logs` and `artifact_refs`.
+The application layer resolves adapters in this order:
 
-### Claude Adapter
-The Claude adapter interacts with the `claude` CLI using standard IO redirection.
-- **Implementation**: Uses `--print --output-format json` to get structured responses.
-- **Lifecycle**: Primarily handles one-shot prompt/response cycles.
+1. built-in local adapter resolver
+2. registered adapter resolver
 
-### OpenCode Adapter
-The OpenCode adapter provides deep integration with the OpenCode ecosystem.
-- **Implementation**: Uses `opencode run --json` for execution.
-- **Capabilities**: Highly compatible with Cogito's parallel execution model.
+This keeps runtime itself decoupled from provider package imports.
 
-## Result Normalization Pattern
+## Relationship with runtime drivers
 
-Cogito uses a two-stage approach to results to maintain provider independence:
+Runtime does not call adapters directly for every step kind. Instead it builds a
+`stepDriver` based on the compiled step kind:
 
-### 1. Execution Snapshot
-The `Execution` struct represents the raw, "in-flight" state of a provider.
+- `agentDriver` -> wraps an adapter
+- `commandDriver` -> wraps the command runner
+- `approvalDriver` -> synthetic driver for explicit approval steps
 
-```go
-type Execution struct {
-    Handle           ExecutionHandle `json:"handle"`
-    State            ExecutionState  `json:"state"`
-    Summary          string          `json:"summary,omitempty"`
-    OutputText       string          `json:"output_text,omitempty"`
-    StructuredOutput json.RawMessage `json:"structured_output,omitempty"`
-    ArtifactRefs     []ArtifactRef   `json:"artifact_refs,omitempty"`
-    Logs             []LogEntry      `json:"logs,omitempty"`
-}
-```
+That means approval steps participate in the same runtime lifecycle as provider
+and command steps even though no external provider binary is involved.
 
-### 2. Standardized StepResult
-`NormalizeResult` transforms the raw `Execution` into a clean `StepResult`. During this phase, the adapter:
-- Cleans up ANSI escape codes from logs.
-- Validates that `StructuredOutput` matches the expected schema.
-- Filters and deduplicates `ArtifactRefs`.
-- Maps provider-specific error codes to standard Cogito errors.
+## Error Boundary
 
-## Registry and Discovery
+Adapters report structured errors using `internal/adapters/errors.go`.
+Common error classes include:
 
-Adapters are registered via an `init()` function, allowing for a plugin-like architecture where simply importing the package enables the provider.
+- request validation errors
+- execution errors (binary missing, CLI failure)
+- result parsing errors
+- unsupported capability errors
 
-```go
-func init() {
-    adapters.MustRegister(adapters.Registration{
-        Name:         "codex",
-        Capabilities: Capabilities(),
-        New: func() adapters.Adapter {
-            return New(Config{})
-        },
-    })
-}
-```
+Runtime wraps those failures into step and run transition events.
 
-### Discovery Logic
-The runtime looks up adapters by the `provider` field in the workflow YAML:
+## Contract Testing
 
-```go
-reg, ok := adapters.Lookup(step.Provider)
-if !ok {
-    return nil, fmt.Errorf("provider %q not found", step.Provider)
-}
-adapter := reg.New()
-```
+Earlier drafts mentioned `contract_suite.go`, and that is still a real and useful
+part of the implementation. `internal/adapters/contract_suite.go` defines reusable
+tests that verify:
 
-## Execution Lifecycle Example
+- capability reporting via `DescribeCapabilities`
+- start/poll/normalize behavior
+- interrupt behavior when provided
+- resume behavior when provided
 
-1. **Initialization**: The engine loads the workflow and looks up the required adapter in the registry.
-2. **Start**: The engine calls `adapter.Start(ctx, request)`. The adapter spawns a sub-process and returns an `Execution` object with a `running` state.
-3. **Execution**: The sub-process runs. The engine periodically calls `adapter.PollOrCollect(ctx, handle)`.
-4. **Completion**: Once the sub-process exits, `PollOrCollect` returns an `Execution` with a `succeeded` or `failed` state.
-5. **Normalization**: The engine calls `adapter.NormalizeResult(ctx, normalizeRequest)`. The adapter parses the final output and returns a `StepResult`.
-6. **Next Step**: The engine uses the `StepResult` to decide the next action in the workflow state machine.
+This keeps adapter implementations aligned with the SPI without forcing every
+provider package to hand-roll the same lifecycle assertions.
 
-## Error Handling
+## What is not implemented yet
 
-Adapters use a structured error system to provide actionable feedback to the user.
+The SPI is broader than the currently shipped providers. In particular, the built-
+in adapters do not yet provide:
 
-- **ErrorCodeRequest**: The prompt or parameters were malformed.
-- **ErrorCodeExecution**: The underlying CLI or API failed (e.g., binary not found, timeout).
-- **ErrorCodeResult**: The provider returned output that couldn't be parsed.
-- **ErrorCodeUnsupported**: The workflow requested a capability the adapter doesn't have.
+- provider-native resume
+- provider-native interrupt
+- mandatory structured output contracts
+- provider-derived artifact references
 
-## Implementing a New Adapter
-
-To add a new provider to Cogito:
-1. Create a new package in `internal/adapters/`.
-2. Implement the `Adapter` interface.
-3. Define the `CapabilityMatrix` reflecting the provider's features.
-4. Use `shared.MustRegister` in an `init()` function.
-5. Add unit tests using the `contract_suite.go` to ensure SPI compliance.
-
-The `contract_suite` provides a set of reusable tests that verify an adapter correctly handles state transitions, error cases, and result normalization.
+Those capabilities can be added later without changing runtime orchestration,
+which is the main reason the SPI is wider than today's provider behavior.

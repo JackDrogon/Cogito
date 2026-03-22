@@ -1,127 +1,207 @@
 # Storage Model
 
-This document describes the storage architecture for Cogito. It focuses on how workflow runs are persisted, how state is recovered, and how artifacts are indexed with security in mind.
+Cogito persists every run into a local directory tree. By default that layout
+lives under `ref/tmp/`, while the app layer can relocate a run via `--state-dir`.
+The store package is intentionally file-backed and single-user oriented: it
+optimizes for auditable history, crash recovery, and easy inspection without
+requiring any daemon or database.
 
-## Overview
+## Run Layout
 
-Cogito uses a hybrid storage approach combining an **append-only event log** with **periodic checkpoints**. 
-
-Key principles:
-- **Event Sourcing**: The event log is the canonical source of truth for all run activities.
-- **Atomic Writes**: State changes use a write-temp-rename-sync pattern to prevent corruption.
-- **Security by Default**: Sensitive data is redacted before being persisted to summaries or checkpoints.
-- **Integrity**: Artifacts are indexed with SHA-256 digests to ensure content consistency.
-
-## Directory Layout
-
-Each workflow run is isolated within its own directory. The default root for these directories is `ref/tmp/runs`.
+Each run is represented by `store.Layout` and defaults to:
 
 ```text
 ref/tmp/runs/<run-id>/
-├── workflow.json       # Copy of the workflow definition being executed
-├── events.jsonl        # Append-only log of all run events (JSON Lines)
-├── checkpoint.json     # Current snapshot of the run state
-├── artifacts.json      # Index of all artifacts produced by the run
-├── locks/              # Directory for advisory locks
-└── artifacts/          # (Optional) Subdirectory for raw artifact files
+├── workflow.json          # resolved compiled workflow
+├── events.jsonl           # append-only event log
+├── checkpoint.json        # last durable snapshot
+├── artifacts.json         # artifact index
+├── locks/
+│   └── repo.lock.json     # per-run mirror of repo lock metadata
+└── provider-logs/
+    └── <step-id>/
+        ├── <attempt>-stdout.log
+        └── <attempt>-stderr.log
 ```
+
+At the repository level, Cogito also writes:
+
+```text
+ref/tmp/locks/<repo>.lock.json
+```
+
+This file prevents concurrent runs from mutating the same repository.
+
+## Canonical Persisted Shapes
+
+The store package exposes four persisted data structures:
+
+- `Event` - one durable transition in the event log
+- `Checkpoint` - coarse-grained snapshot used for resume
+- `ArtifactRecord` - metadata for files emitted during execution
+- `Layout` - canonical paths for one run
 
 ## Event Log
 
-The event log (`events.jsonl`) is the primary record of what happened during a run. It uses the JSON Lines format to allow efficient appending and streaming reads.
+`events.jsonl` is the source of truth for runtime history.
 
-### Format and Properties
+### Properties
 
-- **Monotonic Sequences**: Each event is assigned a unique, incrementing sequence number.
-- **Immutability**: Once an event is appended and synced to disk, it is never modified.
-- **Structure**:
-  ```json
-  {"sequence": 1, "type": "RunCreated", "run_id": "run-123", "message": "run directory created"}
-  {"sequence": 2, "type": "StepStarted", "run_id": "run-123", "step_id": "prepare"}
-  ```
+- JSON Lines format
+- append-only
+- monotonically increasing `sequence`
+- one store-local mutex serializes appends
+- every event is `fsync`'d before the append is considered durable
 
-### Appending Events
+### Event shape
 
-When an event is appended, the store:
-1. Increments the internal sequence counter.
-2. Marshals the event to JSON.
-3. Appends the encoded line to the file.
-4. Calls `fsync` to ensure the data is committed to physical storage.
+```json
+{
+  "sequence": 5,
+  "type": "StepStarted",
+  "run_id": "run-123",
+  "step_id": "review",
+  "attempt_id": "attempt-review-01",
+  "message": "step started",
+  "data": {
+    "occurred_at": "2026-03-23T03:30:00Z",
+    "from_state": "queued",
+    "to_state": "running",
+    "provider_session_id": "command-review-attempt-review-01",
+    "summary": "step started"
+  }
+}
+```
+
+### Event categories used by runtime
+
+- run lifecycle: `RunCreated`, `RunStarted`, `RunPaused`, `RunWaitingApproval`, `RunSucceeded`, `RunFailed`, `RunCanceled`
+- step lifecycle: `StepQueued`, `StepStarted`, `StepSucceeded`, `StepFailed`, `StepRetried`
+- approval lifecycle: `ApprovalRequested`, `ApprovalGranted`, `ApprovalDenied`, `ApprovalTimedOut`
+- replay reporting: `ReplayStarted`, `ReplaySucceeded`, `ReplayFailed`
 
 ## Checkpoint
 
-Checkpoints (`checkpoint.json`) provide a snapshot of the current state of a run. They are used to quickly resume or inspect a run without replaying the entire event log.
+`checkpoint.json` is a denormalized snapshot written after each successful event
+append. It exists to speed up resume and status flows while keeping `events.jsonl`
+as the canonical history.
 
-### Structure
-
-A checkpoint includes the run state, the last processed event sequence, and per-step status:
+### Checkpoint shape
 
 ```json
 {
   "run_id": "run-123",
+  "repo_path": "/workspace/Cogito",
+  "working_dir": "/workspace/Cogito",
   "state": "running",
-  "last_sequence": 42,
-  "updated_at": "2026-03-22T10:00:00Z",
+  "last_sequence": 12,
+  "updated_at": "2026-03-23T03:30:00Z",
   "steps": {
-    "prepare": {
+    "review": {
       "state": "succeeded",
-      "summary": "prepared 5 files"
+      "attempt_id": "attempt-review-01",
+      "provider_session_id": "command-review-attempt-review-01",
+      "summary": "review completed"
     }
   }
 }
 ```
 
-### Atomic Write Pattern
+### Why `repo_path` and `working_dir` matter
 
-To prevent data corruption during crashes, checkpoints are written using an atomic pattern:
-1. Write JSON data to `checkpoint.json.tmp`.
-2. Call `fsync` on the temporary file.
-3. Rename the temporary file to `checkpoint.json`.
-4. Call `fsync` on the parent directory to ensure the metadata update is durable.
+The application layer resolves execution context from either:
 
-### Recovery Strategy
+1. explicit `--repo`
+2. checkpoint data from a previous run
+3. the current process working directory
 
-On startup, Cogito attempts to load the primary checkpoint. If it's missing or corrupt, it tries to recover from the temporary file. If both fail, it may fall back to replaying events from the log.
+Persisting both values lets resume operations reuse the original execution context.
 
-## Artifacts
+### Atomic write pattern
 
-Artifacts are files produced during a run that need to be tracked and indexed.
+Checkpoints are written using a temp-file-plus-rename strategy:
 
-### Indexing and Integrity
+1. marshal JSON
+2. write to `checkpoint.json.tmp`
+3. `fsync` the temp file
+4. rename to `checkpoint.json`
+5. `fsync` the parent directory
 
-The `artifacts.json` file maintains a list of all artifacts associated with the run:
+If the primary checkpoint cannot be loaded, the store attempts to recover from the
+temp file and promote it to the primary path.
+
+## Artifact Index
+
+`artifacts.json` tracks files created by execution. In the current implementation,
+command steps append stdout/stderr log files under `provider-logs/` and store them
+as artifact records.
+
+### Artifact shape
 
 ```json
 [
   {
-    "path": "logs/build.log",
+    "path": "provider-logs/test/attempt-test-01-stdout.log",
     "kind": "log",
-    "step_id": "build",
-    "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "summary": "Build output logs"
+    "step_id": "test",
+    "digest": "...sha256...",
+    "summary": "command stdout log",
+    "created_at": "2026-03-23T03:30:00Z"
   }
 ]
 ```
 
-- **SHA-256 Digests**: Every artifact is hashed upon indexing to ensure its content hasn't changed.
-- **Path Security**: Artifact paths are relative and validated to prevent traversal outside the run directory.
+### Sanitization rules
 
-### Redaction
+- artifact paths must be relative
+- artifact paths must stay inside the run directory
+- artifact paths must reference existing files, not directories
+- `digest` is recomputed from file contents using SHA-256
+- summaries are redacted for secrets before persistence
 
-Summaries and other metadata fields are scanned for sensitive patterns (API keys, passwords, tokens) and redacted before being saved to the index or checkpoints.
+The redaction patterns cover strings such as API keys, bearer tokens, passwords,
+and generic secrets.
 
-```go
-// Example patterns used for redaction
-var secretSummaryPatterns = []*regexp.Regexp{
-    regexp.MustCompile(`(?i)(api[_-]?key\s*[:=]\s*)([^\s,;]+)`),
-    regexp.MustCompile(`(?i)(token\s*[:=]\s*)([^\s,;]+)`),
-}
-```
+## File Modes and Locality
 
-## Startup Behavior
+- directories are created with `0700`
+- files are created with `0600`
 
-When opening an existing run, the store:
-1. Validates the directory structure.
-2. Reads the event log to determine the latest sequence number.
-3. Loads and verifies the checkpoint.
-4. Compares `checkpoint.last_sequence` with the log. If they diverge, it indicates a partial write or crash that needs handling.
+This matches the local-first assumption: run data is private to the current user
+unless permissions are changed externally.
+
+## Recovery Model
+
+When opening an existing run:
+
+1. the app layer reconstructs the run ID from the state directory
+2. `store.OpenExisting` validates the expected layout
+3. the resolved workflow is loaded from `workflow.json`
+4. runtime loads checkpoint and events
+5. runtime prefers checkpoint when it is at least as recent as the latest event
+6. otherwise runtime replays all events and rebuilds the snapshot
+
+This allows resume and replay to share a single durable history model.
+
+## Lock Files
+
+Locking is implemented in `internal/runtime/lock.go`, but it is part of the on-disk
+contract because the default repo-level metadata lives under `ref/tmp/locks/`.
+
+Two lock files are written on acquisition:
+
+- repo-global lock in `ref/tmp/locks/`
+- run-local mirror in `<run-dir>/locks/`
+
+Lock metadata includes:
+
+- `run_id`
+- `repo_root`
+- `pid`
+- `hostname`
+- `acquired_at`
+- `updated_at`
+- `run_lock_path`
+
+Stale locks are reclaimed when the recorded process is no longer running on the
+same host.

@@ -1,152 +1,205 @@
 # Architecture Overview
 
-## System Architecture
+## System Shape
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                         CLI Layer                            │
-│  (cmd/cogito + internal/app)                                │
-│  - Command routing                                           │
-│  - Flag parsing                                              │
-│  - Output formatting                                         │
-└────────────────┬────────────────────────────────────────────┘
-                 │
-┌────────────────▼────────────────────────────────────────────┐
-│                    Orchestration Layer                       │
-│  (internal/runtime)                                          │
-│  - State machine                                             │
-│  - Step scheduling                                           │
-│  - Approval resolution                                       │
-│  - Event emission                                            │
-└────┬──────────┬──────────┬──────────┬──────────────────────┘
-     │          │          │          │
-     │          │          │          │
-┌────▼─────┐ ┌─▼────────┐ ┌▼────────┐ ┌▼──────────────────┐
-│ Workflow │ │  Store   │ │ Adapters│ │    Executor       │
-│ Parser   │ │ (Events/ │ │ (Codex/ │ │ (Process Super-   │
-│          │ │ Checkpt) │ │ Claude/ │ │  visor)           │
-│          │ │          │ │ OpenCode│ │                   │
-└──────────┘ └──────────┘ └─────────┘ └───────────────────┘
-```
+Cogito is a CLI-first workflow runner that turns a static YAML workflow into a
+durable, event-sourced execution. By default, run state is stored under `ref/tmp/`,
+and the implementation is split into a small number of explicit packages with
+narrow responsibilities.
 
-## Component Responsibilities
+At a higher level, the architecture can also be read as six cooperating concerns:
 
-### CLI Layer (`cmd/cogito`, `internal/app`)
-- Parse command-line arguments
-- Route to appropriate command handlers
-- Format output for user consumption
-- Handle errors and exit codes
+- CLI/app coordination
+- workflow parsing and compilation
+- runtime orchestration
+- storage and recovery
+- provider adapters
+- local command supervision
 
-### Workflow Parser (`internal/workflow`)
-- Parse YAML workflow definitions
-- Validate schema and semantics
-- Build dependency DAG
-- Compile to executable representation
-
-### Storage Layer (`internal/store`)
-- Append-only event log (`events.jsonl`)
-- Atomic checkpoint snapshots (`checkpoint.json`)
-- Artifact index (`artifacts.json`)
-- Repository locking
-
-### Runtime Engine (`internal/runtime`)
-- Deterministic state machine
-- Topological step scheduling
-- Approval gate management
-- Event-sourced state reconstruction
-
-### Adapter Layer (`internal/adapters`)
-- Provider capability matrix
-- Unified execution interface
-- Result normalization
-- Contract test suite
-
-### Executor (`internal/executor`)
-- Process supervision
-- Timeout enforcement
-- Signal handling
-- Log capture
-
-## Data Flow
-
-### Workflow Execution Flow
-
-```
-1. Parse workflow YAML
-   └─> Validate schema
-       └─> Build DAG
-           └─> Compile to executable
-
-2. Initialize run
-   └─> Create run directory
-       └─> Persist resolved workflow
-           └─> Initialize checkpoint
-
-3. Execute steps (topological order)
-   └─> For each ready step:
-       ├─> Check approval requirements
-       ├─> Lookup adapter
-       ├─> Start execution
-       ├─> Poll for completion
-       ├─> Normalize result
-       ├─> Emit events
-       └─> Update checkpoint
-
-4. Handle completion
-   └─> Emit terminal event (succeeded/failed/canceled)
-       └─> Save final checkpoint
+```text
+cmd/cogito/main.go
+        |
+        v
+internal/app
+  - command parsing
+  - shared flags
+  - runtime wiring
+  - presenter output
+        |
+        +------------------------------+
+        |                              |
+        v                              v
+internal/workflow                internal/runtime
+  - YAML parsing                   - run/step state machine
+  - schema checks                  - scheduling
+  - DAG compilation                - approval handling
+  - resolved workflow persistence  - replay/checkpoint folding
+        |                              |
+        |                              +------------------+
+        |                                                 |
+        v                                                 v
+internal/store                                      adapters / executor
+  - run layout                                        - provider adapters
+  - events.jsonl                                      - command supervision
+  - checkpoint.json                                   - artifact log capture
+  - artifacts.json
+  - run-local locks
 ```
 
-### Event Sourcing Pattern
+The boxed "layered" view from earlier drafts was still directionally correct: the
+CLI feeds orchestration, which depends on workflow, storage, adapters, and
+execution helpers. The updated diagram above keeps that same mental model but uses
+current package boundaries and naming.
 
+## Package Responsibilities
+
+### CLI and application layer
+
+`cmd/cogito` is intentionally thin. It creates a signal-aware context and hands
+control to `internal/app`.
+
+`internal/app` owns:
+
+- command registration and flag parsing
+- workflow execution, resume, replay, status, cancel, and approve flows
+- runtime dependency wiring
+- provider adapter lookup
+- command-step execution via `executor.Supervisor`
+- user-facing output formatting
+
+### Workflow layer
+
+`internal/workflow` defines the implemented YAML contract.
+
+- Parses a single YAML document with `KnownFields(true)`
+- Validates `apiVersion: cogito/v1alpha1` and `kind: Workflow`
+- Rejects unknown fields and invalid step-kind field combinations
+- Builds a compiled DAG with `TopologicalOrder`, `StepIndex`, and dependents
+- Persists the resolved workflow to `workflow.json` for resume and replay
+
+### Runtime layer
+
+`internal/runtime` is the orchestration core.
+
+- Persists events before mutating in-memory state
+- Rebuilds `Snapshot` from events or checkpoint data
+- Queues ready steps using the compiled topological order
+- Executes one ready step at a time per engine instance
+- Handles explicit approvals, adapter-triggered approvals, and policy exceptions
+- Produces replay and status views for CLI consumption
+
+### Storage layer
+
+`internal/store` manages the on-disk contract for a single run.
+
+- Canonicalizes run layout under `ref/tmp/runs/<run-id>`
+- Appends JSON Lines events with monotonic sequence numbers
+- Writes checkpoints and artifact indexes atomically
+- Recovers from interrupted checkpoint writes via `.tmp` fallback
+- Sanitizes summaries and validates artifact paths stay within the run directory
+
+### Adapter and command execution layer
+
+Cogito has two execution paths:
+
+- `internal/adapters/*` for agent/provider steps (`codex`, `claude`, `opencode`)
+- `internal/executor` plus `internal/app/command_runner.go` for shell command steps
+
+This keeps workflow scheduling independent from provider-specific process logic.
+
+## End-to-End Execution Flow
+
+```text
+1. CLI parses command + flags
+2. Workflow YAML is loaded and compiled into a static DAG
+3. A run store is opened under ref/tmp/runs/<run-id>
+4. workflow.json is persisted for future resume/replay
+5. Repo lock is acquired under ref/tmp/locks/ and mirrored into the run directory
+6. runtime.Engine initializes from checkpoint or event replay
+7. Engine emits RunCreated / RunStarted / StepQueued ... events
+8. Each event is appended to events.jsonl and folded into Snapshot
+9. checkpoint.json is rewritten atomically after each persisted transition
+10. CLI renders success, failure, status, replay, or approval output
 ```
-Event Log (append-only)     Checkpoint (snapshot)
-─────────────────────        ────────────────────
-RunCreated                   {
-RunStarted                     "state": "running",
-StepQueued (step-1)            "steps": {
-StepStarted (step-1)             "step-1": "succeeded",
-StepSucceeded (step-1)           "step-2": "running"
-StepQueued (step-2)            },
-StepStarted (step-2)           "last_sequence": 6
-...                          }
+
+## Event-Sourcing Pattern
+
+The implementation still follows the same hybrid pattern described in the earlier
+docs: an append-only event log is the source of truth, while checkpoints provide a
+faster recovery point.
+
+```text
+Event log (append-only)        Checkpoint (snapshot)
+------------------------       ---------------------
+RunCreated                     {
+RunStarted                       "state": "running",
+StepQueued                       "steps": { ... },
+StepStarted                      "last_sequence": N
+StepSucceeded                  }
+...
 ```
 
-On restart:
-1. Load checkpoint
-2. Compare `last_sequence` with event log
-3. If events are ahead, replay from checkpoint sequence
-4. Resume execution from current state
+Recovery follows the same high-level model:
 
-## Directory Structure
+1. load checkpoint when present
+2. compare checkpoint freshness with the latest event sequence
+3. replay events when the log is newer
+4. continue from the reconstructed snapshot
 
-```
+## Determinism Model
+
+The deterministic boundary is defined by three things:
+
+1. the compiled workflow graph produced by `internal/workflow`
+2. the ordered event stream in `events.jsonl`
+3. the explicit run/step transition tables in `internal/runtime/state_machine.go`
+
+Ready steps are discovered by scanning `TopologicalOrder` and checking whether all
+dependencies are already `succeeded`. When multiple steps become ready together,
+the engine queues them in declaration order and executes the first queued step on
+each `ExecuteNext` call. This makes replay and resume behavior predictable.
+
+## Directory Layout
+
+```text
 ref/tmp/
-├── locks/                    # Repository-level locks
-│   └── repo-{hash}.lock.json
+├── locks/
+│   └── <repo>.lock.json          # repository-wide lock metadata
 └── runs/
-    └── {run-id}/
-        ├── events.jsonl      # Append-only event log
-        ├── checkpoint.json   # Latest state snapshot
-        ├── artifacts.json    # Artifact index
-        ├── workflow.json     # Resolved workflow
-        ├── locks/            # Run-local lock mirror
-        └── provider-logs/    # Provider stdout/stderr
-            └── {step-id}/
-                └── attempt-{id}-{stdout,stderr}.log
+    └── <run-id>/
+        ├── workflow.json         # resolved compiled workflow persisted by app layer
+        ├── events.jsonl          # append-only event log
+        ├── checkpoint.json       # latest durable snapshot
+        ├── artifacts.json        # artifact index
+        ├── locks/
+        │   └── repo.lock.json    # per-run mirror of repo lock metadata
+        └── provider-logs/
+            └── <step-id>/
+                ├── <attempt>-stdout.log
+                └── <attempt>-stderr.log
 ```
 
-## Concurrency Model
+## Safety Boundaries
 
-- **Single-run policy**: One workflow execution per repository at a time
-- **Repository lock**: Acquired at run start, released on exit
-- **Dirty worktree check**: Prevents runs on uncommitted changes (unless `--allow-dirty`)
-- **Stale lock recovery**: Detects and reclaims locks from dead processes
+- **Dirty worktree check**: enforced before run start unless `--allow-dirty` is set.
+- **Single repo lock**: only one run may mutate a repository at a time.
+- **Strict schema parsing**: unknown workflow fields fail validation immediately.
+- **Event-first persistence**: runtime previews each transition before appending it.
+- **Checkpoint recovery**: incomplete checkpoint writes fall back to the temp file.
 
 ## Error Handling Strategy
 
-1. **Validation errors**: Fail fast at parse/compile time
-2. **Runtime errors**: Persist to event log, update checkpoint, exit with error
-3. **Provider errors**: Normalize to standard error codes, allow retry classification
-4. **Approval denial**: Persist denial event, mark run as failed
-5. **Crash recovery**: Replay from event log on next invocation
+The original high-level strategy also remains correct and useful:
+
+1. validation errors fail fast during parsing/compilation
+2. runtime errors are durably reflected in events/checkpoints before the process exits
+3. provider and command execution errors are normalized behind runtime transitions
+4. approval denial or timeout fails both the waiting step and the run
+5. crash recovery relies on replaying durable state rather than reconstructing from memory
+
+## Known Constraints
+
+- Workflow graphs are static; there is no conditional branching or dynamic step generation.
+- The engine is single-run orchestration code; it is not safe for concurrent use of one instance.
+- Inner provider adapters currently behave like one-shot command wrappers and do not yet implement provider-level interrupt/resume.
+- The CLI exposes approve, but not deny, as a first-class subcommand today.
