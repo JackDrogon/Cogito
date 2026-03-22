@@ -1,0 +1,21 @@
+apiVersion: cogito/v1alpha1
+kind: Workflow
+metadata:
+  name: cycle
+steps:
+  - id: alpha
+    kind: command
+    needs:
+      - gamma
+    command: echo alpha
+  - id: beta
+    kind: approval
+    needs:
+      - alpha
+    message: Approve beta
+  - id: gamma
+    kind: agent
+    needs:
+      - beta
+    agent: reviewer
+    prompt: Review gamma

@@ -1,0 +1,8 @@
+apiVersion: cogito/v1alpha1
+kind: Workflow
+metadata:
+  name: unsupported-kind
+steps:
+  - id: mystery
+    kind: webhook
+    message: This kind is not supported in v1alpha1

@@ -28,11 +28,11 @@ default:
 #  Build
 # ═════════════════════════════════════════════════════════════════════
 
-# Build binary to bin/Cogito
+# Build binary to bin/cogito
 [group('build')]
 build:
     @mkdir -p bin
-    go build -ldflags "{{ldflags}}" -o bin/Cogito ./cmd/cogito
+    go build -ldflags "{{ldflags}}" -o bin/cogito ./cmd/cogito
 
 # Install the CLI into GOPATH/bin
 [group('build')]
@@ -99,7 +99,7 @@ release-snapshot:
 # Build and run (e.g., just run -- --help)
 [group('run')]
 run *args: build
-    ./bin/Cogito {{args}}
+    ./bin/cogito {{args}}
 
 # ═════════════════════════════════════════════════════════════════════
 #  Maintenance

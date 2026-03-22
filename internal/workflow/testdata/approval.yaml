@@ -1,0 +1,19 @@
+apiVersion: cogito/v1alpha1
+kind: Workflow
+metadata:
+  name: approval
+steps:
+  - id: draft
+    kind: agent
+    agent: writer
+    prompt: Draft a release note summary
+  - id: legal
+    kind: approval
+    needs:
+      - draft
+    message: Legal approval required before publish
+  - id: publish
+    kind: command
+    needs:
+      - legal
+    command: ./publish.sh

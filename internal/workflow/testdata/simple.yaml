@@ -1,0 +1,21 @@
+apiVersion: cogito/v1alpha1
+kind: Workflow
+metadata:
+  name: simple
+vars:
+  greeting: hello
+steps:
+  - id: prepare
+    kind: command
+    command: echo hello
+  - id: review
+    kind: command
+    needs:
+      - prepare
+    command: echo reviewed
+  - id: notify
+    kind: agent
+    needs:
+      - review
+    agent: reviewer
+    prompt: Summarize the completed workflow
