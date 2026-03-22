@@ -778,8 +778,8 @@ func TestBuildRunStatusViewFollowsTopologicalOrder(t *testing.T) {
 	if view.StepViews[0].StepID != "prepare" || view.StepViews[1].StepID != "review" {
 		t.Fatalf("step order = [%s %s], want [prepare review]", view.StepViews[0].StepID, view.StepViews[1].StepID)
 	}
-	if !strings.Contains(view.StepViews[0].Rendered, `summary="prepare ok"`) {
-		t.Fatalf("view.StepViews[0].Rendered = %q, want rendered summary", view.StepViews[0].Rendered)
+	if view.StepViews[0].Summary != "prepare ok" {
+		t.Fatalf("view.StepViews[0].Summary = %q, want %q", view.StepViews[0].Summary, "prepare ok")
 	}
 }
 

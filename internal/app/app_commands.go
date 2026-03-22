@@ -131,7 +131,7 @@ func (replayCommand) Run(ctx context.Context, args []string, stdout io.Writer) e
 		return err
 	}
 
-	return presenter.PresentMessage(stdout, result.Message)
+	return presenter.PresentReplayRun(stdout, result)
 }
 
 type cancelCommand struct{}

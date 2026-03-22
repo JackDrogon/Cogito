@@ -3,8 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"fmt"
-	"strings"
 
 	"github.com/JackDrogon/Cogito/internal/runtime"
 	"github.com/JackDrogon/Cogito/internal/store"
@@ -35,10 +33,8 @@ type StatusRunInput struct {
 }
 
 type StatusRunOutput struct {
-	RunID     string
-	StateDir  string
-	State     runtime.RunState
-	StepLines []string
+	StateDir string
+	View     runtime.RunStatusView
 }
 
 type ResumeRunInput struct {
@@ -54,7 +50,7 @@ type ReplayRunInput struct {
 }
 
 type ReplayRunOutput struct {
-	Message string
+	View runtime.ReplayView
 }
 
 type CancelRunInput struct {
@@ -150,10 +146,8 @@ func (s applicationService) StatusRun(_ context.Context, input StatusRunInput) (
 	snapshot := session.engine.Snapshot()
 	statusView := runtime.BuildRunStatusView(session.compiled, snapshot)
 	return StatusRunOutput{
-		RunID:     statusView.RunID,
-		StateDir:  session.store.Layout().RunDir,
-		State:     statusView.State,
-		StepLines: renderedStepLines(statusView),
+		StateDir: session.store.Layout().RunDir,
+		View:     statusView,
 	}, nil
 }
 
@@ -188,11 +182,12 @@ func (applicationService) ReplayRun(_ context.Context, input ReplayRunInput) (Re
 		return ReplayRunOutput{}, err
 	}
 
-	if _, err := runtime.Replay(runID, compiled, events); err != nil {
+	replay, err := runtime.Replay(runID, compiled, events)
+	if err != nil {
 		return ReplayRunOutput{}, err
 	}
 
-	return ReplayRunOutput{Message: "replay OK"}, nil
+	return ReplayRunOutput{View: runtime.BuildReplayView(compiled, *replay)}, nil
 }
 
 func (s applicationService) CancelRun(ctx context.Context, input CancelRunInput) (CancelRunOutput, error) {
@@ -227,24 +222,4 @@ func (s applicationService) ApproveRun(ctx context.Context, input ApproveRunInpu
 	}
 
 	return ApproveRunOutput{Message: "approval granted"}, nil
-}
-
-func formatRunStatus(output StatusRunOutput) string {
-	var builder strings.Builder
-	_, _ = fmt.Fprintf(&builder, "run_id=%s\nstate_dir=%s\nstate=%s\n", output.RunID, output.StateDir, output.State)
-	for _, line := range output.StepLines {
-		builder.WriteString(line)
-		builder.WriteByte('\n')
-	}
-
-	return builder.String()
-}
-
-func renderedStepLines(view runtime.RunStatusView) []string {
-	lines := make([]string, 0, len(view.StepViews))
-	for _, step := range view.StepViews {
-		lines = append(lines, step.Rendered)
-	}
-
-	return lines
 }

@@ -183,11 +183,13 @@ func TestParseReplayRequestRequiresEventsPath(t *testing.T) {
 }
 
 func TestFormatRunStatusIncludesStepLines(t *testing.T) {
-	output := formatRunStatus(StatusRunOutput{
-		RunID:     "run-1",
-		StateDir:  "ref/tmp/runs/run-1",
-		State:     runtime.RunStateSucceeded,
-		StepLines: []string{"step=prepare state=succeeded", "step=review state=succeeded"},
+	output := renderStatusView("ref/tmp/runs/run-1", runtime.RunStatusView{
+		RunID: "run-1",
+		State: runtime.RunStateSucceeded,
+		StepViews: []runtime.StepStatusView{
+			{StepID: "prepare", State: runtime.StepStateSucceeded},
+			{StepID: "review", State: runtime.StepStateSucceeded},
+		},
 	})
 
 	for _, want := range []string{
@@ -220,6 +222,16 @@ func TestTextPresenterRendersRunAndMessages(t *testing.T) {
 	}
 	if msgOut.String() != "approval granted\n" {
 		t.Fatalf("PresentMessage() output = %q", msgOut.String())
+	}
+
+	var replayOut bytes.Buffer
+	if err := presenter.PresentReplayRun(&replayOut, ReplayRunOutput{View: runtime.ReplayView{RunID: "run-1", State: runtime.RunStateSucceeded, Transitions: []runtime.TransitionView{{Sequence: 1}}}}); err != nil {
+		t.Fatalf("PresentReplayRun() error = %v", err)
+	}
+	for _, want := range []string{"replay OK", "run_id=run-1", "state=succeeded", "transitions=1"} {
+		if !strings.Contains(replayOut.String(), want) {
+			t.Fatalf("PresentReplayRun() output = %q, want contains %q", replayOut.String(), want)
+		}
 	}
 }
 
@@ -376,7 +388,7 @@ func TestResumeCommandResumesPausedRunAndRejectsDuplicate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StatusRun() after resume error = %v", err)
 	}
-	snapshotState := status.State
+	snapshotState := status.View.State
 	if snapshotState != runtime.RunStateSucceeded {
 		t.Fatalf("status.State after resume = %q, want %q", snapshotState, runtime.RunStateSucceeded)
 	}
@@ -425,8 +437,10 @@ func TestReplayCommandDoesNotMutateRunState(t *testing.T) {
 	if err := Run(t.Context(), []string{"replay", runStore.Layout().EventsPath}, &out); err != nil {
 		t.Fatalf("Run(replay) error = %v", err)
 	}
-	if out.String() != "replay OK\n" {
-		t.Fatalf("Run(replay) output = %q, want %q", out.String(), "replay OK\n")
+	for _, want := range []string{"replay OK", "run_id=run-replay", "state=succeeded", "transitions="} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("Run(replay) output = %q, want contains %q", out.String(), want)
+		}
 	}
 
 	checkpointAfter, err := os.ReadFile(runStore.Layout().CheckpointPath)
@@ -469,8 +483,8 @@ func TestCancelCommandCancelsPausedRunAndRejectsDuplicate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StatusRun() after cancel error = %v", err)
 	}
-	if status.State != runtime.RunStateCanceled {
-		t.Fatalf("status.State after cancel = %q, want %q", status.State, runtime.RunStateCanceled)
+	if status.View.State != runtime.RunStateCanceled {
+		t.Fatalf("status.State after cancel = %q, want %q", status.View.State, runtime.RunStateCanceled)
 	}
 
 	var dupOut bytes.Buffer

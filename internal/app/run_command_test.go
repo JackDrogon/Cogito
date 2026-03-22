@@ -327,14 +327,14 @@ func TestApplicationServiceStatusRunReturnsFormattedData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StatusRun() error = %v", err)
 	}
-	if result.RunID != "run-status-service" {
-		t.Fatalf("result.RunID = %q, want %q", result.RunID, "run-status-service")
+	if result.View.RunID != "run-status-service" {
+		t.Fatalf("result.View.RunID = %q, want %q", result.View.RunID, "run-status-service")
 	}
-	if result.State != runtime.RunStatePaused {
-		t.Fatalf("result.State = %q, want %q", result.State, runtime.RunStatePaused)
+	if result.View.State != runtime.RunStatePaused {
+		t.Fatalf("result.View.State = %q, want %q", result.View.State, runtime.RunStatePaused)
 	}
-	if len(result.StepLines) == 0 {
-		t.Fatal("result.StepLines is empty")
+	if len(result.View.StepViews) == 0 {
+		t.Fatal("result.View.StepViews is empty")
 	}
 }
 
