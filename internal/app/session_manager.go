@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/JackDrogon/Cogito/internal/adapters"
-	"github.com/JackDrogon/Cogito/internal/runtime"
 	"github.com/JackDrogon/Cogito/internal/store"
 	"github.com/JackDrogon/Cogito/internal/workflow"
 )
@@ -34,106 +33,36 @@ func latestRunFailure(runStore *store.Store) error {
 }
 
 func openExistingRunStore(stateDir string) (*store.Store, string, error) {
-	baseDir, runID, err := parseRunStateDir(stateDir)
+	ref, err := newRunStateRef(stateDir)
 	if err != nil {
 		return nil, "", err
 	}
 
-	runStore, err := store.OpenExisting(baseDir, runID)
+	runStore, err := store.OpenExisting(ref.baseDir, ref.runID)
 	if err != nil {
 		return nil, "", err
 	}
 
-	return runStore, runID, nil
-}
-
-func parseRunStateDir(stateDir string) (string, string, error) {
-	stateDir = strings.TrimSpace(stateDir)
-	if stateDir == "" {
-		return "", "", errors.New("parseRunStateDir: state dir is required")
-	}
-
-	runID := filepath.Base(stateDir)
-	baseDir := filepath.Dir(stateDir)
-
-	if runID == "." || runID == string(filepath.Separator) || strings.TrimSpace(runID) == "" {
-		return "", "", fmt.Errorf("invalid state dir %q", stateDir)
-	}
-
-	return baseDir, runID, nil
-}
-
-func loadRunStatus(stateDir string) (string, *workflow.CompiledWorkflow, runtime.Snapshot, error) {
-	runStore, compiled, engine, err := loadExistingRunEngine(stateDir, nil)
-	if err != nil {
-		return "", nil, runtime.Snapshot{}, err
-	}
-
-	return runStore.Layout().RunDir, compiled, engine.Snapshot(), nil
-}
-
-func loadExistingRunEngine(stateDir string, flags *sharedFlags) (*store.Store, *workflow.CompiledWorkflow, *runtime.Engine, error) {
-	runStore, runID, err := openExistingRunStore(stateDir)
-	if err != nil {
-		if isMissingRunStateError(err) {
-			return nil, nil, nil, fmt.Errorf("run state not found: %s", stateDir)
-		}
-
-		return nil, nil, nil, err
-	}
-
-	compiled, err := workflow.LoadResolvedFile(runStore.Layout().WorkflowPath)
-	if err != nil {
-		if isMissingRunStateError(err) {
-			return nil, nil, nil, fmt.Errorf("run state not found: %s", stateDir)
-		}
-
-		return nil, nil, nil, err
-	}
-
-	wiring, err := buildRuntimeWiring(runStore, flags)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	engine, err := runtime.NewEngine(runID, compiled, runtime.MachineDependencies{
-		Store:         runStore,
-		LookupAdapter: wiring.LookupAdapter,
-		CommandRunner: wiring.CommandRunner,
-		RepoPath:      wiring.RepoPath,
-		WorkingDir:    wiring.WorkingDir,
-	})
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	return runStore, compiled, engine, nil
+	return runStore, ref.runID, nil
 }
 
 func loadReplayInput(eventsPath string) (string, *workflow.CompiledWorkflow, []store.Event, error) {
-	eventsPath = strings.TrimSpace(eventsPath)
-	if eventsPath == "" {
-		return "", nil, nil, errors.New("loadReplayInput: events file path is required")
-	}
-
-	runDir := filepath.Dir(eventsPath)
-
-	runID := filepath.Base(runDir)
-	if runID == "." || runID == string(filepath.Separator) || strings.TrimSpace(runID) == "" {
-		return "", nil, nil, fmt.Errorf("invalid events file path %q", eventsPath)
-	}
-
-	compiled, err := workflow.LoadResolvedFile(filepath.Join(runDir, "workflow.json"))
+	request, err := newReplayRequest(eventsPath)
 	if err != nil {
 		return "", nil, nil, err
 	}
 
-	events, err := store.ReadEventsFile(eventsPath)
+	compiled, err := workflow.LoadResolvedFile(filepath.Join(request.runDir, "workflow.json"))
 	if err != nil {
 		return "", nil, nil, err
 	}
 
-	return runID, compiled, events, nil
+	events, err := store.ReadEventsFile(request.eventsPath)
+	if err != nil {
+		return "", nil, nil, err
+	}
+
+	return request.runID, compiled, events, nil
 }
 
 func isMissingRunStateError(err error) bool {
@@ -148,27 +77,6 @@ func isMissingRunStateError(err error) bool {
 	var storeErr *store.Error
 
 	return errors.As(err, &storeErr) && storeErr.Code == store.ErrorCodePath && errors.Is(storeErr.Err, os.ErrNotExist)
-}
-
-func formatStepSummaries(compiled *workflow.CompiledWorkflow, snapshot runtime.Snapshot) []string {
-	if compiled == nil {
-		return nil
-	}
-
-	lines := make([]string, 0, len(compiled.TopologicalOrder))
-
-	for _, stepID := range compiled.TopologicalOrder {
-		step := snapshot.Steps[stepID]
-		line := fmt.Sprintf("step=%s state=%s", stepID, step.State)
-
-		if summary := strings.TrimSpace(step.Summary); summary != "" {
-			line += fmt.Sprintf(" summary=%q", summary)
-		}
-
-		lines = append(lines, line)
-	}
-
-	return lines
 }
 
 func executionFromStepResult(result *adapters.StepResult) *adapters.Execution {

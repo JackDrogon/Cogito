@@ -302,29 +302,11 @@ func (e *Engine) applyResult(
 }
 
 func (e *Engine) buildDriver(step workflow.CompiledStep) (stepDriver, error) {
-	switch step.Kind {
-	case workflow.StepKindAgent:
-		if e.lookupAdapter == nil {
-			return nil, newError(ErrorCodeConfig, "adapter lookup is required for agent steps")
-		}
-
-		adapter, err := e.lookupAdapter(step)
-		if err != nil {
-			return nil, err
-		}
-
-		return agentDriver{adapter: adapter}, nil
-	case workflow.StepKindCommand:
-		if e.commandRunner == nil {
-			return nil, newError(ErrorCodeConfig, "command runner is required for command steps")
-		}
-
-		return commandDriver{runner: e.commandRunner}, nil
-	case workflow.StepKindApproval:
-		return approvalDriver{runID: e.runID, ids: e.ids}, nil
-	default:
-		return nil, newError(ErrorCodeConfig, fmt.Sprintf("unsupported step kind %q", step.Kind))
+	if e.driverFactory == nil {
+		return nil, newError(ErrorCodeConfig, "step driver factory is required")
 	}
+
+	return e.driverFactory.Build(e, step)
 }
 
 type stepDriver interface {

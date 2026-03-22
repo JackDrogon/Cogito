@@ -2,18 +2,15 @@ package app
 
 import (
 	"errors"
-	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/JackDrogon/Cogito/internal/adapters"
 	_ "github.com/JackDrogon/Cogito/internal/adapters/claude"
 	_ "github.com/JackDrogon/Cogito/internal/adapters/codex"
 	_ "github.com/JackDrogon/Cogito/internal/adapters/opencode"
 	"github.com/JackDrogon/Cogito/internal/runtime"
 	"github.com/JackDrogon/Cogito/internal/store"
-	"github.com/JackDrogon/Cogito/internal/workflow"
 )
 
 type runtimeWiring struct {
@@ -34,29 +31,11 @@ func buildRuntimeWiring(runStore *store.Store, flags *sharedFlags) (runtimeWirin
 	}
 
 	return runtimeWiring{
-		LookupAdapter: lookupRegisteredAdapter,
+		LookupAdapter: defaultAdapterLookup(),
 		CommandRunner: newSupervisorCommandRunner(runStore, workingDir, providerTimeout(flags)),
 		RepoPath:      repoPath,
 		WorkingDir:    workingDir,
 	}, nil
-}
-
-func lookupRegisteredAdapter(step workflow.CompiledStep) (adapters.Adapter, error) {
-	if step.Agent == nil {
-		return nil, fmt.Errorf("agent config missing for step %q", step.ID)
-	}
-
-	provider := strings.TrimSpace(step.Agent.Agent)
-	if adapter, ok := lookupBuiltinLocalAdapter(provider); ok {
-		return adapter, nil
-	}
-
-	registration, ok := adapters.Lookup(provider)
-	if !ok {
-		return nil, fmt.Errorf("adapter %q is not registered", provider)
-	}
-
-	return registration.New(), nil
 }
 
 func resolveExecutionContext(runStore *store.Store, flags *sharedFlags) (string, string, error) {

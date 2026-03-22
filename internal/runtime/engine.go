@@ -60,6 +60,7 @@ type MachineDependencies struct {
 	IDs            IDGenerator
 	Store          EventStore
 	LookupAdapter  AdapterLookup
+	DriverFactory  StepDriverFactory
 	ApprovalPolicy ApprovalPolicy
 	CommandRunner  CommandRunner
 	RepoPath       string
@@ -89,6 +90,7 @@ type Engine struct {
 	ids            IDGenerator
 	store          EventStore
 	lookupAdapter  AdapterLookup
+	driverFactory  StepDriverFactory
 	approvalPolicy ApprovalPolicy
 	commandRunner  CommandRunner
 	repoPath       string
@@ -134,11 +136,16 @@ func NewEngine(runID string, compiled *workflow.CompiledWorkflow, deps MachineDe
 		ids:            ids,
 		store:          deps.Store,
 		lookupAdapter:  deps.LookupAdapter,
+		driverFactory:  deps.DriverFactory,
 		approvalPolicy: policy,
 		commandRunner:  deps.CommandRunner,
 		repoPath:       strings.TrimSpace(deps.RepoPath),
 		workingDir:     strings.TrimSpace(deps.WorkingDir),
 		snapshot:       newZeroSnapshot(runID),
+	}
+
+	if engine.driverFactory == nil {
+		engine.driverFactory = NewStepDriverRegistry()
 	}
 
 	checkpoint, _, _ := deps.Store.LoadCheckpoint() //nolint:errcheck // checkpoint is optional

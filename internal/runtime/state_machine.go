@@ -278,21 +278,13 @@ func applyEvent(compiled *workflow.CompiledWorkflow, snapshot *Snapshot, transit
 		return newError(code, fmt.Sprintf("event %s missing %s", event.Type, dataOccurredAt))
 	}
 
-	switch event.Type {
-	case store.EventRunCreated, store.EventRunStarted, store.EventRunPaused, store.EventRunWaitingApproval, store.EventRunSucceeded, store.EventRunFailed, store.EventRunCanceled:
-		if err := applyRunEvent(compiled, snapshot, transitions, event, data, code); err != nil {
-			return err
-		}
-	case store.EventStepQueued, store.EventStepStarted, store.EventStepSucceeded, store.EventStepFailed, store.EventStepRetried:
-		if err := applyStepEvent(compiled, snapshot, transitions, event, data, code); err != nil {
-			return err
-		}
-	case store.EventApprovalRequested, store.EventApprovalGranted, store.EventApprovalDenied, store.EventApprovalTimedOut:
-		if err := applyApprovalEvent(compiled, snapshot, transitions, event, data, code); err != nil {
-			return err
-		}
-	default:
-		return newError(code, fmt.Sprintf("unsupported event type %q", event.Type))
+	handler, err := lookupStateMachineEventHandler(event.Type)
+	if err != nil {
+		return newError(code, err.Error())
+	}
+
+	if err := handler.Apply(compiled, snapshot, transitions, event, data, code); err != nil {
+		return err
 	}
 
 	snapshot.LastSequence = event.Sequence
@@ -355,30 +347,19 @@ func initializePendingSteps(snapshot *Snapshot, compiled *workflow.CompiledWorkf
 
 func cancelActiveSteps(snapshot *Snapshot) {
 	for stepID, step := range snapshot.Steps {
-		switch step.State {
-		case StepStateSucceeded, StepStateFailed, StepStateCanceled:
+		if terminalStepStates.Has(step.State) {
 			continue
-		default:
-			step.State = StepStateCanceled
-			snapshot.Steps[stepID] = step
 		}
+
+		step.State = StepStateCanceled
+		snapshot.Steps[stepID] = step
 	}
 }
 
 func validRunState(state RunState) bool {
-	switch state {
-	case RunStatePending, RunStateRunning, RunStateWaitingApproval, RunStatePaused, RunStateSucceeded, RunStateFailed, RunStateCanceled:
-		return true
-	default:
-		return false
-	}
+	return validRunStates.Has(state)
 }
 
 func validStepState(state StepState) bool {
-	switch state {
-	case StepStatePending, StepStateQueued, StepStateRunning, StepStateWaitingApproval, StepStateSucceeded, StepStateFailed, StepStateCanceled:
-		return true
-	default:
-		return false
-	}
+	return validStepStates.Has(state)
 }

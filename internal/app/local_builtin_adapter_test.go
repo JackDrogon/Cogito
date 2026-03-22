@@ -9,9 +9,14 @@ import (
 )
 
 func TestLookupRegisteredAdapterSupportsBuiltinLocalProviders(t *testing.T) {
+	lookup := newAdapterLookup(newAdapterResolverChain(
+		builtinAdapterResolver(),
+		registeredAdapterResolver(),
+	))
+
 	for _, provider := range []string{"reviewer", "writer"} {
 		t.Run(provider, func(t *testing.T) {
-			adapter, err := lookupRegisteredAdapter(workflow.CompiledStep{
+			adapter, err := lookup(workflow.CompiledStep{
 				StepSpec: workflow.StepSpec{
 					ID:    "agent-step",
 					Kind:  workflow.StepKindAgent,
@@ -38,7 +43,12 @@ func TestLookupRegisteredAdapterSupportsBuiltinLocalProviders(t *testing.T) {
 }
 
 func TestLookupRegisteredAdapterRejectsUnknownProvider(t *testing.T) {
-	_, err := lookupRegisteredAdapter(workflow.CompiledStep{
+	lookup := newAdapterLookup(newAdapterResolverChain(
+		builtinAdapterResolver(),
+		registeredAdapterResolver(),
+	))
+
+	_, err := lookup(workflow.CompiledStep{
 		StepSpec: workflow.StepSpec{
 			ID:    "agent-step",
 			Kind:  workflow.StepKindAgent,
@@ -50,5 +60,37 @@ func TestLookupRegisteredAdapterRejectsUnknownProvider(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `adapter "definitely-unknown-provider" is not registered`) {
 		t.Fatalf("lookupRegisteredAdapter() error = %v", err)
+	}
+}
+
+func TestAdapterResolverChainUsesFirstMatch(t *testing.T) {
+	chain := newAdapterResolverChain(
+		adapterResolverFunc(func(provider string) (adapters.Adapter, bool) {
+			if provider != "reviewer" {
+				return nil, false
+			}
+
+			return builtinLocalAdapter{provider: "first"}, true
+		}),
+		adapterResolverFunc(func(provider string) (adapters.Adapter, bool) {
+			if provider != "reviewer" {
+				return nil, false
+			}
+
+			return builtinLocalAdapter{provider: "second"}, true
+		}),
+	)
+
+	adapter, ok := chain.Resolve("reviewer")
+	if !ok {
+		t.Fatal("Resolve() ok = false, want true")
+	}
+
+	execution, err := adapter.Start(t.Context(), adapters.StartRequest{RunID: "run-1", StepID: "agent-step", AttemptID: "attempt-1"})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if !strings.Contains(execution.Summary, "first") {
+		t.Fatalf("execution.Summary = %q, want first resolver result", execution.Summary)
 	}
 }

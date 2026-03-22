@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -74,7 +73,7 @@ func (r *supervisorCommandRunner) Start(ctx context.Context, request runtime.Com
 		return nil, errors.New("supervisorCommandRunner.Start: command is required")
 	}
 
-	commandSpec, err := parseCommandSpec(request.Command, r.commandWorkingDir(request))
+	commandSpec, err := executor.ParseCommand(request.Command, r.commandWorkingDir(request))
 	if err != nil {
 		return nil, err
 	}
@@ -266,118 +265,4 @@ func sanitizePathToken(value string) string {
 	replacer := strings.NewReplacer("/", "-", "\\", "-", " ", "-", ":", "-")
 
 	return replacer.Replace(value)
-}
-
-func parseCommandSpec(command, dir string) (executor.CommandSpec, error) {
-	argv, err := tokenizeCommand(command)
-	if err != nil {
-		return executor.CommandSpec{}, err
-	}
-
-	if len(argv) == 0 {
-		return executor.CommandSpec{}, errors.New("parseCommandSpec: command is required")
-	}
-
-	return executor.CommandSpec{
-		Path: argv[0],
-		Args: argv[1:],
-		Dir:  dir,
-	}, nil
-}
-
-// parseQuoted handles character parsing inside quoted strings.
-func parseQuoted(r rune, inSingle, inDouble, escaped *bool, current *strings.Builder) {
-	switch {
-	case *inSingle:
-		if r == '\'' {
-			*inSingle = false
-		} else {
-			current.WriteRune(r)
-		}
-	case *inDouble:
-		switch r {
-		case '\\':
-			*escaped = true
-		case '"':
-			*inDouble = false
-		default:
-			current.WriteRune(r)
-		}
-	}
-}
-
-// parseUnquoted handles character parsing outside quoted strings.
-func parseUnquoted(r rune, inSingle, inDouble, escaped, tokenStarted *bool, current *strings.Builder, flush func()) {
-	switch r {
-	case '\\':
-		*escaped = true
-		*tokenStarted = true
-	case '\'':
-		*inSingle = true
-		*tokenStarted = true
-	case '"':
-		*inDouble = true
-		*tokenStarted = true
-	case ' ', '\t', '\n', '\r':
-		if *tokenStarted {
-			flush()
-		}
-	default:
-		current.WriteRune(r)
-
-		*tokenStarted = true
-	}
-}
-
-func tokenizeCommand(command string) ([]string, error) {
-	command = strings.TrimSpace(command)
-	if command == "" {
-		return nil, errors.New("tokenizeCommand: command is required")
-	}
-
-	args := make([]string, 0, 4)
-
-	var current strings.Builder
-
-	inSingle, inDouble, escaped, tokenStarted := false, false, false, false
-
-	flush := func() {
-		args = append(args, current.String())
-		current.Reset()
-
-		tokenStarted = false
-	}
-
-	for _, r := range command {
-		if escaped {
-			current.WriteRune(r)
-
-			escaped = false
-			tokenStarted = true
-
-			continue
-		}
-
-		if inSingle || inDouble {
-			parseQuoted(r, &inSingle, &inDouble, &escaped, &current)
-
-			tokenStarted = true
-		} else {
-			parseUnquoted(r, &inSingle, &inDouble, &escaped, &tokenStarted, &current, flush)
-		}
-	}
-
-	if escaped {
-		current.WriteRune('\\')
-	}
-
-	if inSingle || inDouble {
-		return nil, fmt.Errorf("unterminated quoted string in command %s", strconv.Quote(command))
-	}
-
-	if tokenStarted {
-		flush()
-	}
-
-	return args, nil
 }

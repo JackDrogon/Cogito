@@ -138,69 +138,27 @@ func compileStep(step rawStep, position int) (StepSpec, error) {
 		Needs: cloneStrings(step.Needs),
 	}
 
-	switch kind {
-	case StepKindAgent:
-		agent, err := requiredStepField(id, kind, "agent", step.Agent)
-		if err != nil {
-			return StepSpec{}, err
+	return compileStepKindSpec(id, kind, step, compiled)
+}
+
+func requiredStepFields(stepID string, kind StepKind, names []string, fields map[string]*string) (map[string]string, error) {
+	values := make(map[string]string, len(names))
+	for _, name := range names {
+		value := fields[name]
+		if value == nil || strings.TrimSpace(*value) == "" {
+			return nil, newError(ErrorCodeSchema, fmt.Sprintf("step %q field %q is required for kind %q", stepID, name, kind))
 		}
 
-		prompt, err := requiredStepField(id, kind, "prompt", step.Prompt)
-		if err != nil {
-			return StepSpec{}, err
-		}
-
-		if err := rejectStepFields(id, kind, []stepField{{name: "command", value: step.Command}, {name: "message", value: step.Message}}); err != nil {
-			return StepSpec{}, err
-		}
-
-		compiled.Agent = &AgentStepSpec{Agent: agent, Prompt: prompt}
-	case StepKindCommand:
-		command, err := requiredStepField(id, kind, "command", step.Command)
-		if err != nil {
-			return StepSpec{}, err
-		}
-
-		if err := rejectStepFields(id, kind, []stepField{{name: "agent", value: step.Agent}, {name: "prompt", value: step.Prompt}, {name: "message", value: step.Message}}); err != nil {
-			return StepSpec{}, err
-		}
-
-		compiled.Command = &CommandStepSpec{Command: command}
-	case StepKindApproval:
-		message, err := requiredStepField(id, kind, "message", step.Message)
-		if err != nil {
-			return StepSpec{}, err
-		}
-
-		if err := rejectStepFields(id, kind, []stepField{{name: "agent", value: step.Agent}, {name: "prompt", value: step.Prompt}, {name: "command", value: step.Command}}); err != nil {
-			return StepSpec{}, err
-		}
-
-		compiled.Approval = &ApprovalStepSpec{Message: message}
-	default:
-		return StepSpec{}, newError(ErrorCodeSchema, fmt.Sprintf("step %q uses unsupported step kind %q", id, kind))
+		values[name] = strings.TrimSpace(*value)
 	}
 
-	return compiled, nil
+	return values, nil
 }
 
-type stepField struct {
-	name  string
-	value *string
-}
-
-func requiredStepField(stepID string, kind StepKind, field string, value *string) (string, error) {
-	if value == nil || strings.TrimSpace(*value) == "" {
-		return "", newError(ErrorCodeSchema, fmt.Sprintf("step %q field %q is required for kind %q", stepID, field, kind))
-	}
-
-	return strings.TrimSpace(*value), nil
-}
-
-func rejectStepFields(stepID string, kind StepKind, fields []stepField) error {
-	for _, field := range fields {
-		if field.value != nil {
-			return newError(ErrorCodeSchema, fmt.Sprintf("step %q field %q is not allowed for kind %q", stepID, field.name, kind))
+func rejectStepFieldNames(stepID string, kind StepKind, names []string, fields map[string]*string) error {
+	for _, name := range names {
+		if fields[name] != nil {
+			return newError(ErrorCodeSchema, fmt.Sprintf("step %q field %q is not allowed for kind %q", stepID, name, kind))
 		}
 	}
 

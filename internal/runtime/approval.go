@@ -212,82 +212,12 @@ func (e *Engine) resolvePendingApproval(ctx context.Context, decision ApprovalDe
 		return err
 	}
 
-	summary := strings.TrimSpace(message)
-	if summary == "" {
-		summary = approvalDecisionSummary(decision, pending.Step)
+	handler, err := lookupApprovalDecisionHandler(decision)
+	if err != nil {
+		return err
 	}
 
-	switch decision {
-	case ApprovalDecisionApprove:
-		if err := e.persistApprovalResolution(ApprovalResolutionParams{
-			EventType: store.EventApprovalGranted,
-			Pending:   pending,
-			From:      StepStateWaitingApproval,
-			To:        StepStateRunning,
-			Summary:   summary,
-		}); err != nil {
-			return err
-		}
-
-		if err := e.persistRunTransition(
-			store.EventRunStarted,
-			RunStateWaitingApproval,
-			RunStateRunning,
-			"run resumed",
-		); err != nil {
-			return err
-		}
-
-		if err := e.continueApprovedStep(ctx, pending); err != nil {
-			return err
-		}
-
-		return e.finalizeRunningState()
-	case ApprovalDecisionDeny:
-		if err := e.persistApprovalResolution(ApprovalResolutionParams{
-			EventType: store.EventApprovalDenied,
-			Pending:   pending,
-			From:      StepStateWaitingApproval,
-			To:        StepStateFailed,
-			Summary:   summary,
-		}); err != nil {
-			return err
-		}
-
-		if err := e.persistRunTransition(
-			store.EventRunFailed,
-			RunStateWaitingApproval,
-			RunStateFailed,
-			summary,
-		); err != nil {
-			return err
-		}
-
-		return newError(ErrorCodeExecution, summary)
-	case ApprovalDecisionTimeout:
-		if err := e.persistApprovalResolution(ApprovalResolutionParams{
-			EventType: store.EventApprovalTimedOut,
-			Pending:   pending,
-			From:      StepStateWaitingApproval,
-			To:        StepStateFailed,
-			Summary:   summary,
-		}); err != nil {
-			return err
-		}
-
-		if err := e.persistRunTransition(
-			store.EventRunFailed,
-			RunStateWaitingApproval,
-			RunStateFailed,
-			summary,
-		); err != nil {
-			return err
-		}
-
-		return newError(ErrorCodeExecution, summary)
-	default:
-		return newError(ErrorCodeExecution, fmt.Sprintf("unsupported approval decision %q", decision))
-	}
+	return handler.Handle(ctx, e, pending, resolveApprovalSummary(decision, pending.Step, message))
 }
 
 func (e *Engine) continueApprovedStep(ctx context.Context, pending pendingApproval) error {
@@ -309,38 +239,23 @@ func (e *Engine) continueApprovedStep(ctx context.Context, pending pendingApprov
 		ProviderSessionID: pending.ProviderSessionID,
 	}
 
-	var execution *adapters.Execution
-
-	switch pending.Trigger {
-	case ApprovalTriggerExplicit, ApprovalTriggerAdapter:
-		execution, err = driver.Resume(ctx, pending.Step, handle, e.Snapshot())
-		if err != nil {
-			return e.failRunForExecutionError(FailRunParams{
-				StepID:            pending.Step.ID,
-				AttemptID:         pending.AttemptID,
-				ProviderSessionID: pending.ProviderSessionID,
-				ExecutionErr:      err,
-				Message:           "step resume failed after approval",
-			})
-		}
-	case ApprovalTriggerPolicy:
-		execution, err = driver.Start(ctx, pending.Step, pending.AttemptID, e.Snapshot())
-		if err != nil {
-			return e.failRunForExecutionError(FailRunParams{
-				StepID:            pending.Step.ID,
-				AttemptID:         pending.AttemptID,
-				ProviderSessionID: pending.ProviderSessionID,
-				ExecutionErr:      err,
-				Message:           "step start failed after approval",
-			})
-		}
-	default:
-		return newError(ErrorCodeExecution, fmt.Sprintf("unsupported approval trigger %q", pending.Trigger))
+	strategy, err := lookupApprovalContinuationStrategy(pending.Trigger)
+	if err != nil {
+		return err
 	}
 
-	if strings.TrimSpace(execution.Handle.ProviderSessionID) == "" {
-		execution.Handle.ProviderSessionID = pending.ProviderSessionID
+	execution, err := strategy.Continue(ctx, e, pending, driver, handle)
+	if err != nil {
+		return e.failRunForExecutionError(FailRunParams{
+			StepID:            pending.Step.ID,
+			AttemptID:         pending.AttemptID,
+			ProviderSessionID: pending.ProviderSessionID,
+			ExecutionErr:      err,
+			Message:           strategy.FailureMessage(),
+		})
 	}
+
+	execution = finalizeApprovedExecution(execution, pending.ProviderSessionID)
 
 	return e.continueExecution(ctx, pending.Step, pending.AttemptID, driver, execution)
 }

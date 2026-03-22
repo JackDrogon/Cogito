@@ -637,6 +637,152 @@ func TestApprovalTriggerSources(t *testing.T) {
 	}
 }
 
+func TestApprovalContinuationStrategiesCoverBuiltins(t *testing.T) {
+	for _, trigger := range []ApprovalTrigger{ApprovalTriggerExplicit, ApprovalTriggerAdapter, ApprovalTriggerPolicy} {
+		strategy, err := lookupApprovalContinuationStrategy(trigger)
+		if err != nil {
+			t.Fatalf("lookupApprovalContinuationStrategy(%q) error = %v", trigger, err)
+		}
+		if strategy == nil {
+			t.Fatalf("lookupApprovalContinuationStrategy(%q) returned nil strategy", trigger)
+		}
+		if strings.TrimSpace(strategy.FailureMessage()) == "" {
+			t.Fatalf("strategy failure message for %q is empty", trigger)
+		}
+	}
+}
+
+func TestApprovalContinuationStrategyRejectsUnknownTrigger(t *testing.T) {
+	strategy, err := lookupApprovalContinuationStrategy(ApprovalTrigger("unknown"))
+	if err == nil {
+		t.Fatal("lookupApprovalContinuationStrategy() error = nil, want unsupported trigger")
+	}
+	if strategy != nil {
+		t.Fatalf("lookupApprovalContinuationStrategy() strategy = %#v, want nil", strategy)
+	}
+	if !strings.Contains(err.Error(), "unsupported approval trigger") {
+		t.Fatalf("lookupApprovalContinuationStrategy() error = %v", err)
+	}
+}
+
+func TestApprovalDecisionHandlersCoverBuiltins(t *testing.T) {
+	for _, decision := range []ApprovalDecision{ApprovalDecisionApprove, ApprovalDecisionDeny, ApprovalDecisionTimeout} {
+		handler, err := lookupApprovalDecisionHandler(decision)
+		if err != nil {
+			t.Fatalf("lookupApprovalDecisionHandler(%q) error = %v", decision, err)
+		}
+		if handler == nil {
+			t.Fatalf("lookupApprovalDecisionHandler(%q) returned nil handler", decision)
+		}
+	}
+}
+
+func TestApprovalDecisionHandlerRejectsUnknownDecision(t *testing.T) {
+	handler, err := lookupApprovalDecisionHandler(ApprovalDecision("unknown"))
+	if err == nil {
+		t.Fatal("lookupApprovalDecisionHandler() error = nil, want unsupported decision")
+	}
+	if handler != nil {
+		t.Fatalf("lookupApprovalDecisionHandler() handler = %#v, want nil", handler)
+	}
+	if !strings.Contains(err.Error(), "unsupported approval decision") {
+		t.Fatalf("lookupApprovalDecisionHandler() error = %v", err)
+	}
+}
+
+func TestStateMachineEventHandlersCoverBuiltins(t *testing.T) {
+	for _, eventType := range []store.EventType{
+		store.EventRunCreated,
+		store.EventRunStarted,
+		store.EventRunPaused,
+		store.EventRunWaitingApproval,
+		store.EventRunSucceeded,
+		store.EventRunFailed,
+		store.EventRunCanceled,
+		store.EventStepQueued,
+		store.EventStepStarted,
+		store.EventStepSucceeded,
+		store.EventStepFailed,
+		store.EventStepRetried,
+		store.EventApprovalRequested,
+		store.EventApprovalGranted,
+		store.EventApprovalDenied,
+		store.EventApprovalTimedOut,
+	} {
+		handler, err := lookupStateMachineEventHandler(eventType)
+		if err != nil {
+			t.Fatalf("lookupStateMachineEventHandler(%q) error = %v", eventType, err)
+		}
+		if handler == nil {
+			t.Fatalf("lookupStateMachineEventHandler(%q) returned nil handler", eventType)
+		}
+	}
+}
+
+func TestStateMachineEventHandlerRejectsUnknownType(t *testing.T) {
+	handler, err := lookupStateMachineEventHandler(store.EventType("unknown"))
+	if err == nil {
+		t.Fatal("lookupStateMachineEventHandler() error = nil, want unsupported event type")
+	}
+	if handler != nil {
+		t.Fatalf("lookupStateMachineEventHandler() handler = %#v, want nil", handler)
+	}
+	if !strings.Contains(err.Error(), "unsupported event type") {
+		t.Fatalf("lookupStateMachineEventHandler() error = %v", err)
+	}
+}
+
+func TestValidStateSetsCoverBuiltins(t *testing.T) {
+	for _, state := range []RunState{RunStatePending, RunStateRunning, RunStateWaitingApproval, RunStatePaused, RunStateSucceeded, RunStateFailed, RunStateCanceled} {
+		if !validRunState(state) {
+			t.Fatalf("validRunState(%q) = false, want true", state)
+		}
+	}
+	for _, state := range []StepState{StepStatePending, StepStateQueued, StepStateRunning, StepStateWaitingApproval, StepStateSucceeded, StepStateFailed, StepStateCanceled} {
+		if !validStepState(state) {
+			t.Fatalf("validStepState(%q) = false, want true", state)
+		}
+	}
+	if validRunState(RunState("unknown")) {
+		t.Fatal("validRunState(unknown) = true, want false")
+	}
+	if validStepState(StepState("unknown")) {
+		t.Fatal("validStepState(unknown) = true, want false")
+	}
+}
+
+func TestBuildRunStatusViewFollowsTopologicalOrder(t *testing.T) {
+	compiled := compileSpec(t, &workflow.Spec{
+		Metadata: workflow.Metadata{Name: "status-view"},
+		Steps: []workflow.StepSpec{
+			{ID: "prepare", Kind: workflow.StepKindCommand, Command: &workflow.CommandStepSpec{Command: "echo prepare"}},
+			{ID: "review", Kind: workflow.StepKindCommand, Needs: []string{"prepare"}, Command: &workflow.CommandStepSpec{Command: "echo review"}},
+		},
+	})
+
+	view := BuildRunStatusView(compiled, Snapshot{
+		RunID: "run-status-view",
+		State: RunStateSucceeded,
+		Steps: map[string]StepSnapshot{
+			"prepare": {State: StepStateSucceeded, Summary: "prepare ok"},
+			"review":  {State: StepStateSucceeded, Summary: "review ok"},
+		},
+	})
+
+	if view.RunID != "run-status-view" {
+		t.Fatalf("view.RunID = %q, want %q", view.RunID, "run-status-view")
+	}
+	if len(view.StepViews) != 2 {
+		t.Fatalf("len(view.StepViews) = %d, want 2", len(view.StepViews))
+	}
+	if view.StepViews[0].StepID != "prepare" || view.StepViews[1].StepID != "review" {
+		t.Fatalf("step order = [%s %s], want [prepare review]", view.StepViews[0].StepID, view.StepViews[1].StepID)
+	}
+	if !strings.Contains(view.StepViews[0].Rendered, `summary="prepare ok"`) {
+		t.Fatalf("view.StepViews[0].Rendered = %q, want rendered summary", view.StepViews[0].Rendered)
+	}
+}
+
 func TestCancelInterruptsActiveProviderBeforePersistingRunCanceled(t *testing.T) {
 	compiled := compileSpec(t, &workflow.Spec{
 		Metadata: workflow.Metadata{Name: "cancel-running"},
@@ -805,6 +951,54 @@ func newRuntimeMachineFixtureWithPolicy(t *testing.T, spec *workflow.Spec, comma
 		store:    runStore,
 		engine:   engine,
 		runner:   runner,
+	}
+}
+
+func TestNewEngineUsesInjectedDriverFactory(t *testing.T) {
+	compiled := compileSpec(t, &workflow.Spec{
+		Metadata: workflow.Metadata{Name: "custom-driver-factory"},
+		Steps: []workflow.StepSpec{{
+			ID:      "prepare",
+			Kind:    workflow.StepKindCommand,
+			Command: &workflow.CommandStepSpec{Command: "echo prepare"},
+		}},
+	})
+
+	runStore, err := store.Open(filepath.Join(t.TempDir(), "runs"), "run-custom-driver")
+	if err != nil {
+		t.Fatalf("store.Open() error = %v", err)
+	}
+
+	runner := newTestCommandRunner(map[string]commandScript{
+		"prepare": {Start: snapshotSpec{State: adapters.ExecutionStateSucceeded, Summary: "done"}},
+	})
+
+	buildCount := 0
+	engine, err := NewEngine("run-custom-driver", compiled, MachineDependencies{
+		Store:         runStore,
+		CommandRunner: runner,
+		DriverFactory: StepDriverFactoryFunc(func(_ *Engine, step workflow.CompiledStep) (stepDriver, error) {
+			buildCount++
+			if step.ID != "prepare" {
+				return nil, fmt.Errorf("unexpected step %s", step.ID)
+			}
+
+			return commandDriver{runner: runner}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+
+	if err := engine.ExecuteAll(t.Context()); err != nil {
+		t.Fatalf("ExecuteAll() error = %v", err)
+	}
+
+	if buildCount == 0 {
+		t.Fatal("DriverFactory was not used")
+	}
+	if runner.StartCount("prepare") != 1 {
+		t.Fatalf("runner.StartCount(prepare) = %d, want 1", runner.StartCount("prepare"))
 	}
 }
 

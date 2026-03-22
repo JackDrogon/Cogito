@@ -129,6 +129,80 @@ func TestSubcommandRouting(t *testing.T) {
 	}
 }
 
+func TestParseSharedFlagsWithoutArgsRejectsPositionals(t *testing.T) {
+	var out bytes.Buffer
+	flags, err := parseSharedFlagsWithoutArgs("status", []string{"unexpected"}, &out)
+	if err == nil {
+		t.Fatal("parseSharedFlagsWithoutArgs() error = nil, want positional-argument rejection")
+	}
+	if flags != nil {
+		t.Fatalf("parseSharedFlagsWithoutArgs() flags = %#v, want nil", flags)
+	}
+	if !strings.Contains(err.Error(), "status does not accept positional arguments") {
+		t.Fatalf("parseSharedFlagsWithoutArgs() error = %v", err)
+	}
+}
+
+func TestRequireExactlyOneArgUsesLabel(t *testing.T) {
+	arg, err := requireExactlyOneArg("replay", "events file", []string{"one", "two"})
+	if err == nil {
+		t.Fatal("requireExactlyOneArg() error = nil, want too-many-args failure")
+	}
+	if arg != "" {
+		t.Fatalf("requireExactlyOneArg() arg = %q, want empty", arg)
+	}
+	if !strings.Contains(err.Error(), "replay: expects exactly 1 events file argument") {
+		t.Fatalf("requireExactlyOneArg() error = %v", err)
+	}
+}
+
+func TestParseStatusRequestUsesStateDir(t *testing.T) {
+	request, err := parseStatusRequest([]string{"--state-dir", filepath.Join("ref", "tmp", "runs", "run-1")}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("parseStatusRequest() error = %v", err)
+	}
+	if request == nil {
+		t.Fatal("parseStatusRequest() request = nil")
+	}
+	if !strings.Contains(request.StateDir, "run-1") {
+		t.Fatalf("request.StateDir = %q, want contains run-1", request.StateDir)
+	}
+}
+
+func TestParseReplayRequestRequiresEventsPath(t *testing.T) {
+	request, err := parseReplayRequest([]string{}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("parseReplayRequest() error = nil, want missing events file")
+	}
+	if request != nil {
+		t.Fatalf("parseReplayRequest() request = %#v, want nil", request)
+	}
+	if !strings.Contains(err.Error(), "replay: expects exactly 1 events file argument") {
+		t.Fatalf("parseReplayRequest() error = %v", err)
+	}
+}
+
+func TestFormatRunStatusIncludesStepLines(t *testing.T) {
+	output := formatRunStatus(StatusRunOutput{
+		RunID:     "run-1",
+		StateDir:  "ref/tmp/runs/run-1",
+		State:     runtime.RunStateSucceeded,
+		StepLines: []string{"step=prepare state=succeeded", "step=review state=succeeded"},
+	})
+
+	for _, want := range []string{
+		"run_id=run-1",
+		"state_dir=ref/tmp/runs/run-1",
+		"state=succeeded",
+		"step=prepare state=succeeded",
+		"step=review state=succeeded",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("formatRunStatus() = %q, want contains %q", output, want)
+		}
+	}
+}
+
 func TestRunSharedFlagsOnIsolatedRepo(t *testing.T) {
 	fixture := newAppRepoFixture(t)
 	workflowPath := writeWorkflowFile(t, fixture.repoDir, "simple.yaml", "printf 'hello\\n'")
@@ -278,12 +352,13 @@ func TestResumeCommandResumesPausedRunAndRejectsDuplicate(t *testing.T) {
 		t.Fatalf("Run(resume) output = %q, want %q", out.String(), "run resumed\n")
 	}
 
-	_, _, snapshot, err := loadRunStatus(stateDir)
+	status, err := appsvc.StatusRun(t.Context(), StatusRunInput{StateDir: stateDir})
 	if err != nil {
-		t.Fatalf("loadRunStatus() after resume error = %v", err)
+		t.Fatalf("StatusRun() after resume error = %v", err)
 	}
-	if snapshot.State != runtime.RunStateSucceeded {
-		t.Fatalf("snapshot.State after resume = %q, want %q", snapshot.State, runtime.RunStateSucceeded)
+	snapshotState := status.State
+	if snapshotState != runtime.RunStateSucceeded {
+		t.Fatalf("status.State after resume = %q, want %q", snapshotState, runtime.RunStateSucceeded)
 	}
 
 	var dupOut bytes.Buffer
@@ -370,12 +445,12 @@ func TestCancelCommandCancelsPausedRunAndRejectsDuplicate(t *testing.T) {
 		t.Fatalf("Run(cancel) output = %q, want %q", out.String(), "run canceled\n")
 	}
 
-	_, _, snapshot, err := loadRunStatus(stateDir)
+	status, err := appsvc.StatusRun(t.Context(), StatusRunInput{StateDir: stateDir})
 	if err != nil {
-		t.Fatalf("loadRunStatus() after cancel error = %v", err)
+		t.Fatalf("StatusRun() after cancel error = %v", err)
 	}
-	if snapshot.State != runtime.RunStateCanceled {
-		t.Fatalf("snapshot.State after cancel = %q, want %q", snapshot.State, runtime.RunStateCanceled)
+	if status.State != runtime.RunStateCanceled {
+		t.Fatalf("status.State after cancel = %q, want %q", status.State, runtime.RunStateCanceled)
 	}
 
 	var dupOut bytes.Buffer

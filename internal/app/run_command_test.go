@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/JackDrogon/Cogito/internal/adapters"
+	"github.com/JackDrogon/Cogito/internal/executor"
 	"github.com/JackDrogon/Cogito/internal/runtime"
 	"github.com/JackDrogon/Cogito/internal/store"
 )
@@ -132,9 +133,9 @@ func TestSupervisorCommandRunnerHonorsTimeout(t *testing.T) {
 }
 
 func TestTokenizeCommand(t *testing.T) {
-	args, err := tokenizeCommand(`printf 'hello\n'`)
+	args, err := executor.TokenizeCommand(`printf 'hello\n'`)
 	if err != nil {
-		t.Fatalf("tokenizeCommand() error = %v", err)
+		t.Fatalf("TokenizeCommand() error = %v", err)
 	}
 	want := []string{"printf", "hello\\n"}
 	if len(args) != len(want) {
@@ -148,12 +149,12 @@ func TestTokenizeCommand(t *testing.T) {
 }
 
 func TestTokenizeCommandRejectsUnterminatedQuote(t *testing.T) {
-	_, err := tokenizeCommand(`printf 'oops`)
+	_, err := executor.TokenizeCommand(`printf 'oops`)
 	if err == nil {
-		t.Fatal("tokenizeCommand() error = nil, want unterminated quote")
+		t.Fatal("TokenizeCommand() error = nil, want unterminated quote")
 	}
 	if !strings.Contains(err.Error(), "unterminated quoted string") {
-		t.Fatalf("tokenizeCommand() error = %v, want unterminated quoted string", err)
+		t.Fatalf("TokenizeCommand() error = %v, want unterminated quoted string", err)
 	}
 }
 
@@ -264,6 +265,75 @@ func TestBuildRuntimeWiringUsesPersistedWorkingDirWithoutFlags(t *testing.T) {
 	}
 	if wiring.RepoPath != workingDir {
 		t.Fatalf("wiring.RepoPath = %q, want %q", wiring.RepoPath, workingDir)
+	}
+}
+
+func TestRunServiceOpenExistingRunSessionUsesPersistedWorkingDir(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "run-session-service")
+	workingDir := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(workingDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workingDir) error = %v", err)
+	}
+
+	writePausedCommandRunState(t, stateDir, workingDir, "pwd")
+
+	session, err := runs.openExistingRunSession(stateDir, nil)
+	if err != nil {
+		t.Fatalf("openExistingRunSession() error = %v", err)
+	}
+	if session.store.Layout().RunDir != stateDir {
+		t.Fatalf("session.store.Layout().RunDir = %q, want %q", session.store.Layout().RunDir, stateDir)
+	}
+	if session.engine.Snapshot().State != runtime.RunStatePaused {
+		t.Fatalf("session.engine.Snapshot().State = %q, want %q", session.engine.Snapshot().State, runtime.RunStatePaused)
+	}
+	if session.compiled == nil || len(session.compiled.Steps) != 1 {
+		t.Fatalf("session.compiled = %#v, want single-step workflow", session.compiled)
+	}
+}
+
+func TestRunStateRefParsesRunStateDir(t *testing.T) {
+	ref, err := newRunStateRef(filepath.Join("ref", "tmp", "runs", "run-123"))
+	if err != nil {
+		t.Fatalf("newRunStateRef() error = %v", err)
+	}
+	if ref.runID != "run-123" {
+		t.Fatalf("ref.runID = %q, want %q", ref.runID, "run-123")
+	}
+	if !strings.Contains(ref.baseDir, filepath.Join("ref", "tmp", "runs")) {
+		t.Fatalf("ref.baseDir = %q, want runs dir", ref.baseDir)
+	}
+}
+
+func TestReplayRequestRejectsEmptyPath(t *testing.T) {
+	request, err := newReplayRequest("")
+	if err == nil {
+		t.Fatal("newReplayRequest() error = nil, want missing path error")
+	}
+	if request != (replayRequest{}) {
+		t.Fatalf("newReplayRequest() request = %#v, want zero value", request)
+	}
+	if !strings.Contains(err.Error(), "events file path is required") {
+		t.Fatalf("newReplayRequest() error = %v", err)
+	}
+}
+
+func TestApplicationServiceStatusRunReturnsFormattedData(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "run-status-service")
+	writePausedRunState(t, stateDir)
+
+	result, err := appsvc.StatusRun(t.Context(), StatusRunInput{StateDir: stateDir})
+	if err != nil {
+		t.Fatalf("StatusRun() error = %v", err)
+	}
+	if result.RunID != "run-status-service" {
+		t.Fatalf("result.RunID = %q, want %q", result.RunID, "run-status-service")
+	}
+	if result.State != runtime.RunStatePaused {
+		t.Fatalf("result.State = %q, want %q", result.State, runtime.RunStatePaused)
+	}
+	if len(result.StepLines) == 0 {
+		t.Fatal("result.StepLines is empty")
 	}
 }
 

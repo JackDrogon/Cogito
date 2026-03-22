@@ -86,6 +86,81 @@ func TestParseWorkflow(t *testing.T) {
 	}
 }
 
+func TestCompileStepKindSpecUsesRegisteredDescriptors(t *testing.T) {
+	tests := []struct {
+		name  string
+		step  rawStep
+		check func(t *testing.T, spec StepSpec)
+	}{
+		{
+			name: "agent",
+			step: rawStep{
+				ID:     "review",
+				Kind:   string(StepKindAgent),
+				Agent:  ptr("claude"),
+				Prompt: ptr("review this"),
+			},
+			check: func(t *testing.T, spec StepSpec) {
+				t.Helper()
+				if spec.Agent == nil || spec.Agent.Agent != "claude" || spec.Agent.Prompt != "review this" {
+					t.Fatalf("agent spec = %#v", spec.Agent)
+				}
+			},
+		},
+		{
+			name: "command",
+			step: rawStep{
+				ID:      "build",
+				Kind:    string(StepKindCommand),
+				Command: ptr("go test ./..."),
+			},
+			check: func(t *testing.T, spec StepSpec) {
+				t.Helper()
+				if spec.Command == nil || spec.Command.Command != "go test ./..." {
+					t.Fatalf("command spec = %#v", spec.Command)
+				}
+			},
+		},
+		{
+			name: "approval",
+			step: rawStep{
+				ID:      "gate",
+				Kind:    string(StepKindApproval),
+				Message: ptr("ship it?"),
+			},
+			check: func(t *testing.T, spec StepSpec) {
+				t.Helper()
+				if spec.Approval == nil || spec.Approval.Message != "ship it?" {
+					t.Fatalf("approval spec = %#v", spec.Approval)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spec, err := compileStep(tt.step, 0)
+			if err != nil {
+				t.Fatalf("compileStep() error = %v", err)
+			}
+
+			tt.check(t, spec)
+		})
+	}
+}
+
+func TestStepKindDescriptorsCoverBuiltins(t *testing.T) {
+	for _, kind := range []StepKind{StepKindAgent, StepKindCommand, StepKindApproval} {
+		descriptor, ok := lookupStepKindDescriptor(kind)
+		if !ok {
+			t.Fatalf("descriptor missing for %q", kind)
+		}
+		if descriptor.bind == nil {
+			t.Fatalf("descriptor bind missing for %q", kind)
+		}
+	}
+}
+
 func TestValidateWorkflowDAG(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -181,4 +256,8 @@ func readFixture(t *testing.T, name string) string {
 	}
 
 	return string(data)
+}
+
+func ptr(value string) *string {
+	return &value
 }
