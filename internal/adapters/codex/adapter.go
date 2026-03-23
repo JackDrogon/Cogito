@@ -69,6 +69,11 @@ type CommandResult struct {
 	Stderr []byte
 }
 
+type lastMessagePathResult struct {
+	path    string
+	cleanup func()
+}
+
 func New(config Config) *Adapter {
 	lookPath := config.LookPath
 	if lookPath == nil {
@@ -107,16 +112,16 @@ func (a *Adapter) Start(ctx context.Context, request shared.StartRequest) (*shar
 
 	version := a.binaryVersion(ctx, binaryPath)
 
-	lastMessagePath, cleanup, err := makeLastMessagePath()
+	lastMessageResult, err := makeLastMessagePath()
 	if err != nil {
 		return nil, adapterError(shared.ErrorCodeExecution, "prepare codex output path", err)
 	}
 
-	defer cleanup()
+	defer lastMessageResult.cleanup()
 
 	result, err := a.runner.Run(ctx, CommandSpec{
 		Path: binaryPath,
-		Args: buildExecArgs(request, lastMessagePath),
+		Args: buildExecArgs(request, lastMessageResult.path),
 		Dir:  commandDir(request.WorkingDir),
 	})
 	if err != nil {
@@ -128,7 +133,7 @@ func (a *Adapter) Start(ctx context.Context, request shared.StartRequest) (*shar
 		return nil, adapterError(shared.ErrorCodeResult, "parse codex json output", parseErr)
 	}
 
-	lastMessage, readErr := os.ReadFile(lastMessagePath)
+	lastMessage, readErr := os.ReadFile(lastMessageResult.path)
 	if readErr != nil {
 		return nil, adapterError(shared.ErrorCodeExecution, "read codex output message", readErr)
 	}
@@ -278,10 +283,10 @@ func commandDir(workingDir string) string {
 	return strings.TrimSpace(workingDir)
 }
 
-func makeLastMessagePath() (string, func(), error) {
+func makeLastMessagePath() (*lastMessagePathResult, error) {
 	dir, err := os.MkdirTemp("", "cogito-codex-")
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
 
 	path := filepath.Join(dir, "last-message.txt")
@@ -289,7 +294,7 @@ func makeLastMessagePath() (string, func(), error) {
 		_ = os.RemoveAll(dir)
 	}
 
-	return path, cleanup, nil
+	return &lastMessagePathResult{path: path, cleanup: cleanup}, nil
 }
 
 type execRunner struct{}

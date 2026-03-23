@@ -61,6 +61,17 @@ type Supervisor struct {
 	running map[string]*exec.Cmd
 }
 
+type commandSetup struct {
+	cmd      *exec.Cmd
+	handleID string
+}
+
+type processMonitorResult struct {
+	timedOut    bool
+	interrupted bool
+	waitErr     error
+}
+
 func NewSupervisor() *Supervisor {
 	return &Supervisor{
 		terminationGracePeriod: defaultTerminationGracePeriod,
@@ -93,17 +104,20 @@ func (s *Supervisor) Run(ctx context.Context, request RunRequest) (*adapters.Ste
 	}
 	defer stderrFile.Close()
 
-	cmd, handleID, err := s.setupCommand(request, stdoutFile, stderrFile)
+	setup, err := s.setupCommand(request, stdoutFile, stderrFile)
 	if err != nil {
 		return nil, err
 	}
 
-	s.track(handleID, cmd)
-	defer s.untrack(handleID)
+	s.track(setup.handleID, setup.cmd)
+	defer s.untrack(setup.handleID)
 
-	timedOut, interrupted, waitErr := s.monitorProcess(ctx, cmd, request.Timeout)
+	monitorResult, err := s.monitorProcess(ctx, setup.cmd, request.Timeout)
+	if err != nil {
+		return nil, err
+	}
 
-	input, err := s.collectOutput(request, waitErr, timedOut, interrupted, stdoutFile, stderrFile)
+	input, err := s.collectOutput(request, monitorResult.waitErr, monitorResult.timedOut, monitorResult.interrupted, stdoutFile, stderrFile)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +125,7 @@ func (s *Supervisor) Run(ctx context.Context, request RunRequest) (*adapters.Ste
 	return request.Normalizer.Normalize(ctx, input)
 }
 
-func (s *Supervisor) setupCommand(request RunRequest, stdoutFile, stderrFile *os.File) (*exec.Cmd, string, error) {
+func (s *Supervisor) setupCommand(request RunRequest, stdoutFile, stderrFile *os.File) (*commandSetup, error) {
 	cmd := exec.Command(request.Command.Path, request.Command.Args...)
 	cmd.Dir = request.Command.Dir
 	cmd.Env = append(os.Environ(), request.Command.Env...)
@@ -120,7 +134,7 @@ func (s *Supervisor) setupCommand(request RunRequest, stdoutFile, stderrFile *os
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {
-		return nil, "", wrapError(
+		return nil, wrapError(
 			ErrorCodeExecution,
 			fmt.Sprintf("start provider command %q", request.Command.Path),
 			err,
@@ -132,10 +146,10 @@ func (s *Supervisor) setupCommand(request RunRequest, stdoutFile, stderrFile *os
 		handleID = fmt.Sprintf("pid-%d", cmd.Process.Pid)
 	}
 
-	return cmd, handleID, nil
+	return &commandSetup{cmd: cmd, handleID: handleID}, nil
 }
 
-func (s *Supervisor) monitorProcess(ctx context.Context, cmd *exec.Cmd, timeout time.Duration) (bool, bool, error) {
+func (s *Supervisor) monitorProcess(ctx context.Context, cmd *exec.Cmd, timeout time.Duration) (*processMonitorResult, error) {
 	waitCh := make(chan error, 1)
 	go func() {
 		waitCh <- cmd.Wait()
@@ -151,11 +165,13 @@ func (s *Supervisor) monitorProcess(ctx context.Context, cmd *exec.Cmd, timeout 
 
 	select {
 	case waitErr := <-waitCh:
-		return false, false, waitErr
+		return &processMonitorResult{waitErr: waitErr}, nil
 	case <-timeoutCh:
-		return true, false, s.terminate(cmd, waitCh, "timeout")
+		waitErr := s.terminate(cmd, waitCh, "timeout")
+		return &processMonitorResult{timedOut: true, waitErr: waitErr}, nil
 	case <-ctx.Done():
-		return false, true, s.terminate(cmd, waitCh, "interrupt")
+		waitErr := s.terminate(cmd, waitCh, "interrupt")
+		return &processMonitorResult{interrupted: true, waitErr: waitErr}, nil
 	}
 }
 

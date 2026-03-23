@@ -120,10 +120,11 @@ func (s applicationService) RunWorkflow(ctx context.Context, input RunWorkflowIn
 		return RunWorkflowOutput{}, err
 	}
 
-	engine, _, err := s.runs.newRunEngine(stateRef.runID, compiled, runStore, input.Flags, runtime.NewApprovalModePolicy(approvalMode))
+	runEngine, err := s.runs.newRunEngine(stateRef.runID, compiled, runStore, input.Flags, runtime.NewApprovalModePolicy(approvalMode))
 	if err != nil {
 		return RunWorkflowOutput{}, err
 	}
+	engine := runEngine.engine
 
 	if err := s.runs.executeUntilSettled(ctx, engine); err != nil {
 		return RunWorkflowOutput{}, err
@@ -177,17 +178,17 @@ func (s applicationService) ResumeRun(ctx context.Context, input ResumeRunInput)
 }
 
 func (applicationService) ReplayRun(_ context.Context, input ReplayRunInput) (ReplayRunOutput, error) {
-	runID, compiled, events, err := loadReplayInput(input.EventsPath)
+	replayInput, err := loadReplayInput(input.EventsPath)
 	if err != nil {
 		return ReplayRunOutput{}, err
 	}
 
-	replay, err := runtime.Replay(runID, compiled, events)
+	replay, err := runtime.Replay(replayInput.runID, replayInput.compiled, replayInput.events)
 	if err != nil {
 		return ReplayRunOutput{}, err
 	}
 
-	return ReplayRunOutput{View: runtime.BuildReplayView(compiled, *replay)}, nil
+	return ReplayRunOutput{View: runtime.BuildReplayView(replayInput.compiled, *replay)}, nil
 }
 
 func (s applicationService) CancelRun(ctx context.Context, input CancelRunInput) (CancelRunOutput, error) {

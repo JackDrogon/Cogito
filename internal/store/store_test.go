@@ -122,10 +122,12 @@ func TestAtomicCheckpointRecovery(t *testing.T) {
 
 			tt.mutate(t, store.Layout())
 
-			checkpoint, recovered, err := store.LoadCheckpoint()
+			result, err := store.LoadCheckpoint()
 			if err != nil {
 				t.Fatalf("LoadCheckpoint() error = %v", err)
 			}
+			checkpoint := result.Checkpoint
+			recovered := result.Recovered
 
 			if checkpoint.State != tt.wantState {
 				t.Fatalf("checkpoint.State = %q, want %q", checkpoint.State, tt.wantState)
@@ -157,7 +159,7 @@ func TestReplayFromEventsWhenCheckpointCorrupt(t *testing.T) {
 
 	writeTestFile(t, store.Layout().CheckpointPath, []byte("{"))
 
-	_, _, err := store.LoadCheckpoint()
+	_, err := store.LoadCheckpoint()
 	if err == nil {
 		t.Fatal("LoadCheckpoint() error = nil, want error")
 	}
@@ -339,10 +341,11 @@ func TestRedactedSummariesExcludeSecrets(t *testing.T) {
 		t.Fatalf("SaveCheckpoint() error = %v", err)
 	}
 
-	checkpoint, _, err := store.LoadCheckpoint()
+	result, err := store.LoadCheckpoint()
 	if err != nil {
 		t.Fatalf("LoadCheckpoint() error = %v", err)
 	}
+	checkpoint := result.Checkpoint
 
 	if strings.Contains(checkpoint.Steps["step-1"].Summary, "super-secret") || strings.Contains(checkpoint.Steps["step-1"].Summary, "hunter2") || strings.Contains(checkpoint.Steps["step-1"].Summary, "abc123") || strings.Contains(checkpoint.Steps["step-1"].Summary, "xyz987") {
 		t.Fatalf("checkpoint summary leaked secret: %q", checkpoint.Steps["step-1"].Summary)

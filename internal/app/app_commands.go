@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
+
+	"github.com/JackDrogon/Cogito/internal/store"
 )
 
 type workflowValidateCommand struct{}
@@ -12,15 +15,16 @@ type workflowValidateCommand struct{}
 func (workflowValidateCommand) Name() string    { return "validate" }
 func (workflowValidateCommand) Summary() string { return "Validate a workflow file" }
 func (workflowValidateCommand) Run(ctx context.Context, args []string, stdout io.Writer) error {
-	_, remainingArgs, err := parseSharedFlags("workflow validate", args, stdout)
+	parsed, err := parseSharedFlags("workflow validate", args, stdout)
 	if err != nil {
 		return err
 	}
 
-	if remainingArgs == nil {
+	if parsed == nil {
 		return nil
 	}
 
+	remainingArgs := parsed.remainingArgs
 	if len(remainingArgs) != 1 {
 		return errors.New("workflow.validate: expects exactly 1 file argument")
 	}
@@ -38,20 +42,32 @@ func (workflowRunCommand) Name() string    { return "run" }
 func (workflowRunCommand) Summary() string { return "Execute a workflow" }
 func (workflowRunCommand) Run(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) > 0 && isSubcommandToken(args[0]) {
-		flags, remainingArgs, err := parseSharedFlags("run", args[1:], stdout)
+		parsed, err := parseSharedFlags("run", args[1:], stdout)
 		if err != nil {
 			return err
 		}
 
-		if remainingArgs == nil {
+		if parsed == nil {
 			return nil
 		}
+
+		flags := parsed.flags
+		remainingArgs := parsed.remainingArgs
 
 		if len(remainingArgs) > 0 {
 			return fmt.Errorf("run does not accept extra positional arguments: %v", remainingArgs)
 		}
 
 		result, err := appsvc.RunWorkflow(ctx, RunWorkflowInput{WorkflowPath: args[0], Flags: flags})
+
+		if flags.verbose {
+			if err != nil && flags.stateDir != "" {
+				_ = printVerboseEvents(stdout, flags.stateDir)
+			} else if err == nil {
+				_ = printVerboseEvents(stdout, result.StateDir)
+			}
+		}
+
 		if err != nil {
 			return err
 		}
@@ -59,10 +75,16 @@ func (workflowRunCommand) Run(ctx context.Context, args []string, stdout io.Writ
 		return presenter.PresentRunWorkflow(stdout, result)
 	}
 
-	flags, remainingArgs, err := parseSharedFlags("run", args, stdout)
+	parsed, err := parseSharedFlags("run", args, stdout)
 	if err != nil {
 		return err
 	}
+	if parsed == nil {
+		return nil
+	}
+
+	flags := parsed.flags
+	remainingArgs := parsed.remainingArgs
 
 	workflowPath, err := requireExactlyOneArg("run", "file", remainingArgs)
 	if err != nil || workflowPath == "" {
@@ -70,6 +92,15 @@ func (workflowRunCommand) Run(ctx context.Context, args []string, stdout io.Writ
 	}
 
 	result, err := appsvc.RunWorkflow(ctx, RunWorkflowInput{WorkflowPath: workflowPath, Flags: flags})
+
+	if flags.verbose {
+		if err != nil && flags.stateDir != "" {
+			_ = printVerboseEvents(stdout, flags.stateDir)
+		} else if err == nil {
+			_ = printVerboseEvents(stdout, result.StateDir)
+		}
+	}
+
 	if err != nil {
 		return err
 	}
@@ -171,10 +202,13 @@ func (approveCommand) Run(ctx context.Context, args []string, stdout io.Writer) 
 }
 
 func parseSharedFlagsWithoutArgs(commandName string, args []string, stdout io.Writer) (*sharedFlags, error) {
-	flags, remainingArgs, err := parseSharedFlags(commandName, args, stdout)
-	if err != nil || remainingArgs == nil {
-		return flags, err
+	parsed, err := parseSharedFlags(commandName, args, stdout)
+	if err != nil || parsed == nil {
+		return nil, err
 	}
+
+	flags := parsed.flags
+	remainingArgs := parsed.remainingArgs
 
 	if len(remainingArgs) > 0 {
 		return nil, fmt.Errorf("%s does not accept positional arguments: %v", commandName, remainingArgs)
@@ -213,10 +247,12 @@ func parseStatusRequest(args []string, stdout io.Writer) (*statusRequest, error)
 }
 
 func parseReplayRequest(args []string, stdout io.Writer) (*replayInputRequest, error) {
-	_, remainingArgs, err := parseSharedFlags("replay", args, stdout)
-	if err != nil || remainingArgs == nil {
+	parsed, err := parseSharedFlags("replay", args, stdout)
+	if err != nil || parsed == nil {
 		return nil, err
 	}
+
+	remainingArgs := parsed.remainingArgs
 
 	eventsPath, err := requireExactlyOneArg("replay", "events file", remainingArgs)
 	if err != nil {
@@ -224,4 +260,18 @@ func parseReplayRequest(args []string, stdout io.Writer) (*replayInputRequest, e
 	}
 
 	return &replayInputRequest{EventsPath: eventsPath}, nil
+}
+
+func printVerboseEvents(stdout io.Writer, stateDir string) error {
+	eventsPath := filepath.Join(stateDir, "events.jsonl")
+	events, err := store.ReadEventsFile(eventsPath)
+	if err != nil {
+		return err
+	}
+
+	logger := newVerboseLogger(true, stdout)
+	for _, event := range events {
+		logger.logEvent(event)
+	}
+	return nil
 }

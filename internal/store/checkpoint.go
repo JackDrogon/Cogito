@@ -9,6 +9,11 @@ import (
 
 var errCheckpointNotFound = errors.New("checkpoint not found")
 
+type CheckpointLoadResult struct {
+	Checkpoint *Checkpoint
+	Recovered  bool
+}
+
 func (s *Store) SaveCheckpoint(checkpoint *Checkpoint) error {
 	if checkpoint == nil {
 		return newError(ErrorCodeCheckpoint, "checkpoint is required")
@@ -20,19 +25,19 @@ func (s *Store) SaveCheckpoint(checkpoint *Checkpoint) error {
 	return writeAtomicJSON(s.layout.CheckpointPath, sanitized, ErrorCodeCheckpoint)
 }
 
-func (s *Store) LoadCheckpoint() (*Checkpoint, bool, error) {
+func (s *Store) LoadCheckpoint() (*CheckpointLoadResult, error) {
 	checkpoint, err := readCheckpointFile(s.layout.CheckpointPath)
 	if err == nil {
-		return checkpoint, false, nil
+		return &CheckpointLoadResult{Checkpoint: checkpoint}, nil
 	}
 
 	if !errors.Is(err, errCheckpointNotFound) {
-		fallback, recovered, fallbackErr := s.tryRecoverCheckpoint(err)
+		fallback, fallbackErr := s.tryRecoverCheckpoint(err)
 		if fallbackErr == nil {
-			return fallback, recovered, nil
+			return fallback, nil
 		}
 
-		return nil, false, fallbackErr
+		return nil, fallbackErr
 	}
 
 	return s.tryRecoverCheckpoint(err)
@@ -69,29 +74,29 @@ func (s *Store) LoadArtifacts() ([]ArtifactRecord, error) {
 	return artifacts, nil
 }
 
-func (s *Store) tryRecoverCheckpoint(primaryErr error) (*Checkpoint, bool, error) {
+func (s *Store) tryRecoverCheckpoint(primaryErr error) (*CheckpointLoadResult, error) {
 	tempCheckpoint, tempErr := readCheckpointFile(s.layout.CheckpointTempPath)
 	if tempErr == nil {
 		if err := os.Rename(s.layout.CheckpointTempPath, s.layout.CheckpointPath); err != nil {
-			return nil, false, wrapError(ErrorCodeCheckpoint, "recover checkpoint from temp file", err)
+			return nil, wrapError(ErrorCodeCheckpoint, "recover checkpoint from temp file", err)
 		}
 
 		if err := syncDir(filepath.Dir(s.layout.CheckpointPath)); err != nil {
-			return nil, false, wrapError(ErrorCodeCheckpoint, "sync checkpoint directory", err)
+			return nil, wrapError(ErrorCodeCheckpoint, "sync checkpoint directory", err)
 		}
 
-		return tempCheckpoint, true, nil
+		return &CheckpointLoadResult{Checkpoint: tempCheckpoint, Recovered: true}, nil
 	}
 
 	if primaryErr != nil && !errors.Is(primaryErr, errCheckpointNotFound) {
-		return nil, false, primaryErr
+		return nil, primaryErr
 	}
 
 	if errors.Is(tempErr, errCheckpointNotFound) {
-		return nil, false, wrapError(ErrorCodeCheckpoint, "load checkpoint", errCheckpointNotFound)
+		return nil, wrapError(ErrorCodeCheckpoint, "load checkpoint", errCheckpointNotFound)
 	}
 
-	return nil, false, tempErr
+	return nil, tempErr
 }
 
 func readCheckpointFile(path string) (*Checkpoint, error) {

@@ -24,7 +24,7 @@ const (
 type EventStore interface {
 	AppendEvent(event store.Event) (store.Event, error)
 	SaveCheckpoint(checkpoint *store.Checkpoint) error
-	LoadCheckpoint() (*store.Checkpoint, bool, error)
+	LoadCheckpoint() (*store.CheckpointLoadResult, error)
 	ReadEvents() ([]store.Event, error)
 }
 
@@ -148,7 +148,11 @@ func NewEngine(runID string, compiled *workflow.CompiledWorkflow, deps MachineDe
 		engine.driverFactory = NewStepDriverRegistry()
 	}
 
-	checkpoint, _, _ := deps.Store.LoadCheckpoint() //nolint:errcheck // checkpoint is optional
+	checkpointResult, _ := deps.Store.LoadCheckpoint() //nolint:errcheck // checkpoint is optional
+	var checkpoint *store.Checkpoint
+	if checkpointResult != nil {
+		checkpoint = checkpointResult.Checkpoint
+	}
 
 	events, readErr := deps.Store.ReadEvents()
 	if readErr != nil {

@@ -19,6 +19,11 @@ var secretSummaryPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(authorization\s*[:=]\s*bearer\s+)([^\s,;]+)`),
 }
 
+type sanitizedArtifactLocation struct {
+	path     string
+	fullPath string
+}
+
 func sanitizeArtifacts(runDir string, artifacts []ArtifactRecord) ([]ArtifactRecord, error) {
 	cleaned := make([]ArtifactRecord, 0, len(artifacts))
 
@@ -35,17 +40,17 @@ func sanitizeArtifacts(runDir string, artifacts []ArtifactRecord) ([]ArtifactRec
 }
 
 func sanitizeArtifact(runDir string, artifact ArtifactRecord) (ArtifactRecord, error) {
-	path, fullPath, err := sanitizeArtifactPath(runDir, artifact.Path)
+	location, err := sanitizeArtifactPath(runDir, artifact.Path)
 	if err != nil {
 		return ArtifactRecord{}, wrapError(ErrorCodeArtifacts, "validate artifact path", err)
 	}
 
-	digest, err := digestFile(fullPath)
+	digest, err := digestFile(location.fullPath)
 	if err != nil {
 		return ArtifactRecord{}, wrapError(ErrorCodeArtifacts, "hash artifact", err)
 	}
 
-	artifact.Path = path
+	artifact.Path = location.path
 	artifact.Digest = digest
 	artifact.Kind = strings.TrimSpace(artifact.Kind)
 	artifact.StepID = strings.TrimSpace(artifact.StepID)
@@ -75,48 +80,48 @@ func sanitizeCheckpoint(checkpoint *Checkpoint) *Checkpoint {
 	return &clone
 }
 
-func sanitizeArtifactPath(runDir, artifactPath string) (string, string, error) {
+func sanitizeArtifactPath(runDir, artifactPath string) (*sanitizedArtifactLocation, error) {
 	runDir = filepath.Clean(runDir)
 
 	artifactPath = strings.TrimSpace(artifactPath)
 	if artifactPath == "" {
-		return "", "", artifactPathError("artifact path is required")
+		return nil, artifactPathError("artifact path is required")
 	}
 
 	if filepath.IsAbs(artifactPath) {
-		return "", "", artifactPathError("artifact path must be relative")
+		return nil, artifactPathError("artifact path must be relative")
 	}
 
 	clean := filepath.Clean(artifactPath)
 	if clean == "." {
-		return "", "", artifactPathError("artifact path is required")
+		return nil, artifactPathError("artifact path is required")
 	}
 
 	fullPath := filepath.Join(runDir, clean)
 
 	rel, err := filepath.Rel(runDir, fullPath)
 	if err != nil {
-		return "", "", fmt.Errorf("resolve artifact path: %w", err)
+		return nil, fmt.Errorf("resolve artifact path: %w", err)
 	}
 
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", "", artifactPathError("path escapes run directory")
+		return nil, artifactPathError("path escapes run directory")
 	}
 
 	info, err := os.Stat(fullPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return "", "", artifactPathError("artifact does not exist")
+			return nil, artifactPathError("artifact does not exist")
 		}
 
-		return "", "", err
+		return nil, err
 	}
 
 	if info.IsDir() {
-		return "", "", artifactPathError("artifact path must reference a file")
+		return nil, artifactPathError("artifact path must reference a file")
 	}
 
-	return filepath.ToSlash(rel), fullPath, nil
+	return &sanitizedArtifactLocation{path: filepath.ToSlash(rel), fullPath: fullPath}, nil
 }
 
 func digestFile(path string) (string, error) {

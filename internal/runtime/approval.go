@@ -71,7 +71,7 @@ type ApprovalExceptionRequest struct {
 
 type ApprovalPolicy interface {
 	DecideGate(ctx context.Context, request ApprovalGateRequest) (ApprovalDecisionResult, error)
-	EvaluateException(ctx context.Context, request ApprovalExceptionRequest) (ApprovalDecisionResult, bool, error)
+	EvaluateException(ctx context.Context, request ApprovalExceptionRequest) (*ApprovalDecisionResult, error)
 }
 
 type pendingApproval struct {
@@ -87,7 +87,7 @@ func (e *Engine) requestExceptionalApproval(
 	step workflow.CompiledStep,
 	attemptID string,
 ) (bool, error) {
-	decision, required, err := e.approvalPolicy.EvaluateException(ctx, ApprovalExceptionRequest{
+	decision, err := e.approvalPolicy.EvaluateException(ctx, ApprovalExceptionRequest{
 		Step:      step,
 		Snapshot:  e.Snapshot(),
 		AttemptID: attemptID,
@@ -98,7 +98,7 @@ func (e *Engine) requestExceptionalApproval(
 		return false, err
 	}
 
-	if !required {
+	if decision == nil {
 		return false, nil
 	}
 
@@ -129,7 +129,7 @@ func (e *Engine) requestExceptionalApproval(
 		Summary:           summary,
 		Trigger:           ApprovalTriggerPolicy,
 		Status:            adapters.ExecutionStateWaitingApproval,
-		Decision:          decision,
+		Decision:          *decision,
 	})
 }
 
@@ -384,8 +384,8 @@ func (p approvalModePolicy) DecideGate(_ context.Context, request ApprovalGateRe
 func (approvalModePolicy) EvaluateException(
 	_ context.Context,
 	_ ApprovalExceptionRequest,
-) (ApprovalDecisionResult, bool, error) {
-	return ApprovalDecisionResult{}, false, nil
+) (*ApprovalDecisionResult, error) {
+	return nil, nil
 }
 
 func defaultApprovalSummary(step workflow.CompiledStep, status adapters.ExecutionState) string {

@@ -20,40 +20,46 @@ type runtimeWiring struct {
 	WorkingDir    string
 }
 
+type executionContext struct {
+	repoPath   string
+	workingDir string
+}
+
 func buildRuntimeWiring(runStore *store.Store, flags *sharedFlags) (runtimeWiring, error) {
 	if runStore == nil {
 		return runtimeWiring{}, errors.New("buildRuntimeWiring: run store is required")
 	}
 
-	repoPath, workingDir, err := resolveExecutionContext(runStore, flags)
+	context, err := resolveExecutionContext(runStore, flags)
 	if err != nil {
 		return runtimeWiring{}, err
 	}
 
 	return runtimeWiring{
 		LookupAdapter: defaultAdapterLookup(),
-		CommandRunner: newSupervisorCommandRunner(runStore, workingDir, providerTimeout(flags)),
-		RepoPath:      repoPath,
-		WorkingDir:    workingDir,
+		CommandRunner: newSupervisorCommandRunner(runStore, context.workingDir, providerTimeout(flags)),
+		RepoPath:      context.repoPath,
+		WorkingDir:    context.workingDir,
 	}, nil
 }
 
-func resolveExecutionContext(runStore *store.Store, flags *sharedFlags) (string, string, error) {
+func resolveExecutionContext(runStore *store.Store, flags *sharedFlags) (*executionContext, error) {
 	if runStore == nil {
-		return "", "", errors.New("resolveExecutionContext: run store is required")
+		return nil, errors.New("resolveExecutionContext: run store is required")
 	}
 
 	if flags != nil && strings.TrimSpace(flags.repo) != "" {
 		repoPath, err := filepath.Abs(filepath.Clean(flags.repo))
 		if err != nil {
-			return "", "", err
+			return nil, err
 		}
 
-		return repoPath, repoPath, nil
+		return &executionContext{repoPath: repoPath, workingDir: repoPath}, nil
 	}
 
-	checkpoint, _, err := runStore.LoadCheckpoint()
-	if err == nil && checkpoint != nil {
+	checkpointResult, err := runStore.LoadCheckpoint()
+	if err == nil && checkpointResult.Checkpoint != nil {
+		checkpoint := checkpointResult.Checkpoint
 		repoPath := strings.TrimSpace(checkpoint.RepoPath)
 		workingDir := strings.TrimSpace(checkpoint.WorkingDir)
 
@@ -66,16 +72,16 @@ func resolveExecutionContext(runStore *store.Store, flags *sharedFlags) (string,
 		}
 
 		if repoPath != "" || workingDir != "" {
-			return repoPath, workingDir, nil
+			return &executionContext{repoPath: repoPath, workingDir: workingDir}, nil
 		}
 	}
 
 	workingDir, err := filepath.Abs(".")
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 
-	return workingDir, workingDir, nil
+	return &executionContext{repoPath: workingDir, workingDir: workingDir}, nil
 }
 
 func providerTimeout(flags *sharedFlags) time.Duration {

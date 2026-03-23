@@ -20,6 +20,12 @@ type sharedFlags struct {
 	approval        string
 	providerTimeout time.Duration
 	allowDirty      bool
+	verbose         bool
+}
+
+type parsedSharedFlagsResult struct {
+	flags         *sharedFlags
+	remainingArgs []string
 }
 
 var (
@@ -80,7 +86,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer) error {
 
 	return nil
 }
-func parseSharedFlags(commandName string, args []string, stdout io.Writer) (*sharedFlags, []string, error) {
+func parseSharedFlags(commandName string, args []string, stdout io.Writer) (*parsedSharedFlagsResult, error) {
 	fs := flag.NewFlagSet(commandName, flag.ContinueOnError)
 	fs.SetOutput(stdout)
 
@@ -90,6 +96,7 @@ func parseSharedFlags(commandName string, args []string, stdout io.Writer) (*sha
 	fs.StringVar(&flags.approval, "approval", "", "Approval mode")
 	fs.DurationVar(&flags.providerTimeout, "provider-timeout", 0, "Provider timeout (for example: 30s, 2m)")
 	fs.BoolVar(&flags.allowDirty, "allow-dirty", false, "Allow dirty repository state")
+	fs.BoolVar(&flags.verbose, "v", false, "Enable verbose logging")
 
 	fs.Usage = func() {
 		_, _ = fmt.Fprintf(stdout, "Usage: cogito %s [flags]\n", commandName)
@@ -99,17 +106,17 @@ func parseSharedFlags(commandName string, args []string, stdout io.Writer) (*sha
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			return nil, nil, nil
+			return nil, nil
 		}
 
-		return nil, nil, err
+		return nil, err
 	}
 
 	if strings.TrimSpace(flags.stateDir) == "" {
 		flags.stateDir = defaultStateDir()
 	}
 
-	return &flags, fs.Args(), nil
+	return &parsedSharedFlagsResult{flags: &flags, remainingArgs: fs.Args()}, nil
 }
 
 func defaultStateDir() string {

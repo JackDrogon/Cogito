@@ -12,6 +12,17 @@ import (
 	"github.com/JackDrogon/Cogito/internal/workflow"
 )
 
+type existingRunStoreResult struct {
+	store *store.Store
+	runID string
+}
+
+type replayInput struct {
+	runID    string
+	compiled *workflow.CompiledWorkflow
+	events   []store.Event
+}
+
 func latestRunFailure(runStore *store.Store) error {
 	if runStore == nil {
 		return errors.New("latestRunFailure: run store is required")
@@ -32,37 +43,37 @@ func latestRunFailure(runStore *store.Store) error {
 	return errors.New("latestRunFailure: run failed with no error message")
 }
 
-func openExistingRunStore(stateDir string) (*store.Store, string, error) {
+func openExistingRunStore(stateDir string) (*existingRunStoreResult, error) {
 	ref, err := newRunStateRef(stateDir)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 
 	runStore, err := store.OpenExisting(ref.baseDir, ref.runID)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 
-	return runStore, ref.runID, nil
+	return &existingRunStoreResult{store: runStore, runID: ref.runID}, nil
 }
 
-func loadReplayInput(eventsPath string) (string, *workflow.CompiledWorkflow, []store.Event, error) {
+func loadReplayInput(eventsPath string) (*replayInput, error) {
 	request, err := newReplayRequest(eventsPath)
 	if err != nil {
-		return "", nil, nil, err
+		return nil, err
 	}
 
 	compiled, err := workflow.LoadResolvedFile(filepath.Join(request.runDir, "workflow.json"))
 	if err != nil {
-		return "", nil, nil, err
+		return nil, err
 	}
 
 	events, err := store.ReadEventsFile(request.eventsPath)
 	if err != nil {
-		return "", nil, nil, err
+		return nil, err
 	}
 
-	return request.runID, compiled, events, nil
+	return &replayInput{runID: request.runID, compiled: compiled, events: events}, nil
 }
 
 func isMissingRunStateError(err error) bool {

@@ -577,11 +577,11 @@ func TestApprovalTriggerSources(t *testing.T) {
 					decideGate: func(_ context.Context, request ApprovalGateRequest) (ApprovalDecisionResult, error) {
 						return ApprovalDecisionResult{Decision: ApprovalDecisionWait, Summary: request.Summary}, nil
 					},
-					evaluateException: func(_ context.Context, request ApprovalExceptionRequest) (ApprovalDecisionResult, bool, error) {
+					evaluateException: func(_ context.Context, request ApprovalExceptionRequest) (*ApprovalDecisionResult, error) {
 						if request.Step.ID == "ship" {
-							return ApprovalDecisionResult{Decision: ApprovalDecisionWait, Summary: "policy approval required"}, true, nil
+							return &ApprovalDecisionResult{Decision: ApprovalDecisionWait, Summary: "policy approval required"}, nil
 						}
-						return ApprovalDecisionResult{}, false, nil
+						return nil, nil
 					},
 				})
 			},
@@ -1155,7 +1155,7 @@ type snapshotSpec struct {
 
 type testApprovalPolicy struct {
 	decideGate        func(context.Context, ApprovalGateRequest) (ApprovalDecisionResult, error)
-	evaluateException func(context.Context, ApprovalExceptionRequest) (ApprovalDecisionResult, bool, error)
+	evaluateException func(context.Context, ApprovalExceptionRequest) (*ApprovalDecisionResult, error)
 }
 
 func (p testApprovalPolicy) DecideGate(ctx context.Context, request ApprovalGateRequest) (ApprovalDecisionResult, error) {
@@ -1166,12 +1166,12 @@ func (p testApprovalPolicy) DecideGate(ctx context.Context, request ApprovalGate
 	return ApprovalDecisionResult{Decision: ApprovalDecisionWait, Summary: request.Summary}, nil
 }
 
-func (p testApprovalPolicy) EvaluateException(ctx context.Context, request ApprovalExceptionRequest) (ApprovalDecisionResult, bool, error) {
+func (p testApprovalPolicy) EvaluateException(ctx context.Context, request ApprovalExceptionRequest) (*ApprovalDecisionResult, error) {
 	if p.evaluateException != nil {
 		return p.evaluateException(ctx, request)
 	}
 
-	return ApprovalDecisionResult{}, false, nil
+	return nil, nil
 }
 
 type commandScript struct {

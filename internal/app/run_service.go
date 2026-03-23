@@ -17,17 +17,22 @@ type existingRunSession struct {
 	engine   *runtime.Engine
 }
 
-func (runService) newRunEngine(runID string, compiled *workflow.CompiledWorkflow, runStore *store.Store, flags *sharedFlags, approvalPolicy runtime.ApprovalPolicy) (*runtime.Engine, runtimeWiring, error) {
+type runEngineResult struct {
+	engine *runtime.Engine
+	wiring runtimeWiring
+}
+
+func (runService) newRunEngine(runID string, compiled *workflow.CompiledWorkflow, runStore *store.Store, flags *sharedFlags, approvalPolicy runtime.ApprovalPolicy) (*runEngineResult, error) {
 	if runStore == nil {
-		return nil, runtimeWiring{}, errors.New("runService.newRunEngine: run store is required")
+		return nil, errors.New("runService.newRunEngine: run store is required")
 	}
 	if compiled == nil {
-		return nil, runtimeWiring{}, errors.New("runService.newRunEngine: compiled workflow is required")
+		return nil, errors.New("runService.newRunEngine: compiled workflow is required")
 	}
 
 	wiring, err := buildRuntimeWiring(runStore, flags)
 	if err != nil {
-		return nil, runtimeWiring{}, err
+		return nil, err
 	}
 
 	engine, err := runtime.NewEngine(runID, compiled, runtime.MachineDependencies{
@@ -39,14 +44,14 @@ func (runService) newRunEngine(runID string, compiled *workflow.CompiledWorkflow
 		WorkingDir:     wiring.WorkingDir,
 	})
 	if err != nil {
-		return nil, runtimeWiring{}, err
+		return nil, err
 	}
 
-	return engine, wiring, nil
+	return &runEngineResult{engine: engine, wiring: wiring}, nil
 }
 
 func (s runService) openExistingRunSession(stateDir string, flags *sharedFlags) (existingRunSession, error) {
-	runStore, runID, err := openExistingRunStore(stateDir)
+	runStoreResult, err := openExistingRunStore(stateDir)
 	if err != nil {
 		if isMissingRunStateError(err) {
 			return existingRunSession{}, errors.New("run state not found: " + stateDir)
@@ -54,6 +59,8 @@ func (s runService) openExistingRunSession(stateDir string, flags *sharedFlags) 
 
 		return existingRunSession{}, err
 	}
+	runStore := runStoreResult.store
+	runID := runStoreResult.runID
 
 	compiled, err := workflow.LoadResolvedFile(runStore.Layout().WorkflowPath)
 	if err != nil {
@@ -64,12 +71,12 @@ func (s runService) openExistingRunSession(stateDir string, flags *sharedFlags) 
 		return existingRunSession{}, err
 	}
 
-	engine, _, err := s.newRunEngine(runID, compiled, runStore, flags, nil)
+	runEngine, err := s.newRunEngine(runID, compiled, runStore, flags, nil)
 	if err != nil {
 		return existingRunSession{}, err
 	}
 
-	return existingRunSession{store: runStore, compiled: compiled, engine: engine}, nil
+	return existingRunSession{store: runStore, compiled: compiled, engine: runEngine.engine}, nil
 }
 
 func (runService) executeUntilSettled(ctx context.Context, engine *runtime.Engine) error {
