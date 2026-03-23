@@ -85,7 +85,7 @@ func TestTransitionMatrix(t *testing.T) {
 }
 
 func TestDeterministicTransitions(t *testing.T) {
-	fixture := newRuntimeMachineFixture(t, runtimeSpec(), map[string]commandScript{
+	fixture := newRuntimeMachineFixture(runtimeMachineFixtureParams{Test: t, Spec: runtimeSpec(), CommandScripts: map[string]commandScript{
 		"prepare": {
 			Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "prepare started"},
 			Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "prepare ok"}},
@@ -94,14 +94,14 @@ func TestDeterministicTransitions(t *testing.T) {
 			Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "notify started"},
 			Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "notify ok"}},
 		},
-	}, adapters.NewFakeAdapter(adapters.FakeConfig{
+	}, Adapter: adapters.NewFakeAdapter(adapters.FakeConfig{
 		Scripts: map[string]adapters.FakeScript{
 			"attempt-review-01": {
 				Start: adapters.FakeSnapshot{State: adapters.ExecutionStateRunning, Summary: "review started"},
 				Polls: []adapters.FakeSnapshot{{State: adapters.ExecutionStateSucceeded, Summary: "review ok"}},
 			},
 		},
-	}))
+	})})
 
 	if err := fixture.engine.ExecuteAll(t.Context()); err != nil {
 		t.Fatalf("ExecuteAll() error = %v", err)
@@ -163,7 +163,7 @@ func TestDeterministicTransitions(t *testing.T) {
 }
 
 func TestReplayProducesSameTransitions(t *testing.T) {
-	fixture := newRuntimeMachineFixture(t, runtimeSpec(), map[string]commandScript{
+	fixture := newRuntimeMachineFixture(runtimeMachineFixtureParams{Test: t, Spec: runtimeSpec(), CommandScripts: map[string]commandScript{
 		"prepare": {
 			Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "prepare started"},
 			Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "prepare ok"}},
@@ -172,14 +172,14 @@ func TestReplayProducesSameTransitions(t *testing.T) {
 			Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "notify started"},
 			Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "notify ok"}},
 		},
-	}, adapters.NewFakeAdapter(adapters.FakeConfig{
+	}, Adapter: adapters.NewFakeAdapter(adapters.FakeConfig{
 		Scripts: map[string]adapters.FakeScript{
 			"attempt-review-01": {
 				Start: adapters.FakeSnapshot{State: adapters.ExecutionStateRunning, Summary: "review started"},
 				Polls: []adapters.FakeSnapshot{{State: adapters.ExecutionStateSucceeded, Summary: "review ok"}},
 			},
 		},
-	}))
+	})})
 
 	if err := fixture.engine.ExecuteAll(t.Context()); err != nil {
 		t.Fatalf("ExecuteAll() error = %v", err)
@@ -205,12 +205,12 @@ func TestReplayProducesSameTransitions(t *testing.T) {
 }
 
 func TestDuplicateResumeRejected(t *testing.T) {
-	fixture := newRuntimeMachineFixture(t, runtimeSpec(), map[string]commandScript{
+	fixture := newRuntimeMachineFixture(runtimeMachineFixtureParams{Test: t, Spec: runtimeSpec(), CommandScripts: map[string]commandScript{
 		"prepare": {
 			Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "prepare started"},
 			Polls: []snapshotSpec{{State: adapters.ExecutionStateInterrupted, Summary: "prepare interrupted"}},
 		},
-	}, nil)
+	}})
 
 	if err := fixture.engine.ExecuteAll(t.Context()); err != nil {
 		t.Fatalf("ExecuteAll() error = %v", err)
@@ -247,7 +247,7 @@ func TestDuplicateResumeRejected(t *testing.T) {
 }
 
 func TestTopologicalSchedulingRespectsDependencies(t *testing.T) {
-	fixture := newRuntimeMachineFixture(t, dependencySpec(), map[string]commandScript{
+	fixture := newRuntimeMachineFixture(runtimeMachineFixtureParams{Test: t, Spec: dependencySpec(), CommandScripts: map[string]commandScript{
 		"build": {
 			Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "build started"},
 			Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "build ok"}},
@@ -260,7 +260,7 @@ func TestTopologicalSchedulingRespectsDependencies(t *testing.T) {
 			Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "release started"},
 			Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "release ok"}},
 		},
-	}, nil)
+	}})
 
 	if err := fixture.engine.Start(t.Context()); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -298,8 +298,8 @@ func TestReplayRejectsInvalidTransitionOrder(t *testing.T) {
 	})
 
 	_, err := Replay("run-123", compiled, []store.Event{
-		buildTestEvent(1, store.EventRunCreated, "run-123", "", "", "", eventData("", string(RunStatePending), "run created", "", "")),
-		buildTestEvent(2, store.EventStepStarted, "run-123", "prepare", "attempt-prepare-01", "", eventData(string(StepStateQueued), string(StepStateRunning), "prepare started", "session-prepare-01", "")),
+		buildTestEvent(testEventParams{Sequence: 1, EventType: store.EventRunCreated, RunID: "run-123", Data: eventData(eventDataParams{From: "", To: string(RunStatePending), Summary: "run created"})}),
+		buildTestEvent(testEventParams{Sequence: 2, EventType: store.EventStepStarted, RunID: "run-123", StepID: "prepare", AttemptID: "attempt-prepare-01", Data: eventData(eventDataParams{From: string(StepStateQueued), To: string(StepStateRunning), Summary: "prepare started", ProviderSessionID: "session-prepare-01"})}),
 	})
 	if err == nil {
 		t.Fatal("Replay() error = nil, want invalid transition order")
@@ -323,7 +323,7 @@ func TestResumeAfterApproval(t *testing.T) {
 			Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "publish ok"}},
 		},
 	}
-	fixture := newRuntimeMachineFixtureWithPolicy(t, approvalWorkflowSpec(), commandScripts, nil, newApprovalModePolicy(ApprovalModeAuto))
+	fixture := newRuntimeMachineFixtureWithPolicy(runtimeMachineFixtureParams{Test: t, Spec: approvalWorkflowSpec(), CommandScripts: commandScripts, ApprovalPolicy: newApprovalModePolicy(ApprovalModeAuto)})
 
 	if err := fixture.engine.ExecuteAll(t.Context()); err != nil {
 		t.Fatalf("ExecuteAll() before grant error = %v", err)
@@ -337,7 +337,7 @@ func TestResumeAfterApproval(t *testing.T) {
 		t.Fatalf("publish start count before grant = %d, want 0", got)
 	}
 
-	fixture = reloadRuntimeMachineFixtureWithPolicy(t, fixture, commandScripts, nil, newApprovalModePolicy(ApprovalModeAuto))
+	fixture = reloadRuntimeMachineFixtureWithPolicy(runtimeMachineFixtureParams{Test: t, CommandScripts: commandScripts, ApprovalPolicy: newApprovalModePolicy(ApprovalModeAuto)}, fixture)
 
 	reloadedSnapshot := fixture.engine.Snapshot()
 	if reloadedSnapshot.State != RunStateWaitingApproval {
@@ -386,7 +386,7 @@ func TestResumeAfterApproval(t *testing.T) {
 }
 
 func TestApprovalDenialStopsSideEffects(t *testing.T) {
-	fixture := newRuntimeMachineFixtureWithPolicy(t, approvalWorkflowSpec(), map[string]commandScript{
+	fixture := newRuntimeMachineFixtureWithPolicy(runtimeMachineFixtureParams{Test: t, Spec: approvalWorkflowSpec(), CommandScripts: map[string]commandScript{
 		"draft": {
 			Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "draft started"},
 			Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "draft ok"}},
@@ -395,7 +395,7 @@ func TestApprovalDenialStopsSideEffects(t *testing.T) {
 			Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "publish started"},
 			Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "publish ok"}},
 		},
-	}, nil, newApprovalModePolicy(ApprovalModeDeny))
+	}, ApprovalPolicy: newApprovalModePolicy(ApprovalModeDeny)})
 
 	err := fixture.engine.ExecuteAll(t.Context())
 	if err == nil {
@@ -475,7 +475,7 @@ func TestApprovalResolutionBranches(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			fixture := newRuntimeMachineFixtureWithPolicy(t, approvalWorkflowSpec(), map[string]commandScript{
+			fixture := newRuntimeMachineFixtureWithPolicy(runtimeMachineFixtureParams{Test: t, Spec: approvalWorkflowSpec(), CommandScripts: map[string]commandScript{
 				"draft": {
 					Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "draft started"},
 					Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "draft ok"}},
@@ -484,7 +484,7 @@ func TestApprovalResolutionBranches(t *testing.T) {
 					Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "publish started"},
 					Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "publish ok"}},
 				},
-			}, nil, newApprovalModePolicy(ApprovalModeAuto))
+			}, ApprovalPolicy: newApprovalModePolicy(ApprovalModeAuto)})
 
 			if err := fixture.engine.ExecuteAll(t.Context()); err != nil {
 				t.Fatalf("ExecuteAll() before resolution error = %v", err)
@@ -531,7 +531,7 @@ func TestApprovalTriggerSources(t *testing.T) {
 			name: "explicit step",
 			fixture: func(t *testing.T) runtimeMachineFixture {
 				t.Helper()
-				return newRuntimeMachineFixtureWithPolicy(t, approvalWorkflowSpec(), map[string]commandScript{
+				return newRuntimeMachineFixtureWithPolicy(runtimeMachineFixtureParams{Test: t, Spec: approvalWorkflowSpec(), CommandScripts: map[string]commandScript{
 					"draft": {
 						Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "draft started"},
 						Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "draft ok"}},
@@ -540,7 +540,7 @@ func TestApprovalTriggerSources(t *testing.T) {
 						Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "publish started"},
 						Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "publish ok"}},
 					},
-				}, nil, newApprovalModePolicy(ApprovalModeAuto))
+				}, ApprovalPolicy: newApprovalModePolicy(ApprovalModeAuto)})
 			},
 			stepID:      "legal",
 			wantTrigger: ApprovalTriggerExplicit,
@@ -549,7 +549,7 @@ func TestApprovalTriggerSources(t *testing.T) {
 			name: "adapter requested",
 			fixture: func(t *testing.T) runtimeMachineFixture {
 				t.Helper()
-				return newRuntimeMachineFixtureWithPolicy(t, adapterApprovalWorkflowSpec(), nil, adapters.NewFakeAdapter(adapters.FakeConfig{
+				return newRuntimeMachineFixtureWithPolicy(runtimeMachineFixtureParams{Test: t, Spec: adapterApprovalWorkflowSpec(), Adapter: adapters.NewFakeAdapter(adapters.FakeConfig{
 					Capabilities: adapters.CapabilityMatrix{Resume: true},
 					Scripts: map[string]adapters.FakeScript{
 						"attempt-review-01": {
@@ -559,7 +559,7 @@ func TestApprovalTriggerSources(t *testing.T) {
 							ResumePolls: []adapters.FakeSnapshot{{State: adapters.ExecutionStateSucceeded, Summary: "review ok"}},
 						},
 					},
-				}), newApprovalModePolicy(ApprovalModeAuto))
+				}), ApprovalPolicy: newApprovalModePolicy(ApprovalModeAuto)})
 			},
 			stepID:      "review",
 			wantTrigger: ApprovalTriggerAdapter,
@@ -568,12 +568,12 @@ func TestApprovalTriggerSources(t *testing.T) {
 			name: "policy exception",
 			fixture: func(t *testing.T) runtimeMachineFixture {
 				t.Helper()
-				return newRuntimeMachineFixtureWithPolicy(t, policyApprovalWorkflowSpec(), map[string]commandScript{
+				return newRuntimeMachineFixtureWithPolicy(runtimeMachineFixtureParams{Test: t, Spec: policyApprovalWorkflowSpec(), CommandScripts: map[string]commandScript{
 					"ship": {
 						Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "ship started"},
 						Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "ship ok"}},
 					},
-				}, nil, testApprovalPolicy{
+				}, ApprovalPolicy: testApprovalPolicy{
 					decideGate: func(_ context.Context, request ApprovalGateRequest) (ApprovalDecisionResult, error) {
 						return ApprovalDecisionResult{Decision: ApprovalDecisionWait, Summary: request.Summary}, nil
 					},
@@ -583,7 +583,7 @@ func TestApprovalTriggerSources(t *testing.T) {
 						}
 						return nil, nil
 					},
-				})
+				}})
 			},
 			stepID:      "ship",
 			wantTrigger: ApprovalTriggerPolicy,
@@ -799,10 +799,10 @@ func TestCancelInterruptsActiveProviderBeforePersistingRunCanceled(t *testing.T)
 	}
 
 	for _, event := range []store.Event{
-		buildTestEvent(1, store.EventRunCreated, "run-cancel", "", "", "", eventData("", string(RunStatePending), "run created", "", "")),
-		buildTestEvent(2, store.EventRunStarted, "run-cancel", "", "", "", eventData(string(RunStatePending), string(RunStateRunning), "run started", "", "")),
-		buildTestEvent(3, store.EventStepQueued, "run-cancel", "prepare", "", "", eventData(string(StepStatePending), string(StepStateQueued), "step ready", "", "")),
-		buildTestEvent(4, store.EventStepStarted, "run-cancel", "prepare", "attempt-prepare-01", "", eventData(string(StepStateQueued), string(StepStateRunning), "prepare started", "command-prepare-01", "")),
+		buildTestEvent(testEventParams{Sequence: 1, EventType: store.EventRunCreated, RunID: "run-cancel", Data: eventData(eventDataParams{From: "", To: string(RunStatePending), Summary: "run created"})}),
+		buildTestEvent(testEventParams{Sequence: 2, EventType: store.EventRunStarted, RunID: "run-cancel", Data: eventData(eventDataParams{From: string(RunStatePending), To: string(RunStateRunning), Summary: "run started"})}),
+		buildTestEvent(testEventParams{Sequence: 3, EventType: store.EventStepQueued, RunID: "run-cancel", StepID: "prepare", Data: eventData(eventDataParams{From: string(StepStatePending), To: string(StepStateQueued), Summary: "step ready"})}),
+		buildTestEvent(testEventParams{Sequence: 4, EventType: store.EventStepStarted, RunID: "run-cancel", StepID: "prepare", AttemptID: "attempt-prepare-01", Data: eventData(eventDataParams{From: string(StepStateQueued), To: string(StepStateRunning), Summary: "prepare started", ProviderSessionID: "command-prepare-01"})}),
 	} {
 		if _, err := runStore.AppendEvent(event); err != nil {
 			t.Fatalf("AppendEvent() error = %v", err)
@@ -862,9 +862,9 @@ func TestNewEngineReplaysEventsWhenCheckpointSequenceIsStale(t *testing.T) {
 	}
 
 	for _, event := range []store.Event{
-		buildTestEvent(1, store.EventRunCreated, "run-stale", "", "", "", eventData("", string(RunStatePending), "run created", "", "")),
-		buildTestEvent(2, store.EventRunStarted, "run-stale", "", "", "", eventData(string(RunStatePending), string(RunStateRunning), "run started", "", "")),
-		buildTestEvent(3, store.EventRunPaused, "run-stale", "", "", "", eventData(string(RunStateRunning), string(RunStatePaused), "operator pause", "", "")),
+		buildTestEvent(testEventParams{Sequence: 1, EventType: store.EventRunCreated, RunID: "run-stale", Data: eventData(eventDataParams{From: "", To: string(RunStatePending), Summary: "run created"})}),
+		buildTestEvent(testEventParams{Sequence: 2, EventType: store.EventRunStarted, RunID: "run-stale", Data: eventData(eventDataParams{From: string(RunStatePending), To: string(RunStateRunning), Summary: "run started"})}),
+		buildTestEvent(testEventParams{Sequence: 3, EventType: store.EventRunPaused, RunID: "run-stale", Data: eventData(eventDataParams{From: string(RunStateRunning), To: string(RunStatePaused), Summary: "operator pause"})}),
 	} {
 		if _, err := runStore.AppendEvent(event); err != nil {
 			t.Fatalf("AppendEvent() error = %v", err)
@@ -875,7 +875,7 @@ func TestNewEngineReplaysEventsWhenCheckpointSequenceIsStale(t *testing.T) {
 		RunID:        "run-stale",
 		State:        string(RunStateRunning),
 		LastSequence: 2,
-		UpdatedAt:    eventData("", "", "", "", "")[dataOccurredAt],
+		UpdatedAt:    eventData(eventDataParams{})[dataOccurredAt],
 		Steps: map[string]store.StepCheckpoint{
 			"prepare": {State: string(StepStatePending)},
 		},
@@ -908,41 +908,67 @@ type runtimeMachineFixture struct {
 	runner   *testCommandRunner
 }
 
-func newRuntimeMachineFixture(t *testing.T, spec *workflow.Spec, commandScripts map[string]commandScript, adapter adapters.Adapter) runtimeMachineFixture {
-	t.Helper()
-	return newRuntimeMachineFixtureWithPolicy(t, spec, commandScripts, adapter, nil)
+type runtimeMachineFixtureParams struct {
+	Test           *testing.T
+	Spec           *workflow.Spec
+	CommandScripts map[string]commandScript
+	Adapter        adapters.Adapter
+	ApprovalPolicy ApprovalPolicy
 }
 
-func newRuntimeMachineFixtureWithPolicy(t *testing.T, spec *workflow.Spec, commandScripts map[string]commandScript, adapter adapters.Adapter, approvalPolicy ApprovalPolicy) runtimeMachineFixture {
-	t.Helper()
+type testEventParams struct {
+	Sequence   int64
+	EventType  store.EventType
+	RunID      string
+	StepID     string
+	AttemptID  string
+	ApprovalID string
+	Data       map[string]string
+}
 
-	compiled := compileSpec(t, spec)
+type eventDataParams struct {
+	From              string
+	To                string
+	Summary           string
+	ProviderSessionID string
+	NormalizedStatus  string
+}
+
+func newRuntimeMachineFixture(params runtimeMachineFixtureParams) runtimeMachineFixture {
+	params.Test.Helper()
+	return newRuntimeMachineFixtureWithPolicy(params)
+}
+
+func newRuntimeMachineFixtureWithPolicy(params runtimeMachineFixtureParams) runtimeMachineFixture {
+	params.Test.Helper()
+
+	compiled := compileSpec(params.Test, params.Spec)
 	runID := "run-123"
-	runStore, err := store.Open(filepath.Join(t.TempDir(), "runs"), runID)
+	runStore, err := store.Open(filepath.Join(params.Test.TempDir(), "runs"), runID)
 	if err != nil {
-		t.Fatalf("store.Open() error = %v", err)
+		params.Test.Fatalf("store.Open() error = %v", err)
 	}
 
 	ids := newTestIDGenerator()
-	runner := newTestCommandRunner(commandScripts)
+	runner := newTestCommandRunner(params.CommandScripts)
 	engine, err := NewEngine(runID, compiled, MachineDependencies{
 		Clock: func() time.Time {
 			return time.Date(2026, time.March, 22, 15, 4, 5, 0, time.UTC)
 		},
 		IDs:            ids,
 		Store:          runStore,
-		ApprovalPolicy: approvalPolicy,
+		ApprovalPolicy: params.ApprovalPolicy,
 		CommandRunner:  runner,
 		LookupAdapter: func(step workflow.CompiledStep) (adapters.Adapter, error) {
-			if adapter == nil {
+			if params.Adapter == nil {
 				return nil, fmt.Errorf("unexpected agent step %s", step.ID)
 			}
 
-			return adapter, nil
+			return params.Adapter, nil
 		},
 	})
 	if err != nil {
-		t.Fatalf("NewEngine() error = %v", err)
+		params.Test.Fatalf("NewEngine() error = %v", err)
 	}
 
 	return runtimeMachineFixture{
@@ -1002,33 +1028,33 @@ func TestNewEngineUsesInjectedDriverFactory(t *testing.T) {
 	}
 }
 
-func reloadRuntimeMachineFixtureWithPolicy(t *testing.T, fixture runtimeMachineFixture, commandScripts map[string]commandScript, adapter adapters.Adapter, approvalPolicy ApprovalPolicy) runtimeMachineFixture {
-	t.Helper()
+func reloadRuntimeMachineFixtureWithPolicy(params runtimeMachineFixtureParams, fixture runtimeMachineFixture) runtimeMachineFixture {
+	params.Test.Helper()
 
 	runStore, err := store.Open(fixture.store.Layout().BaseDir, fixture.store.Layout().RunID)
 	if err != nil {
-		t.Fatalf("store.Open() reload error = %v", err)
+		params.Test.Fatalf("store.Open() reload error = %v", err)
 	}
 
-	runner := newTestCommandRunner(commandScripts)
+	runner := newTestCommandRunner(params.CommandScripts)
 	engine, err := NewEngine(fixture.runID, fixture.compiled, MachineDependencies{
 		Clock: func() time.Time {
 			return time.Date(2026, time.March, 22, 15, 4, 5, 0, time.UTC)
 		},
 		IDs:            newTestIDGenerator(),
 		Store:          runStore,
-		ApprovalPolicy: approvalPolicy,
+		ApprovalPolicy: params.ApprovalPolicy,
 		CommandRunner:  runner,
 		LookupAdapter: func(step workflow.CompiledStep) (adapters.Adapter, error) {
-			if adapter == nil {
+			if params.Adapter == nil {
 				return nil, fmt.Errorf("unexpected agent step %s", step.ID)
 			}
 
-			return adapter, nil
+			return params.Adapter, nil
 		},
 	})
 	if err != nil {
-		t.Fatalf("NewEngine() reload error = %v", err)
+		params.Test.Fatalf("NewEngine() reload error = %v", err)
 	}
 
 	fixture.store = runStore
@@ -1322,33 +1348,33 @@ func (r *interruptRecordingCommandRunner) NormalizeResult(_ context.Context, exe
 	return &adapters.StepResult{Handle: execution.Handle, Status: execution.State, Summary: execution.Summary}, nil
 }
 
-func buildTestEvent(sequence int64, eventType store.EventType, runID, stepID, attemptID, approvalID string, data map[string]string) store.Event {
+func buildTestEvent(params testEventParams) store.Event {
 	return store.Event{
-		Sequence:   sequence,
-		Type:       eventType,
-		RunID:      runID,
-		StepID:     stepID,
-		AttemptID:  attemptID,
-		ApprovalID: approvalID,
-		Message:    data[dataSummary],
-		Data:       data,
+		Sequence:   params.Sequence,
+		Type:       params.EventType,
+		RunID:      params.RunID,
+		StepID:     params.StepID,
+		AttemptID:  params.AttemptID,
+		ApprovalID: params.ApprovalID,
+		Message:    params.Data[dataSummary],
+		Data:       params.Data,
 	}
 }
 
-func eventData(from, to, summary, providerSessionID, normalizedStatus string) map[string]string {
+func eventData(params eventDataParams) map[string]string {
 	data := map[string]string{
 		dataOccurredAt: time.Date(2026, time.March, 22, 15, 4, 5, 0, time.UTC).Format(time.RFC3339Nano),
-		dataFromState:  from,
-		dataToState:    to,
-		dataSummary:    summary,
+		dataFromState:  params.From,
+		dataToState:    params.To,
+		dataSummary:    params.Summary,
 	}
 
-	if providerSessionID != "" {
-		data[dataProviderSessionID] = providerSessionID
+	if params.ProviderSessionID != "" {
+		data[dataProviderSessionID] = params.ProviderSessionID
 	}
 
-	if normalizedStatus != "" {
-		data[dataNormalizedStatus] = normalizedStatus
+	if params.NormalizedStatus != "" {
+		data[dataNormalizedStatus] = params.NormalizedStatus
 	}
 
 	return data

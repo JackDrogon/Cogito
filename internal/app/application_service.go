@@ -120,7 +120,13 @@ func (s applicationService) RunWorkflow(ctx context.Context, input RunWorkflowIn
 		return RunWorkflowOutput{}, err
 	}
 
-	runEngine, err := s.runs.newRunEngine(stateRef.runID, compiled, runStore, input.Flags, runtime.NewApprovalModePolicy(approvalMode))
+	runEngine, err := s.runs.newRunEngine(newRunEngineInput{
+		RunID:          stateRef.runID,
+		Compiled:       compiled,
+		RunStore:       runStore,
+		Flags:          input.Flags,
+		ApprovalPolicy: runtime.NewApprovalModePolicy(approvalMode),
+	})
 	if err != nil {
 		return RunWorkflowOutput{}, err
 	}

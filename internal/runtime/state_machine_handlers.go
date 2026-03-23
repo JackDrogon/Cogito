@@ -8,13 +8,22 @@ import (
 )
 
 type stateMachineEventHandler interface {
-	Apply(compiled *workflow.CompiledWorkflow, snapshot *Snapshot, transitions *[]Transition, event store.Event, data map[string]string, code ErrorCode) error
+	Apply(request stateMachineEventRequest) error
 }
 
-type stateMachineEventHandlerFunc func(compiled *workflow.CompiledWorkflow, snapshot *Snapshot, transitions *[]Transition, event store.Event, data map[string]string, code ErrorCode) error
+type stateMachineEventRequest struct {
+	Compiled    *workflow.CompiledWorkflow
+	Snapshot    *Snapshot
+	Transitions *[]Transition
+	Event       store.Event
+	Data        map[string]string
+	Code        ErrorCode
+}
 
-func (f stateMachineEventHandlerFunc) Apply(compiled *workflow.CompiledWorkflow, snapshot *Snapshot, transitions *[]Transition, event store.Event, data map[string]string, code ErrorCode) error {
-	return f(compiled, snapshot, transitions, event, data, code)
+type stateMachineEventHandlerFunc func(request stateMachineEventRequest) error
+
+func (f stateMachineEventHandlerFunc) Apply(request stateMachineEventRequest) error {
+	return f(request)
 }
 
 func lookupStateMachineEventHandler(eventType store.EventType) (stateMachineEventHandler, error) {

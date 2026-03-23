@@ -135,33 +135,39 @@ func (e *Engine) requestExceptionalApproval(
 
 func (e *Engine) requestApproval(
 	ctx context.Context,
-	step workflow.CompiledStep,
-	attemptID, providerSessionID, summary string,
-	trigger ApprovalTrigger,
-	status adapters.ExecutionState,
+	params approvalGateParams,
 ) error {
 	decision, err := e.approvalPolicy.DecideGate(ctx, ApprovalGateRequest{
-		Trigger:           trigger,
-		Step:              step,
+		Trigger:           params.Trigger,
+		Step:              params.Step,
 		Snapshot:          e.Snapshot(),
-		AttemptID:         attemptID,
-		ProviderSessionID: providerSessionID,
-		Summary:           summary,
-		Status:            status,
+		AttemptID:         params.AttemptID,
+		ProviderSessionID: params.ProviderSessionID,
+		Summary:           params.Summary,
+		Status:            params.Status,
 	})
 	if err != nil {
 		return err
 	}
 
 	return e.requestApprovalWithDecision(ctx, ApprovalRequestParams{
-		Step:              step,
-		AttemptID:         attemptID,
-		ProviderSessionID: providerSessionID,
-		Summary:           summary,
-		Trigger:           trigger,
-		Status:            status,
+		Step:              params.Step,
+		AttemptID:         params.AttemptID,
+		ProviderSessionID: params.ProviderSessionID,
+		Summary:           params.Summary,
+		Trigger:           params.Trigger,
+		Status:            params.Status,
 		Decision:          decision,
 	})
+}
+
+type approvalGateParams struct {
+	Step              workflow.CompiledStep
+	AttemptID         string
+	ProviderSessionID string
+	Summary           string
+	Trigger           ApprovalTrigger
+	Status            adapters.ExecutionState
 }
 
 func (e *Engine) requestApprovalWithDecision(
@@ -179,12 +185,12 @@ func (e *Engine) requestApprovalWithDecision(
 		return err
 	}
 
-	if err := e.persistRunTransition(
-		store.EventRunWaitingApproval,
-		RunStateRunning,
-		RunStateWaitingApproval,
-		params.Summary,
-	); err != nil {
+	if err := e.persistRunTransition(RunTransitionParams{
+		EventType: store.EventRunWaitingApproval,
+		From:      RunStateRunning,
+		To:        RunStateWaitingApproval,
+		Message:   params.Summary,
+	}); err != nil {
 		return err
 	}
 
@@ -217,7 +223,11 @@ func (e *Engine) resolvePendingApproval(ctx context.Context, decision ApprovalDe
 		return err
 	}
 
-	return handler.Handle(ctx, e, pending, resolveApprovalSummary(decision, pending.Step, message))
+	return handler.Handle(ctx, approvalDecisionRequest{
+		Engine:  e,
+		Pending: pending,
+		Summary: resolveApprovalSummary(decision, pending.Step, message),
+	})
 }
 
 func (e *Engine) continueApprovedStep(ctx context.Context, pending pendingApproval) error {
@@ -244,7 +254,12 @@ func (e *Engine) continueApprovedStep(ctx context.Context, pending pendingApprov
 		return err
 	}
 
-	execution, err := strategy.Continue(ctx, e, pending, driver, handle)
+	execution, err := strategy.Continue(ctx, approvalContinuationRequest{
+		Engine:  e,
+		Pending: pending,
+		Driver:  driver,
+		Handle:  handle,
+	})
 	if err != nil {
 		return e.failRunForExecutionError(FailRunParams{
 			StepID:            pending.Step.ID,
@@ -257,7 +272,12 @@ func (e *Engine) continueApprovedStep(ctx context.Context, pending pendingApprov
 
 	execution = finalizeApprovedExecution(execution, pending.ProviderSessionID)
 
-	return e.continueExecution(ctx, pending.Step, pending.AttemptID, driver, execution)
+	return e.continueExecution(ctx, executionContinuationRequest{
+		Step:      pending.Step,
+		AttemptID: pending.AttemptID,
+		Driver:    driver,
+		Execution: execution,
+	})
 }
 
 func (e *Engine) finalizeRunningState() error {
@@ -270,12 +290,12 @@ func (e *Engine) finalizeRunningState() error {
 	}
 
 	if e.allStepsSucceeded() {
-		return e.persistRunTransition(
-			store.EventRunSucceeded,
-			RunStateRunning,
-			RunStateSucceeded,
-			"run succeeded",
-		)
+		return e.persistRunTransition(RunTransitionParams{
+			EventType: store.EventRunSucceeded,
+			From:      RunStateRunning,
+			To:        RunStateSucceeded,
+			Message:   "run succeeded",
+		})
 	}
 
 	return nil

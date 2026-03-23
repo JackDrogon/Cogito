@@ -9,17 +9,27 @@ import (
 )
 
 type approvalContinuationStrategy interface {
-	Continue(ctx context.Context, engine *Engine, pending pendingApproval, driver stepDriver, handle adapters.ExecutionHandle) (*adapters.Execution, error)
+	Continue(ctx context.Context, request approvalContinuationRequest) (*adapters.Execution, error)
 	FailureMessage() string
 }
 
 type approvalContinuationStrategyFunc struct {
-	continueFn     func(ctx context.Context, engine *Engine, pending pendingApproval, driver stepDriver, handle adapters.ExecutionHandle) (*adapters.Execution, error)
+	continueFn     func(ctx context.Context, request approvalContinuationRequest) (*adapters.Execution, error)
 	failureMessage string
 }
 
-func (s approvalContinuationStrategyFunc) Continue(ctx context.Context, engine *Engine, pending pendingApproval, driver stepDriver, handle adapters.ExecutionHandle) (*adapters.Execution, error) {
-	return s.continueFn(ctx, engine, pending, driver, handle)
+type approvalContinuationRequest struct {
+	Engine  *Engine
+	Pending pendingApproval
+	Driver  stepDriver
+	Handle  adapters.ExecutionHandle
+}
+
+func (s approvalContinuationStrategyFunc) Continue(
+	ctx context.Context,
+	request approvalContinuationRequest,
+) (*adapters.Execution, error) {
+	return s.continueFn(ctx, request)
 }
 
 func (s approvalContinuationStrategyFunc) FailureMessage() string {
@@ -28,20 +38,32 @@ func (s approvalContinuationStrategyFunc) FailureMessage() string {
 
 var approvalContinuationStrategies = map[ApprovalTrigger]approvalContinuationStrategy{
 	ApprovalTriggerExplicit: approvalContinuationStrategyFunc{
-		continueFn: func(ctx context.Context, engine *Engine, pending pendingApproval, driver stepDriver, handle adapters.ExecutionHandle) (*adapters.Execution, error) {
-			return driver.Resume(ctx, pending.Step, handle, engine.Snapshot())
+		continueFn: func(ctx context.Context, request approvalContinuationRequest) (*adapters.Execution, error) {
+			return request.Driver.Resume(ctx, stepResumeRequest{
+				Step:     request.Pending.Step,
+				Handle:   request.Handle,
+				Snapshot: request.Engine.Snapshot(),
+			})
 		},
 		failureMessage: "step resume failed after approval",
 	},
 	ApprovalTriggerAdapter: approvalContinuationStrategyFunc{
-		continueFn: func(ctx context.Context, engine *Engine, pending pendingApproval, driver stepDriver, handle adapters.ExecutionHandle) (*adapters.Execution, error) {
-			return driver.Resume(ctx, pending.Step, handle, engine.Snapshot())
+		continueFn: func(ctx context.Context, request approvalContinuationRequest) (*adapters.Execution, error) {
+			return request.Driver.Resume(ctx, stepResumeRequest{
+				Step:     request.Pending.Step,
+				Handle:   request.Handle,
+				Snapshot: request.Engine.Snapshot(),
+			})
 		},
 		failureMessage: "step resume failed after approval",
 	},
 	ApprovalTriggerPolicy: approvalContinuationStrategyFunc{
-		continueFn: func(ctx context.Context, engine *Engine, pending pendingApproval, driver stepDriver, _ adapters.ExecutionHandle) (*adapters.Execution, error) {
-			return driver.Start(ctx, pending.Step, pending.AttemptID, engine.Snapshot())
+		continueFn: func(ctx context.Context, request approvalContinuationRequest) (*adapters.Execution, error) {
+			return request.Driver.Start(ctx, stepStartRequest{
+				Step:      request.Pending.Step,
+				AttemptID: request.Pending.AttemptID,
+				Snapshot:  request.Engine.Snapshot(),
+			})
 		},
 		failureMessage: "step start failed after approval",
 	},
@@ -54,7 +76,10 @@ func lookupApprovalContinuationStrategy(trigger ApprovalTrigger) (approvalContin
 	}
 
 	if strategy == nil {
-		return nil, newError(ErrorCodeExecution, fmt.Sprintf("approval continuation strategy is required for %q", trigger))
+		return nil, newError(
+			ErrorCodeExecution,
+			fmt.Sprintf("approval continuation strategy is required for %q", trigger),
+		)
 	}
 
 	return strategy, nil

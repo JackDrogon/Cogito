@@ -26,6 +26,14 @@ type eventError struct {
 	Message string `json:"message"`
 }
 
+type executionParams struct {
+	Request     shared.StartRequest
+	Version     string
+	Events      []event
+	LastMessage []byte
+	Stderr      []byte
+}
+
 func parseEvents(payload []byte) ([]event, error) {
 	if len(bytes.TrimSpace(payload)) == 0 {
 		return nil, errors.New("codex.parseEvents: empty event stream payload")
@@ -72,16 +80,16 @@ func parseEvents(payload []byte) ([]event, error) {
 	return events, nil
 }
 
-func buildExecution(request shared.StartRequest, version string, events []event, lastMessage, stderr []byte) *shared.Execution {
+func buildExecution(params executionParams) *shared.Execution {
 	handle := shared.ExecutionHandle{
-		RunID:             request.RunID,
-		StepID:            request.StepID,
-		AttemptID:         request.AttemptID,
-		ProviderSessionID: providerSessionID(request, events),
+		RunID:             params.Request.RunID,
+		StepID:            params.Request.StepID,
+		AttemptID:         params.Request.AttemptID,
+		ProviderSessionID: providerSessionID(params.Request, params.Events),
 	}
 
-	messageText := strings.TrimSpace(string(lastMessage))
-	errorMessage := eventErrorMessage(events)
+	messageText := strings.TrimSpace(string(params.LastMessage))
+	errorMessage := eventErrorMessage(params.Events)
 	outputText := messageText
 
 	if outputText == "" {
@@ -89,7 +97,7 @@ func buildExecution(request shared.StartRequest, version string, events []event,
 	}
 
 	if outputText == "" {
-		outputText = strings.TrimSpace(string(stderr))
+		outputText = strings.TrimSpace(string(params.Stderr))
 	}
 
 	state := shared.ExecutionStateSucceeded
@@ -109,7 +117,7 @@ func buildExecution(request shared.StartRequest, version string, events []event,
 		State:      state,
 		Summary:    summary,
 		OutputText: outputText,
-		Logs:       buildLogs(version, events, stderr),
+		Logs:       buildLogs(params.Version, params.Events, params.Stderr),
 	}
 }
 

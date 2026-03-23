@@ -14,6 +14,21 @@ import (
 	"github.com/JackDrogon/Cogito/internal/workflow"
 )
 
+type pausedCommandRunStateParams struct {
+	Test       *testing.T
+	StateDir   string
+	WorkingDir string
+	Command    string
+}
+
+type appEventDataParams struct {
+	From              string
+	To                string
+	Summary           string
+	ProviderSessionID string
+	NormalizedStatus  string
+}
+
 func TestRun(t *testing.T) {
 	t.Run("version output", func(t *testing.T) {
 		oldVersion := version.Version
@@ -237,7 +252,7 @@ func TestTextPresenterRendersRunAndMessages(t *testing.T) {
 
 func TestRunSharedFlagsOnIsolatedRepo(t *testing.T) {
 	fixture := newAppRepoFixture(t)
-	workflowPath := writeWorkflowFile(t, fixture.repoDir, "simple.yaml", "printf 'hello\\n'")
+	workflowPath := writeWorkflowFile(workflowFileParams{Test: t, RepoDir: fixture.repoDir, Name: "simple.yaml", Command: "printf 'hello\\n'"})
 	stateDir := filepath.Join(fixture.runsRoot, "run-shared-flags")
 
 	var out bytes.Buffer
@@ -508,7 +523,7 @@ func TestResumeCommandUsesPersistedWorkingDir(t *testing.T) {
 	}
 
 	stateDir := filepath.Join(baseDir, "runs", "run-working-dir")
-	writePausedCommandRunState(t, stateDir, repoDir, "pwd")
+	writePausedCommandRunState(pausedCommandRunStateParams{Test: t, StateDir: stateDir, WorkingDir: repoDir, Command: "pwd"})
 
 	otherDir := filepath.Join(baseDir, "other")
 	if err := os.MkdirAll(otherDir, 0o755); err != nil {
@@ -553,9 +568,9 @@ func writePausedRunState(t *testing.T, stateDir string) {
 	}
 
 	for _, event := range []store.Event{
-		{Type: store.EventRunCreated, Message: "run created", Data: appEventData("", string(runtime.RunStatePending), "run created", "", "")},
-		{Type: store.EventRunStarted, Message: "run started", Data: appEventData(string(runtime.RunStatePending), string(runtime.RunStateRunning), "run started", "", "")},
-		{Type: store.EventRunPaused, Message: "operator pause", Data: appEventData(string(runtime.RunStateRunning), string(runtime.RunStatePaused), "operator pause", "", "")},
+		{Type: store.EventRunCreated, Message: "run created", Data: appEventData(appEventDataParams{From: "", To: string(runtime.RunStatePending), Summary: "run created"})},
+		{Type: store.EventRunStarted, Message: "run started", Data: appEventData(appEventDataParams{From: string(runtime.RunStatePending), To: string(runtime.RunStateRunning), Summary: "run started"})},
+		{Type: store.EventRunPaused, Message: "operator pause", Data: appEventData(appEventDataParams{From: string(runtime.RunStateRunning), To: string(runtime.RunStatePaused), Summary: "operator pause"})},
 	} {
 		if _, err := runStore.AppendEvent(event); err != nil {
 			t.Fatalf("AppendEvent() error = %v", err)
@@ -579,44 +594,44 @@ func writePausedRunState(t *testing.T, stateDir string) {
 	}
 }
 
-func writePausedCommandRunState(t *testing.T, stateDir, workingDir, command string) {
-	t.Helper()
+func writePausedCommandRunState(params pausedCommandRunStateParams) {
+	params.Test.Helper()
 
 	compiled, err := workflow.CompileWorkflow(&workflow.Spec{
 		Metadata: workflow.Metadata{Name: "resume-working-dir"},
 		Steps: []workflow.StepSpec{{
 			ID:      "prepare",
 			Kind:    workflow.StepKindCommand,
-			Command: &workflow.CommandStepSpec{Command: command},
+			Command: &workflow.CommandStepSpec{Command: params.Command},
 		}},
 	})
 	if err != nil {
-		t.Fatalf("workflow.CompileWorkflow() error = %v", err)
+		params.Test.Fatalf("workflow.CompileWorkflow() error = %v", err)
 	}
 
-	runStore, err := store.Open(filepath.Dir(stateDir), filepath.Base(stateDir))
+	runStore, err := store.Open(filepath.Dir(params.StateDir), filepath.Base(params.StateDir))
 	if err != nil {
-		t.Fatalf("store.Open() error = %v", err)
+		params.Test.Fatalf("store.Open() error = %v", err)
 	}
 
 	if err := workflow.SaveResolvedFile(runStore.Layout().WorkflowPath, compiled); err != nil {
-		t.Fatalf("workflow.SaveResolvedFile() error = %v", err)
+		params.Test.Fatalf("workflow.SaveResolvedFile() error = %v", err)
 	}
 
 	for _, event := range []store.Event{
-		{Type: store.EventRunCreated, Message: "run created", Data: appEventData("", string(runtime.RunStatePending), "run created", "", "")},
-		{Type: store.EventRunStarted, Message: "run started", Data: appEventData(string(runtime.RunStatePending), string(runtime.RunStateRunning), "run started", "", "")},
-		{Type: store.EventRunPaused, Message: "operator pause", Data: appEventData(string(runtime.RunStateRunning), string(runtime.RunStatePaused), "operator pause", "", "")},
+		{Type: store.EventRunCreated, Message: "run created", Data: appEventData(appEventDataParams{From: "", To: string(runtime.RunStatePending), Summary: "run created"})},
+		{Type: store.EventRunStarted, Message: "run started", Data: appEventData(appEventDataParams{From: string(runtime.RunStatePending), To: string(runtime.RunStateRunning), Summary: "run started"})},
+		{Type: store.EventRunPaused, Message: "operator pause", Data: appEventData(appEventDataParams{From: string(runtime.RunStateRunning), To: string(runtime.RunStatePaused), Summary: "operator pause"})},
 	} {
 		if _, err := runStore.AppendEvent(event); err != nil {
-			t.Fatalf("AppendEvent() error = %v", err)
+			params.Test.Fatalf("AppendEvent() error = %v", err)
 		}
 	}
 
 	if err := runStore.SaveCheckpoint(&store.Checkpoint{
-		RunID:        filepath.Base(stateDir),
-		RepoPath:     workingDir,
-		WorkingDir:   workingDir,
+		RunID:        filepath.Base(params.StateDir),
+		RepoPath:     params.WorkingDir,
+		WorkingDir:   params.WorkingDir,
 		State:        string(runtime.RunStatePaused),
 		LastSequence: 3,
 		UpdatedAt:    appFixedEventTime().Format(time.RFC3339Nano),
@@ -624,23 +639,23 @@ func writePausedCommandRunState(t *testing.T, stateDir, workingDir, command stri
 			"prepare": {State: string(runtime.StepStatePending)},
 		},
 	}); err != nil {
-		t.Fatalf("SaveCheckpoint() error = %v", err)
+		params.Test.Fatalf("SaveCheckpoint() error = %v", err)
 	}
 }
 
-func appEventData(from, to, summary, providerSessionID, normalizedStatus string) map[string]string {
+func appEventData(params appEventDataParams) map[string]string {
 	data := map[string]string{
 		"occurred_at": appFixedEventTime().Format(time.RFC3339Nano),
-		"from_state":  from,
-		"to_state":    to,
-		"summary":     summary,
+		"from_state":  params.From,
+		"to_state":    params.To,
+		"summary":     params.Summary,
 	}
 
-	if providerSessionID != "" {
-		data["provider_session_id"] = providerSessionID
+	if params.ProviderSessionID != "" {
+		data["provider_session_id"] = params.ProviderSessionID
 	}
-	if normalizedStatus != "" {
-		data["normalized_status"] = normalizedStatus
+	if params.NormalizedStatus != "" {
+		data["normalized_status"] = params.NormalizedStatus
 	}
 
 	return data

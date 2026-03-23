@@ -212,7 +212,13 @@ func Replay(runID string, compiled *workflow.CompiledWorkflow, events []store.Ev
 	transitions := make([]Transition, 0, len(events))
 
 	for _, event := range events {
-		if err := applyEvent(compiled, &snapshot, &transitions, event, ErrorCodeReplay); err != nil {
+		if err := applyEvent(applyEventParams{
+			Compiled:    compiled,
+			Snapshot:    &snapshot,
+			Transitions: &transitions,
+			Event:       event,
+			Code:        ErrorCodeReplay,
+		}); err != nil {
 			return nil, err
 		}
 	}
@@ -238,22 +244,22 @@ func (e *Engine) Start(_ context.Context) error {
 
 	switch e.snapshot.State {
 	case RunStatePending:
-		if err := e.persistRunTransition(
-			store.EventRunStarted,
-			RunStatePending,
-			RunStateRunning,
-			"run started",
-		); err != nil {
+		if err := e.persistRunTransition(RunTransitionParams{
+			EventType: store.EventRunStarted,
+			From:      RunStatePending,
+			To:        RunStateRunning,
+			Message:   "run started",
+		}); err != nil {
 			return err
 		}
 	case RunStateRunning:
 	case RunStatePaused:
-		if err := e.persistRunTransition(
-			store.EventRunStarted,
-			RunStatePaused,
-			RunStateRunning,
-			"run resumed",
-		); err != nil {
+		if err := e.persistRunTransition(RunTransitionParams{
+			EventType: store.EventRunStarted,
+			From:      RunStatePaused,
+			To:        RunStateRunning,
+			Message:   "run resumed",
+		}); err != nil {
 			return err
 		}
 	case RunStateWaitingApproval:
@@ -306,12 +312,12 @@ func (e *Engine) ExecuteNext(ctx context.Context) (bool, error) {
 	ready := e.ReadyStepIDs()
 	if len(ready) == 0 {
 		if e.allStepsSucceeded() {
-			if err := e.persistRunTransition(
-				store.EventRunSucceeded,
-				RunStateRunning,
-				RunStateSucceeded,
-				"run succeeded",
-			); err != nil {
+			if err := e.persistRunTransition(RunTransitionParams{
+				EventType: store.EventRunSucceeded,
+				From:      RunStateRunning,
+				To:        RunStateSucceeded,
+				Message:   "run succeeded",
+			}); err != nil {
 				return false, err
 			}
 
@@ -346,7 +352,12 @@ func (e *Engine) Pause(message string) error {
 
 	switch e.snapshot.State {
 	case RunStateRunning, RunStateWaitingApproval:
-		return e.persistRunTransition(store.EventRunPaused, e.snapshot.State, RunStatePaused, message)
+		return e.persistRunTransition(RunTransitionParams{
+			EventType: store.EventRunPaused,
+			From:      e.snapshot.State,
+			To:        RunStatePaused,
+			Message:   message,
+		})
 	default:
 		return newError(ErrorCodeState, fmt.Sprintf("cannot pause run from %q", e.snapshot.State))
 	}
@@ -366,7 +377,12 @@ func (e *Engine) Resume(message string) error {
 		return newError(ErrorCodeState, fmt.Sprintf("cannot resume run from %q", e.snapshot.State))
 	}
 
-	if err := e.persistRunTransition(store.EventRunStarted, RunStatePaused, RunStateRunning, message); err != nil {
+	if err := e.persistRunTransition(RunTransitionParams{
+		EventType: store.EventRunStarted,
+		From:      RunStatePaused,
+		To:        RunStateRunning,
+		Message:   message,
+	}); err != nil {
 		return err
 	}
 
@@ -391,7 +407,12 @@ func (e *Engine) Cancel(ctx context.Context, message string) error {
 			}
 		}
 
-		return e.persistRunTransition(store.EventRunCanceled, e.snapshot.State, RunStateCanceled, message)
+		return e.persistRunTransition(RunTransitionParams{
+			EventType: store.EventRunCanceled,
+			From:      e.snapshot.State,
+			To:        RunStateCanceled,
+			Message:   message,
+		})
 	default:
 		return newError(ErrorCodeState, fmt.Sprintf("cannot cancel run from %q", e.snapshot.State))
 	}

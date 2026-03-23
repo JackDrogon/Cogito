@@ -23,6 +23,13 @@ type response struct {
 	Raw           map[string]any `json:"-"`
 }
 
+type executionParams struct {
+	Request  shared.StartRequest
+	Version  string
+	Response *response
+	Stderr   []byte
+}
+
 func parseResponse(payload []byte) (*response, error) {
 	trimmed := strings.TrimSpace(string(payload))
 	if trimmed == "" {
@@ -44,17 +51,17 @@ func parseResponse(payload []byte) (*response, error) {
 	return &parsed, nil
 }
 
-func buildExecution(request shared.StartRequest, version string, response *response, stderr []byte) *shared.Execution {
+func buildExecution(params executionParams) *shared.Execution {
 	handle := shared.ExecutionHandle{
-		RunID:             request.RunID,
-		StepID:            request.StepID,
-		AttemptID:         request.AttemptID,
-		ProviderSessionID: providerSessionID(request, response),
+		RunID:             params.Request.RunID,
+		StepID:            params.Request.StepID,
+		AttemptID:         params.Request.AttemptID,
+		ProviderSessionID: providerSessionID(params.Request, params.Response),
 	}
 
-	outputText := strings.TrimSpace(response.Result)
+	outputText := strings.TrimSpace(params.Response.Result)
 	if outputText == "" {
-		outputText = strings.TrimSpace(string(stderr))
+		outputText = strings.TrimSpace(string(params.Stderr))
 	}
 
 	state := shared.ExecutionStateSucceeded
@@ -64,7 +71,7 @@ func buildExecution(request shared.StartRequest, version string, response *respo
 		summary = "claude execution succeeded"
 	}
 
-	if response.IsError {
+	if params.Response.IsError {
 		state = shared.ExecutionStateFailed
 
 		if summary == "" {
@@ -77,7 +84,7 @@ func buildExecution(request shared.StartRequest, version string, response *respo
 		State:      state,
 		Summary:    summary,
 		OutputText: outputText,
-		Logs:       buildLogs(version, response, stderr),
+		Logs:       buildLogs(params.Version, params.Response, params.Stderr),
 	}
 }
 

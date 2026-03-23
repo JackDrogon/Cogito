@@ -14,6 +14,13 @@ type response struct {
 	Raw map[string]any
 }
 
+type executionParams struct {
+	Request  shared.StartRequest
+	Version  string
+	Response *response
+	Stderr   []byte
+}
+
 func parseResponse(payload []byte) (*response, error) {
 	trimmed := strings.TrimSpace(string(payload))
 	if trimmed == "" {
@@ -28,32 +35,32 @@ func parseResponse(payload []byte) (*response, error) {
 	return &response{Raw: raw}, nil
 }
 
-func buildExecution(request shared.StartRequest, version string, response *response, stderr []byte) *shared.Execution {
+func buildExecution(params executionParams) *shared.Execution {
 	handle := shared.ExecutionHandle{
-		RunID:             request.RunID,
-		StepID:            request.StepID,
-		AttemptID:         request.AttemptID,
-		ProviderSessionID: providerSessionID(request, response),
+		RunID:             params.Request.RunID,
+		StepID:            params.Request.StepID,
+		AttemptID:         params.Request.AttemptID,
+		ProviderSessionID: providerSessionID(params.Request, params.Response),
 	}
 
 	outputText := strings.TrimSpace(firstNonEmpty(
-		response.string("output_text"),
-		response.string("outputText"),
-		response.string("text"),
-		response.string("message"),
-		response.string("summary"),
-		strings.TrimSpace(string(stderr)),
+		params.Response.string("output_text"),
+		params.Response.string("outputText"),
+		params.Response.string("text"),
+		params.Response.string("message"),
+		params.Response.string("summary"),
+		strings.TrimSpace(string(params.Stderr)),
 	))
 
 	failedMessage := strings.TrimSpace(firstNonEmpty(
-		response.string("error"),
-		response.nestedString("error", "message"),
+		params.Response.string("error"),
+		params.Response.nestedString("error", "message"),
 	))
 
 	state := shared.ExecutionStateSucceeded
-	summary := strings.TrimSpace(firstNonEmpty(response.string("summary"), firstLine(outputText), "opencode adapter passed"))
+	summary := strings.TrimSpace(firstNonEmpty(params.Response.string("summary"), firstLine(outputText), "opencode adapter passed"))
 
-	if response.failed() || failedMessage != "" {
+	if params.Response.failed() || failedMessage != "" {
 		state = shared.ExecutionStateFailed
 
 		if failedMessage != "" {
@@ -68,7 +75,7 @@ func buildExecution(request shared.StartRequest, version string, response *respo
 		State:      state,
 		Summary:    summary,
 		OutputText: outputText,
-		Logs:       buildLogs(version, response, stderr),
+		Logs:       buildLogs(params.Version, params.Response, params.Stderr),
 	}
 }
 

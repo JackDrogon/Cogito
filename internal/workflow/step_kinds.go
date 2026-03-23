@@ -8,6 +8,13 @@ type stepKindDescriptor struct {
 	bind      func(values map[string]string, step *StepSpec)
 }
 
+type compileStepKindParams struct {
+	ID       string
+	Kind     StepKind
+	Step     rawStep
+	Compiled StepSpec
+}
+
 var stepKindDescriptors = map[StepKind]stepKindDescriptor{
 	StepKindAgent: {
 		required:  []string{"agent", "prompt"},
@@ -46,22 +53,33 @@ func rawStepFieldValues(step rawStep) map[string]*string {
 	}
 }
 
-func compileStepKindSpec(id string, kind StepKind, step rawStep, compiled StepSpec) (StepSpec, error) {
-	descriptor, ok := lookupStepKindDescriptor(kind)
+func compileStepKindSpec(params compileStepKindParams) (StepSpec, error) {
+	descriptor, ok := lookupStepKindDescriptor(params.Kind)
 	if !ok {
-		return StepSpec{}, newError(ErrorCodeSchema, fmt.Sprintf("step %q uses unsupported step kind %q", id, kind))
+		return StepSpec{}, newError(ErrorCodeSchema, fmt.Sprintf("step %q uses unsupported step kind %q", params.ID, params.Kind))
 	}
 
-	fields := rawStepFieldValues(step)
-	values, err := requiredStepFields(id, kind, descriptor.required, fields)
+	fields := rawStepFieldValues(params.Step)
+	values, err := requiredStepFields(stepFieldValidationParams{
+		StepID: params.ID,
+		Kind:   params.Kind,
+		Names:  descriptor.required,
+		Fields: fields,
+	})
 	if err != nil {
 		return StepSpec{}, err
 	}
 
-	if err := rejectStepFieldNames(id, kind, descriptor.forbidden, fields); err != nil {
+	if err := rejectStepFieldNames(stepFieldValidationParams{
+		StepID: params.ID,
+		Kind:   params.Kind,
+		Names:  descriptor.forbidden,
+		Fields: fields,
+	}); err != nil {
 		return StepSpec{}, err
 	}
 
-	descriptor.bind(values, &compiled)
-	return compiled, nil
+	descriptor.bind(values, &params.Compiled)
+
+	return params.Compiled, nil
 }

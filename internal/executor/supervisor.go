@@ -72,6 +72,15 @@ type processMonitorResult struct {
 	waitErr     error
 }
 
+type collectOutputParams struct {
+	Request     RunRequest
+	WaitErr     error
+	TimedOut    bool
+	Interrupted bool
+	StdoutFile  *os.File
+	StderrFile  *os.File
+}
+
 func NewSupervisor() *Supervisor {
 	return &Supervisor{
 		terminationGracePeriod: defaultTerminationGracePeriod,
@@ -117,7 +126,14 @@ func (s *Supervisor) Run(ctx context.Context, request RunRequest) (*adapters.Ste
 		return nil, err
 	}
 
-	input, err := s.collectOutput(request, monitorResult.waitErr, monitorResult.timedOut, monitorResult.interrupted, stdoutFile, stderrFile)
+	input, err := s.collectOutput(collectOutputParams{
+		Request:     request,
+		WaitErr:     monitorResult.waitErr,
+		TimedOut:    monitorResult.timedOut,
+		Interrupted: monitorResult.interrupted,
+		StdoutFile:  stdoutFile,
+		StderrFile:  stderrFile,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -175,39 +191,34 @@ func (s *Supervisor) monitorProcess(ctx context.Context, cmd *exec.Cmd, timeout 
 	}
 }
 
-func (s *Supervisor) collectOutput(
-	request RunRequest,
-	waitErr error,
-	timedOut, interrupted bool,
-	stdoutFile, stderrFile *os.File,
-) (NormalizerInput, error) {
-	if syncErr := stdoutFile.Sync(); syncErr != nil {
+func (s *Supervisor) collectOutput(params collectOutputParams) (NormalizerInput, error) {
+	if syncErr := params.StdoutFile.Sync(); syncErr != nil {
 		return NormalizerInput{}, wrapError(ErrorCodeExecution, "sync stdout log", syncErr)
 	}
 
-	if syncErr := stderrFile.Sync(); syncErr != nil {
+	if syncErr := params.StderrFile.Sync(); syncErr != nil {
 		return NormalizerInput{}, wrapError(ErrorCodeExecution, "sync stderr log", syncErr)
 	}
 
-	stdout, err := os.ReadFile(request.StdoutPath)
+	stdout, err := os.ReadFile(params.Request.StdoutPath)
 	if err != nil {
 		return NormalizerInput{}, wrapError(ErrorCodeExecution, "read stdout log", err)
 	}
 
-	stderr, err := os.ReadFile(request.StderrPath)
+	stderr, err := os.ReadFile(params.Request.StderrPath)
 	if err != nil {
 		return NormalizerInput{}, wrapError(ErrorCodeExecution, "read stderr log", err)
 	}
 
 	return NormalizerInput{
-		Handle:      request.Handle,
-		ExitCode:    exitCode(waitErr),
-		StdoutPath:  request.StdoutPath,
-		StderrPath:  request.StderrPath,
+		Handle:      params.Request.Handle,
+		ExitCode:    exitCode(params.WaitErr),
+		StdoutPath:  params.Request.StdoutPath,
+		StderrPath:  params.Request.StderrPath,
 		Stdout:      stdout,
 		Stderr:      stderr,
-		TimedOut:    timedOut,
-		Interrupted: interrupted,
+		TimedOut:    params.TimedOut,
+		Interrupted: params.Interrupted,
 	}, nil
 }
 

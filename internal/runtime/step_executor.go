@@ -88,12 +88,14 @@ func (e *Engine) executeStep(ctx context.Context, stepID string) error {
 
 		return e.requestApproval(
 			ctx,
-			step,
-			attemptID,
-			providerSessionID,
-			summary,
-			ApprovalTriggerExplicit,
-			adapters.ExecutionStateWaitingApproval,
+			approvalGateParams{
+				Step:              step,
+				AttemptID:         attemptID,
+				ProviderSessionID: providerSessionID,
+				Summary:           summary,
+				Trigger:           ApprovalTriggerExplicit,
+				Status:            adapters.ExecutionStateWaitingApproval,
+			},
 		)
 	}
 
@@ -131,7 +133,11 @@ func (e *Engine) executeStep(ctx context.Context, stepID string) error {
 		})
 	}
 
-	execution, err := driver.Start(ctx, step, attemptID, e.Snapshot())
+	execution, err := driver.Start(ctx, stepStartRequest{
+		Step:      step,
+		AttemptID: attemptID,
+		Snapshot:  e.Snapshot(),
+	})
 	if err != nil {
 		providerSessionID := e.ids.NewSyntheticSessionID(stepID)
 		if startErr := e.persistStepTransition(StepTransitionParams{
@@ -175,45 +181,51 @@ func (e *Engine) executeStep(ctx context.Context, stepID string) error {
 		return err
 	}
 
-	return e.continueExecution(ctx, step, attemptID, driver, execution)
+	return e.continueExecution(ctx, executionContinuationRequest{
+		Step:      step,
+		AttemptID: attemptID,
+		Driver:    driver,
+		Execution: execution,
+	})
 }
 
-func (e *Engine) continueExecution(
-	ctx context.Context,
-	step workflow.CompiledStep,
-	attemptID string,
-	driver stepDriver,
-	execution *adapters.Execution,
-) error {
-	providerSessionID := strings.TrimSpace(execution.Handle.ProviderSessionID)
+type executionContinuationRequest struct {
+	Step      workflow.CompiledStep
+	AttemptID string
+	Driver    stepDriver
+	Execution *adapters.Execution
+}
+
+func (e *Engine) continueExecution(ctx context.Context, request executionContinuationRequest) error {
+	providerSessionID := strings.TrimSpace(request.Execution.Handle.ProviderSessionID)
 	if providerSessionID == "" {
-		providerSessionID = e.ids.NewSyntheticSessionID(step.ID)
-		execution.Handle.ProviderSessionID = providerSessionID
+		providerSessionID = e.ids.NewSyntheticSessionID(request.Step.ID)
+		request.Execution.Handle.ProviderSessionID = providerSessionID
 	}
 
 	var err error
-	for !execution.State.Normalizable() {
-		execution, err = driver.PollOrCollect(ctx, execution.Handle)
+	for !request.Execution.State.Normalizable() {
+		request.Execution, err = request.Driver.PollOrCollect(ctx, request.Execution.Handle)
 		if err != nil {
 			return e.failRunForExecutionError(FailRunParams{
-				StepID:            step.ID,
-				AttemptID:         attemptID,
+				StepID:            request.Step.ID,
+				AttemptID:         request.AttemptID,
 				ProviderSessionID: providerSessionID,
 				ExecutionErr:      err,
 				Message:           "step polling failed",
 			})
 		}
 
-		if strings.TrimSpace(execution.Handle.ProviderSessionID) == "" {
-			execution.Handle.ProviderSessionID = providerSessionID
+		if strings.TrimSpace(request.Execution.Handle.ProviderSessionID) == "" {
+			request.Execution.Handle.ProviderSessionID = providerSessionID
 		}
 	}
 
-	result, err := driver.NormalizeResult(ctx, execution)
+	result, err := request.Driver.NormalizeResult(ctx, request.Execution)
 	if err != nil {
 		return e.failRunForExecutionError(FailRunParams{
-			StepID:            step.ID,
-			AttemptID:         attemptID,
+			StepID:            request.Step.ID,
+			AttemptID:         request.AttemptID,
 			ProviderSessionID: providerSessionID,
 			ExecutionErr:      err,
 			Message:           "result normalization failed",
@@ -224,80 +236,97 @@ func (e *Engine) continueExecution(
 		result.Handle.ProviderSessionID = providerSessionID
 	}
 
-	return e.applyResult(ctx, step, attemptID, result)
+	return e.applyResult(ctx, executionResultRequest{
+		Step:      request.Step,
+		AttemptID: request.AttemptID,
+		Result:    result,
+	})
 }
 
-func (e *Engine) applyResult(
-	ctx context.Context,
-	step workflow.CompiledStep,
-	attemptID string,
-	result *adapters.StepResult,
-) error {
-	if result == nil {
+type executionResultRequest struct {
+	Step      workflow.CompiledStep
+	AttemptID string
+	Result    *adapters.StepResult
+}
+
+func (e *Engine) applyResult(ctx context.Context, request executionResultRequest) error {
+	if request.Result == nil {
 		return newError(ErrorCodeExecution, "step result is required")
 	}
 
-	providerSessionID := strings.TrimSpace(result.Handle.ProviderSessionID)
+	providerSessionID := strings.TrimSpace(request.Result.Handle.ProviderSessionID)
 	if providerSessionID == "" {
-		providerSessionID = e.ids.NewSyntheticSessionID(step.ID)
+		providerSessionID = e.ids.NewSyntheticSessionID(request.Step.ID)
 	}
 
-	summary := normalizeSummary(result.Summary, result.Status)
+	summary := normalizeSummary(request.Result.Summary, request.Result.Status)
 
-	switch result.Status {
+	switch request.Result.Status {
 	case adapters.ExecutionStateSucceeded:
 		return e.persistStepTransition(StepTransitionParams{
 			EventType:         store.EventStepSucceeded,
-			StepID:            step.ID,
+			StepID:            request.Step.ID,
 			From:              StepStateRunning,
 			To:                StepStateSucceeded,
-			AttemptID:         attemptID,
+			AttemptID:         request.AttemptID,
 			ProviderSessionID: providerSessionID,
 			Summary:           summary,
-			NormalizedStatus:  string(result.Status),
+			NormalizedStatus:  string(request.Result.Status),
 		})
 	case adapters.ExecutionStateFailed:
 		if err := e.persistStepTransition(StepTransitionParams{
 			EventType:         store.EventStepFailed,
-			StepID:            step.ID,
+			StepID:            request.Step.ID,
 			From:              StepStateRunning,
 			To:                StepStateFailed,
-			AttemptID:         attemptID,
+			AttemptID:         request.AttemptID,
 			ProviderSessionID: providerSessionID,
 			Summary:           summary,
-			NormalizedStatus:  string(result.Status),
+			NormalizedStatus:  string(request.Result.Status),
 		}); err != nil {
 			return err
 		}
 
-		return e.persistRunTransition(store.EventRunFailed, RunStateRunning, RunStateFailed, summary)
+		return e.persistRunTransition(RunTransitionParams{
+			EventType: store.EventRunFailed,
+			From:      RunStateRunning,
+			To:        RunStateFailed,
+			Message:   summary,
+		})
 	case adapters.ExecutionStateWaitingApproval:
 		return e.requestApproval(
 			ctx,
-			step,
-			attemptID,
-			providerSessionID,
-			summary,
-			ApprovalTriggerAdapter,
-			result.Status,
+			approvalGateParams{
+				Step:              request.Step,
+				AttemptID:         request.AttemptID,
+				ProviderSessionID: providerSessionID,
+				Summary:           summary,
+				Trigger:           ApprovalTriggerAdapter,
+				Status:            request.Result.Status,
+			},
 		)
 	case adapters.ExecutionStateInterrupted:
 		if err := e.persistStepTransition(StepTransitionParams{
 			EventType:         store.EventStepRetried,
-			StepID:            step.ID,
+			StepID:            request.Step.ID,
 			From:              StepStateRunning,
 			To:                StepStateQueued,
-			AttemptID:         attemptID,
+			AttemptID:         request.AttemptID,
 			ProviderSessionID: providerSessionID,
 			Summary:           summary,
-			NormalizedStatus:  string(result.Status),
+			NormalizedStatus:  string(request.Result.Status),
 		}); err != nil {
 			return err
 		}
 
-		return e.persistRunTransition(store.EventRunPaused, RunStateRunning, RunStatePaused, summary)
+		return e.persistRunTransition(RunTransitionParams{
+			EventType: store.EventRunPaused,
+			From:      RunStateRunning,
+			To:        RunStatePaused,
+			Message:   summary,
+		})
 	default:
-		return newError(ErrorCodeExecution, fmt.Sprintf("unsupported normalized step status %q", result.Status))
+		return newError(ErrorCodeExecution, fmt.Sprintf("unsupported normalized step status %q", request.Result.Status))
 	}
 }
 
@@ -310,42 +339,39 @@ func (e *Engine) buildDriver(step workflow.CompiledStep) (stepDriver, error) {
 }
 
 type stepDriver interface {
-	Start(
-		ctx context.Context,
-		step workflow.CompiledStep,
-		attemptID string,
-		snapshot Snapshot,
-	) (*adapters.Execution, error)
-	Resume(
-		ctx context.Context,
-		step workflow.CompiledStep,
-		handle adapters.ExecutionHandle,
-		snapshot Snapshot,
-	) (*adapters.Execution, error)
+	Start(ctx context.Context, request stepStartRequest) (*adapters.Execution, error)
+	Resume(ctx context.Context, request stepResumeRequest) (*adapters.Execution, error)
 	PollOrCollect(ctx context.Context, handle adapters.ExecutionHandle) (*adapters.Execution, error)
 	Interrupt(ctx context.Context, handle adapters.ExecutionHandle) (*adapters.Execution, error)
 	NormalizeResult(ctx context.Context, execution *adapters.Execution) (*adapters.StepResult, error)
+}
+
+type stepStartRequest struct {
+	Step      workflow.CompiledStep
+	AttemptID string
+	Snapshot  Snapshot
+}
+
+type stepResumeRequest struct {
+	Step     workflow.CompiledStep
+	Handle   adapters.ExecutionHandle
+	Snapshot Snapshot
 }
 
 type agentDriver struct {
 	adapter adapters.Adapter
 }
 
-func (d agentDriver) Start(
-	ctx context.Context,
-	step workflow.CompiledStep,
-	attemptID string,
-	snapshot Snapshot,
-) (*adapters.Execution, error) {
-	if step.Agent == nil {
-		return nil, newError(ErrorCodeConfig, fmt.Sprintf("agent config missing for step %q", step.ID))
+func (d agentDriver) Start(ctx context.Context, request stepStartRequest) (*adapters.Execution, error) {
+	if request.Step.Agent == nil {
+		return nil, newError(ErrorCodeConfig, fmt.Sprintf("agent config missing for step %q", request.Step.ID))
 	}
 
 	return d.adapter.Start(ctx, adapters.StartRequest{
-		RunID:     snapshot.RunID,
-		StepID:    step.ID,
-		AttemptID: attemptID,
-		Prompt:    step.Agent.Prompt,
+		RunID:     request.Snapshot.RunID,
+		StepID:    request.Step.ID,
+		AttemptID: request.AttemptID,
+		Prompt:    request.Step.Agent.Prompt,
 	})
 }
 
@@ -361,21 +387,19 @@ func (d agentDriver) Interrupt(ctx context.Context, handle adapters.ExecutionHan
 	return d.adapter.Interrupt(ctx, handle)
 }
 
-func (d agentDriver) Resume(
-	ctx context.Context,
-	step workflow.CompiledStep,
-	handle adapters.ExecutionHandle,
-	_ Snapshot,
-) (*adapters.Execution, error) {
-	if step.Agent == nil {
-		return nil, newError(ErrorCodeConfig, fmt.Sprintf("agent config missing for step %q", step.ID))
+func (d agentDriver) Resume(ctx context.Context, request stepResumeRequest) (*adapters.Execution, error) {
+	if request.Step.Agent == nil {
+		return nil, newError(ErrorCodeConfig, fmt.Sprintf("agent config missing for step %q", request.Step.ID))
 	}
 
 	if err := d.adapter.DescribeCapabilities().Require(adapters.CapabilityResume); err != nil {
 		return nil, wrapError(ErrorCodeExecution, "resume agent step", err)
 	}
 
-	return d.adapter.Resume(ctx, adapters.ResumeRequest{Handle: handle, Prompt: step.Agent.Prompt})
+	return d.adapter.Resume(ctx, adapters.ResumeRequest{
+		Handle: request.Handle,
+		Prompt: request.Step.Agent.Prompt,
+	})
 }
 
 func (d agentDriver) NormalizeResult(ctx context.Context, execution *adapters.Execution) (*adapters.StepResult, error) {
@@ -386,21 +410,16 @@ type commandDriver struct {
 	runner CommandRunner
 }
 
-func (d commandDriver) Start(
-	ctx context.Context,
-	step workflow.CompiledStep,
-	attemptID string,
-	snapshot Snapshot,
-) (*adapters.Execution, error) {
-	if step.Command == nil {
-		return nil, newError(ErrorCodeConfig, fmt.Sprintf("command config missing for step %q", step.ID))
+func (d commandDriver) Start(ctx context.Context, request stepStartRequest) (*adapters.Execution, error) {
+	if request.Step.Command == nil {
+		return nil, newError(ErrorCodeConfig, fmt.Sprintf("command config missing for step %q", request.Step.ID))
 	}
 
 	return d.runner.Start(ctx, CommandRequest{
-		RunID:      snapshot.RunID,
-		StepID:     step.ID,
-		AttemptID:  attemptID,
-		Command:    step.Command.Command,
+		RunID:      request.Snapshot.RunID,
+		StepID:     request.Step.ID,
+		AttemptID:  request.AttemptID,
+		Command:    request.Step.Command.Command,
 		WorkingDir: ".",
 	})
 }
@@ -416,13 +435,11 @@ func (d commandDriver) Interrupt(ctx context.Context, handle adapters.ExecutionH
 	return d.runner.Interrupt(ctx, handle)
 }
 
-func (d commandDriver) Resume(
-	_ context.Context,
-	step workflow.CompiledStep,
-	_ adapters.ExecutionHandle,
-	_ Snapshot,
-) (*adapters.Execution, error) {
-	return nil, newError(ErrorCodeExecution, fmt.Sprintf("command step %q does not support approval resume", step.ID))
+func (d commandDriver) Resume(_ context.Context, request stepResumeRequest) (*adapters.Execution, error) {
+	return nil, newError(
+		ErrorCodeExecution,
+		fmt.Sprintf("command step %q does not support approval resume", request.Step.ID),
+	)
 }
 
 func (d commandDriver) NormalizeResult(
@@ -437,34 +454,24 @@ type approvalDriver struct {
 	ids   IDGenerator
 }
 
-func (d approvalDriver) Start(
-	_ context.Context,
-	step workflow.CompiledStep,
-	attemptID string,
-	_ Snapshot,
-) (*adapters.Execution, error) {
+func (d approvalDriver) Start(_ context.Context, request stepStartRequest) (*adapters.Execution, error) {
 	return &adapters.Execution{
 		Handle: adapters.ExecutionHandle{
 			RunID:             d.runID,
-			StepID:            step.ID,
-			AttemptID:         attemptID,
-			ProviderSessionID: d.ids.NewSyntheticSessionID(step.ID),
+			StepID:            request.Step.ID,
+			AttemptID:         request.AttemptID,
+			ProviderSessionID: d.ids.NewSyntheticSessionID(request.Step.ID),
 		},
 		State:   adapters.ExecutionStateWaitingApproval,
-		Summary: defaultApprovalSummary(step, adapters.ExecutionStateWaitingApproval),
+		Summary: defaultApprovalSummary(request.Step, adapters.ExecutionStateWaitingApproval),
 	}, nil
 }
 
-func (d approvalDriver) Resume(
-	_ context.Context,
-	step workflow.CompiledStep,
-	handle adapters.ExecutionHandle,
-	_ Snapshot,
-) (*adapters.Execution, error) {
+func (d approvalDriver) Resume(_ context.Context, request stepResumeRequest) (*adapters.Execution, error) {
 	return &adapters.Execution{
-		Handle:  handle,
+		Handle:  request.Handle,
 		State:   adapters.ExecutionStateSucceeded,
-		Summary: approvalDecisionSummary(ApprovalDecisionApprove, step),
+		Summary: approvalDecisionSummary(ApprovalDecisionApprove, request.Step),
 	}, nil
 }
 

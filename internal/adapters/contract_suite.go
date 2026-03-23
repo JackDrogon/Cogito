@@ -29,6 +29,12 @@ type ContractCase struct {
 	NormalizeRequest NormalizeRequest
 }
 
+type resumeTestParams struct {
+	Test         *testing.T
+	ContractCase *ContractCase
+	Capabilities CapabilityMatrix
+}
+
 func RunContractSuite(t *testing.T, cases []ContractCase) {
 	t.Helper()
 
@@ -45,7 +51,7 @@ func RunContractSuite(t *testing.T, cases []ContractCase) {
 			}
 
 			if tc.ResumeRequest != nil {
-				runResumeTest(t, ctx, tc, capabilities)
+				runResumeTest(ctx, resumeTestParams{Test: t, ContractCase: tc, Capabilities: capabilities})
 			}
 		})
 	}
@@ -116,51 +122,51 @@ func runInterruptTest(t *testing.T, ctx context.Context, tc *ContractCase) {
 	}
 }
 
-func runResumeTest(t *testing.T, ctx context.Context, tc *ContractCase, capabilities CapabilityMatrix) {
-	t.Helper()
+func runResumeTest(ctx context.Context, params resumeTestParams) {
+	params.Test.Helper()
 
-	resumeExecution, err := tc.Adapter.Start(ctx, *tc.ResumeRequest)
+	resumeExecution, err := params.ContractCase.Adapter.Start(ctx, *params.ContractCase.ResumeRequest)
 	if err != nil {
-		t.Fatalf("Start() for resume error = %v", err)
+		params.Test.Fatalf("Start() for resume error = %v", err)
 	}
 
-	if capabilities.Interrupt {
-		resumeExecution, err = tc.Adapter.Interrupt(ctx, resumeExecution.Handle)
+	if params.Capabilities.Interrupt {
+		resumeExecution, err = params.ContractCase.Adapter.Interrupt(ctx, resumeExecution.Handle)
 		if err != nil {
-			t.Fatalf("Interrupt() before resume error = %v", err)
+			params.Test.Fatalf("Interrupt() before resume error = %v", err)
 		}
 	}
 
-	resumeExecution, err = tc.Adapter.Resume(ctx, ResumeRequest{Handle: resumeExecution.Handle})
+	resumeExecution, err = params.ContractCase.Adapter.Resume(ctx, ResumeRequest{Handle: resumeExecution.Handle})
 	if err != nil {
-		t.Fatalf("Resume() error = %v", err)
+		params.Test.Fatalf("Resume() error = %v", err)
 	}
 
-	if resumeExecution.State != tc.WantResumeState {
-		t.Fatalf("Resume().State = %q, want %q", resumeExecution.State, tc.WantResumeState)
+	if resumeExecution.State != params.ContractCase.WantResumeState {
+		params.Test.Fatalf("Resume().State = %q, want %q", resumeExecution.State, params.ContractCase.WantResumeState)
 	}
 
-	for i, wantState := range tc.WantResumePollStates {
-		resumeExecution, err = tc.Adapter.PollOrCollect(ctx, resumeExecution.Handle)
+	for i, wantState := range params.ContractCase.WantResumePollStates {
+		resumeExecution, err = params.ContractCase.Adapter.PollOrCollect(ctx, resumeExecution.Handle)
 		if err != nil {
-			t.Fatalf("PollOrCollect() after resume #%d error = %v", i+1, err)
+			params.Test.Fatalf("PollOrCollect() after resume #%d error = %v", i+1, err)
 		}
 
 		if resumeExecution.State != wantState {
-			t.Fatalf("PollOrCollect() after resume #%d state = %q, want %q", i+1, resumeExecution.State, wantState)
+			params.Test.Fatalf("PollOrCollect() after resume #%d state = %q, want %q", i+1, resumeExecution.State, wantState)
 		}
 	}
 
-	if tc.WantResumeResult != nil {
-		resumeNormalize := tc.ResumeNormalize
+	if params.ContractCase.WantResumeResult != nil {
+		resumeNormalize := params.ContractCase.ResumeNormalize
 		resumeNormalize.Execution = resumeExecution
 
-		result, err := tc.Adapter.NormalizeResult(ctx, resumeNormalize)
+		result, err := params.ContractCase.Adapter.NormalizeResult(ctx, resumeNormalize)
 		if err != nil {
-			t.Fatalf("NormalizeResult() after resume error = %v", err)
+			params.Test.Fatalf("NormalizeResult() after resume error = %v", err)
 		}
 
-		assertStepResult(t, result, *tc.WantResumeResult)
+		assertStepResult(params.Test, result, *params.ContractCase.WantResumeResult)
 	}
 }
 

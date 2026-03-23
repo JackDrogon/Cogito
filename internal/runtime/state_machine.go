@@ -94,56 +94,63 @@ var allowedStepTransitions = map[StepState]map[StepState]struct{}{
 	},
 }
 
-func validateEventPreconditions(compiled *workflow.CompiledWorkflow, snapshot *Snapshot, event store.Event, code ErrorCode) error {
-	if compiled == nil {
-		return newError(code, "compiled workflow is required")
+type eventPreconditionsParams struct {
+	Compiled *workflow.CompiledWorkflow
+	Snapshot *Snapshot
+	Event    store.Event
+	Code     ErrorCode
+}
+
+func validateEventPreconditions(params eventPreconditionsParams) error {
+	if params.Compiled == nil {
+		return newError(params.Code, "compiled workflow is required")
 	}
 
-	if snapshot == nil {
-		return newError(code, "snapshot is required")
+	if params.Snapshot == nil {
+		return newError(params.Code, "snapshot is required")
 	}
 
-	if strings.TrimSpace(event.RunID) == "" {
-		return newError(code, "event run id is required")
+	if strings.TrimSpace(params.Event.RunID) == "" {
+		return newError(params.Code, "event run id is required")
 	}
 
-	if snapshot.RunID == "" {
-		snapshot.RunID = event.RunID
+	if params.Snapshot.RunID == "" {
+		params.Snapshot.RunID = params.Event.RunID
 	}
 
-	if event.RunID != snapshot.RunID {
-		return newError(code, fmt.Sprintf("event run id %q does not match snapshot %q", event.RunID, snapshot.RunID))
+	if params.Event.RunID != params.Snapshot.RunID {
+		return newError(params.Code, fmt.Sprintf("event run id %q does not match snapshot %q", params.Event.RunID, params.Snapshot.RunID))
 	}
 
-	if event.Sequence != snapshot.LastSequence+1 {
-		return newError(code, fmt.Sprintf("invalid event sequence %d after %d", event.Sequence, snapshot.LastSequence))
+	if params.Event.Sequence != params.Snapshot.LastSequence+1 {
+		return newError(params.Code, fmt.Sprintf("invalid event sequence %d after %d", params.Event.Sequence, params.Snapshot.LastSequence))
 	}
 
 	return nil
 }
 
-func applyRunEvent(compiled *workflow.CompiledWorkflow, snapshot *Snapshot, transitions *[]Transition, event store.Event, data map[string]string, code ErrorCode) error {
-	from := RunState(strings.TrimSpace(data[dataFromState]))
-	to := RunState(strings.TrimSpace(data[dataToState]))
-	summary := strings.TrimSpace(data[dataSummary])
+func applyRunEvent(request stateMachineEventRequest) error {
+	from := RunState(strings.TrimSpace(request.Data[dataFromState]))
+	to := RunState(strings.TrimSpace(request.Data[dataToState]))
+	summary := strings.TrimSpace(request.Data[dataSummary])
 
-	if err := ensureRunTransition(snapshot.State, from, to); err != nil {
-		return wrapError(code, "invalid transition order", err)
+	if err := ensureRunTransition(request.Snapshot.State, from, to); err != nil {
+		return wrapError(request.Code, "invalid transition order", err)
 	}
 
-	snapshot.State = to
+	request.Snapshot.State = to
 
-	if event.Type == store.EventRunCreated {
-		initializePendingSteps(snapshot, compiled)
+	if request.Event.Type == store.EventRunCreated {
+		initializePendingSteps(request.Snapshot, request.Compiled)
 	}
 
-	if event.Type == store.EventRunCanceled {
-		cancelActiveSteps(snapshot)
+	if request.Event.Type == store.EventRunCanceled {
+		cancelActiveSteps(request.Snapshot)
 	}
 
-	recordTransition(transitions, Transition{
-		Sequence:  event.Sequence,
-		EventType: event.Type,
+	recordTransition(request.Transitions, Transition{
+		Sequence:  request.Event.Sequence,
+		EventType: request.Event.Type,
 		Scope:     "run",
 		From:      string(from),
 		To:        string(to),
@@ -153,29 +160,29 @@ func applyRunEvent(compiled *workflow.CompiledWorkflow, snapshot *Snapshot, tran
 	return nil
 }
 
-func applyStepEvent(compiled *workflow.CompiledWorkflow, snapshot *Snapshot, transitions *[]Transition, event store.Event, data map[string]string, code ErrorCode) error {
-	stepID := strings.TrimSpace(event.StepID)
+func applyStepEvent(request stateMachineEventRequest) error {
+	stepID := strings.TrimSpace(request.Event.StepID)
 	if stepID == "" {
-		return newError(code, fmt.Sprintf("event %s missing step id", event.Type))
+		return newError(request.Code, fmt.Sprintf("event %s missing step id", request.Event.Type))
 	}
 
-	if _, ok := compiled.StepIndex[stepID]; !ok {
-		return newError(code, fmt.Sprintf("event references unknown step %q", stepID))
+	if _, ok := request.Compiled.StepIndex[stepID]; !ok {
+		return newError(request.Code, fmt.Sprintf("event references unknown step %q", stepID))
 	}
 
-	current := snapshot.Steps[stepID]
-	from := StepState(strings.TrimSpace(data[dataFromState]))
-	to := StepState(strings.TrimSpace(data[dataToState]))
-	summary := strings.TrimSpace(data[dataSummary])
-	providerSessionID := strings.TrimSpace(data[dataProviderSessionID])
+	current := request.Snapshot.Steps[stepID]
+	from := StepState(strings.TrimSpace(request.Data[dataFromState]))
+	to := StepState(strings.TrimSpace(request.Data[dataToState]))
+	summary := strings.TrimSpace(request.Data[dataSummary])
+	providerSessionID := strings.TrimSpace(request.Data[dataProviderSessionID])
 
 	if err := ensureStepTransition(current.State, from, to); err != nil {
-		return wrapError(code, "invalid transition order", err)
+		return wrapError(request.Code, "invalid transition order", err)
 	}
 
 	current.State = to
-	if event.AttemptID != "" {
-		current.AttemptID = event.AttemptID
+	if request.Event.AttemptID != "" {
+		current.AttemptID = request.Event.AttemptID
 	}
 
 	if providerSessionID != "" {
@@ -186,20 +193,20 @@ func applyStepEvent(compiled *workflow.CompiledWorkflow, snapshot *Snapshot, tra
 		current.Summary = summary
 	}
 
-	if to == StepStateQueued && event.Type == store.EventStepRetried {
+	if to == StepStateQueued && request.Event.Type == store.EventStepRetried {
 		current.AttemptID = ""
 		current.ProviderSessionID = ""
 	}
 
-	snapshot.Steps[stepID] = current
-	recordTransition(transitions, Transition{
-		Sequence:          event.Sequence,
-		EventType:         event.Type,
+	request.Snapshot.Steps[stepID] = current
+	recordTransition(request.Transitions, Transition{
+		Sequence:          request.Event.Sequence,
+		EventType:         request.Event.Type,
 		Scope:             "step",
 		StepID:            stepID,
 		From:              string(from),
 		To:                string(to),
-		AttemptID:         event.AttemptID,
+		AttemptID:         request.Event.AttemptID,
 		ProviderSessionID: current.ProviderSessionID,
 		Summary:           normalizeSummary(current.Summary, adapters.ExecutionStateRunning),
 	})
@@ -207,30 +214,30 @@ func applyStepEvent(compiled *workflow.CompiledWorkflow, snapshot *Snapshot, tra
 	return nil
 }
 
-func applyApprovalEvent(compiled *workflow.CompiledWorkflow, snapshot *Snapshot, transitions *[]Transition, event store.Event, data map[string]string, code ErrorCode) error {
-	stepID := strings.TrimSpace(event.StepID)
+func applyApprovalEvent(request stateMachineEventRequest) error {
+	stepID := strings.TrimSpace(request.Event.StepID)
 	if stepID == "" {
-		return newError(code, fmt.Sprintf("event %s missing step id", event.Type))
+		return newError(request.Code, fmt.Sprintf("event %s missing step id", request.Event.Type))
 	}
 
-	if _, ok := compiled.StepIndex[stepID]; !ok {
-		return newError(code, fmt.Sprintf("event references unknown step %q", stepID))
+	if _, ok := request.Compiled.StepIndex[stepID]; !ok {
+		return newError(request.Code, fmt.Sprintf("event references unknown step %q", stepID))
 	}
 
-	current := snapshot.Steps[stepID]
-	from := StepState(strings.TrimSpace(data[dataFromState]))
-	to := StepState(strings.TrimSpace(data[dataToState]))
-	summary := strings.TrimSpace(data[dataSummary])
-	providerSessionID := strings.TrimSpace(data[dataProviderSessionID])
-	approvalTrigger := ApprovalTrigger(strings.TrimSpace(data[dataApprovalTrigger]))
+	current := request.Snapshot.Steps[stepID]
+	from := StepState(strings.TrimSpace(request.Data[dataFromState]))
+	to := StepState(strings.TrimSpace(request.Data[dataToState]))
+	summary := strings.TrimSpace(request.Data[dataSummary])
+	providerSessionID := strings.TrimSpace(request.Data[dataProviderSessionID])
+	approvalTrigger := ApprovalTrigger(strings.TrimSpace(request.Data[dataApprovalTrigger]))
 
 	if err := ensureStepTransition(current.State, from, to); err != nil {
-		return wrapError(code, "invalid transition order", err)
+		return wrapError(request.Code, "invalid transition order", err)
 	}
 
 	current.State = to
-	if event.AttemptID != "" {
-		current.AttemptID = event.AttemptID
+	if request.Event.AttemptID != "" {
+		current.AttemptID = request.Event.AttemptID
 	}
 
 	if providerSessionID != "" {
@@ -241,24 +248,24 @@ func applyApprovalEvent(compiled *workflow.CompiledWorkflow, snapshot *Snapshot,
 		current.Summary = summary
 	}
 
-	if event.Type == store.EventApprovalRequested {
-		current.ApprovalID = event.ApprovalID
+	if request.Event.Type == store.EventApprovalRequested {
+		current.ApprovalID = request.Event.ApprovalID
 		current.ApprovalTrigger = approvalTrigger
 	} else {
 		current.ApprovalID = ""
 		current.ApprovalTrigger = ""
 	}
 
-	snapshot.Steps[stepID] = current
-	recordTransition(transitions, Transition{
-		Sequence:          event.Sequence,
-		EventType:         event.Type,
+	request.Snapshot.Steps[stepID] = current
+	recordTransition(request.Transitions, Transition{
+		Sequence:          request.Event.Sequence,
+		EventType:         request.Event.Type,
 		Scope:             "step",
 		StepID:            stepID,
-		ApprovalID:        event.ApprovalID,
+		ApprovalID:        request.Event.ApprovalID,
 		From:              string(from),
 		To:                string(to),
-		AttemptID:         event.AttemptID,
+		AttemptID:         request.Event.AttemptID,
 		ProviderSessionID: current.ProviderSessionID,
 		Summary:           normalizeSummary(current.Summary, adapters.ExecutionStateRunning),
 	})
@@ -266,29 +273,49 @@ func applyApprovalEvent(compiled *workflow.CompiledWorkflow, snapshot *Snapshot,
 	return nil
 }
 
-func applyEvent(compiled *workflow.CompiledWorkflow, snapshot *Snapshot, transitions *[]Transition, event store.Event, code ErrorCode) error {
-	if err := validateEventPreconditions(compiled, snapshot, event, code); err != nil {
+type applyEventParams struct {
+	Compiled    *workflow.CompiledWorkflow
+	Snapshot    *Snapshot
+	Transitions *[]Transition
+	Event       store.Event
+	Code        ErrorCode
+}
+
+func applyEvent(params applyEventParams) error {
+	if err := validateEventPreconditions(eventPreconditionsParams{
+		Compiled: params.Compiled,
+		Snapshot: params.Snapshot,
+		Event:    params.Event,
+		Code:     params.Code,
+	}); err != nil {
 		return err
 	}
 
-	data := cloneStringMap(event.Data)
+	data := cloneStringMap(params.Event.Data)
 	occurredAt := strings.TrimSpace(data[dataOccurredAt])
 
 	if occurredAt == "" {
-		return newError(code, fmt.Sprintf("event %s missing %s", event.Type, dataOccurredAt))
+		return newError(params.Code, fmt.Sprintf("event %s missing %s", params.Event.Type, dataOccurredAt))
 	}
 
-	handler, err := lookupStateMachineEventHandler(event.Type)
+	handler, err := lookupStateMachineEventHandler(params.Event.Type)
 	if err != nil {
-		return newError(code, err.Error())
+		return newError(params.Code, err.Error())
 	}
 
-	if err := handler.Apply(compiled, snapshot, transitions, event, data, code); err != nil {
+	if err := handler.Apply(stateMachineEventRequest{
+		Compiled:    params.Compiled,
+		Snapshot:    params.Snapshot,
+		Transitions: params.Transitions,
+		Event:       params.Event,
+		Data:        data,
+		Code:        params.Code,
+	}); err != nil {
 		return err
 	}
 
-	snapshot.LastSequence = event.Sequence
-	snapshot.UpdatedAt = occurredAt
+	params.Snapshot.LastSequence = params.Event.Sequence
+	params.Snapshot.UpdatedAt = occurredAt
 
 	return nil
 }

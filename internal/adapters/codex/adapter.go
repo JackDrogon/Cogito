@@ -138,7 +138,7 @@ func (a *Adapter) Start(ctx context.Context, request shared.StartRequest) (*shar
 		return nil, adapterError(shared.ErrorCodeExecution, "read codex output message", readErr)
 	}
 
-	execution := buildExecution(request, version, events, lastMessage, result.Stderr)
+	execution := buildExecution(executionParams{Request: request, Version: version, Events: events, LastMessage: lastMessage, Stderr: result.Stderr})
 
 	a.mu.Lock()
 	a.sessions[execution.Handle.ProviderSessionID] = cloneExecution(execution)

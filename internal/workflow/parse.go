@@ -13,6 +13,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+type stepFieldValidationParams struct {
+	StepID string
+	Kind   StepKind
+	Names  []string
+	Fields map[string]*string
+}
+
 // ParseWorkflow decodes YAML, rejects unknown fields, and validates schema-level rules.
 func ParseWorkflow(data []byte) (*Spec, error) {
 	raw, err := decodeRawWorkflow(data)
@@ -138,15 +145,16 @@ func compileStep(step rawStep, position int) (StepSpec, error) {
 		Needs: cloneStrings(step.Needs),
 	}
 
-	return compileStepKindSpec(id, kind, step, compiled)
+	return compileStepKindSpec(compileStepKindParams{ID: id, Kind: kind, Step: step, Compiled: compiled})
 }
 
-func requiredStepFields(stepID string, kind StepKind, names []string, fields map[string]*string) (map[string]string, error) {
-	values := make(map[string]string, len(names))
-	for _, name := range names {
-		value := fields[name]
+func requiredStepFields(params stepFieldValidationParams) (map[string]string, error) {
+	values := make(map[string]string, len(params.Names))
+
+	for _, name := range params.Names {
+		value := params.Fields[name]
 		if value == nil || strings.TrimSpace(*value) == "" {
-			return nil, newError(ErrorCodeSchema, fmt.Sprintf("step %q field %q is required for kind %q", stepID, name, kind))
+			return nil, newError(ErrorCodeSchema, fmt.Sprintf("step %q field %q is required for kind %q", params.StepID, name, params.Kind))
 		}
 
 		values[name] = strings.TrimSpace(*value)
@@ -155,10 +163,10 @@ func requiredStepFields(stepID string, kind StepKind, names []string, fields map
 	return values, nil
 }
 
-func rejectStepFieldNames(stepID string, kind StepKind, names []string, fields map[string]*string) error {
-	for _, name := range names {
-		if fields[name] != nil {
-			return newError(ErrorCodeSchema, fmt.Sprintf("step %q field %q is not allowed for kind %q", stepID, name, kind))
+func rejectStepFieldNames(params stepFieldValidationParams) error {
+	for _, name := range params.Names {
+		if params.Fields[name] != nil {
+			return newError(ErrorCodeSchema, fmt.Sprintf("step %q field %q is not allowed for kind %q", params.StepID, name, params.Kind))
 		}
 	}
 

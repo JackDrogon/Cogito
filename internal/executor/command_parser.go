@@ -7,6 +7,24 @@ import (
 	"strings"
 )
 
+type quotedParseParams struct {
+	Rune     rune
+	InSingle *bool
+	InDouble *bool
+	Escaped  *bool
+	Current  *strings.Builder
+}
+
+type unquotedParseParams struct {
+	Rune         rune
+	InSingle     *bool
+	InDouble     *bool
+	Escaped      *bool
+	TokenStarted *bool
+	Current      *strings.Builder
+	Flush        func()
+}
+
 func ParseCommand(command, dir string) (CommandSpec, error) {
 	argv, err := TokenizeCommand(command)
 	if err != nil {
@@ -54,11 +72,25 @@ func TokenizeCommand(command string) ([]string, error) {
 		}
 
 		if inSingle || inDouble {
-			parseQuoted(r, &inSingle, &inDouble, &escaped, &current)
+			parseQuoted(quotedParseParams{
+				Rune:     r,
+				InSingle: &inSingle,
+				InDouble: &inDouble,
+				Escaped:  &escaped,
+				Current:  &current,
+			})
 
 			tokenStarted = true
 		} else {
-			parseUnquoted(r, &inSingle, &inDouble, &escaped, &tokenStarted, &current, flush)
+			parseUnquoted(unquotedParseParams{
+				Rune:         r,
+				InSingle:     &inSingle,
+				InDouble:     &inDouble,
+				Escaped:      &escaped,
+				TokenStarted: &tokenStarted,
+				Current:      &current,
+				Flush:        flush,
+			})
 		}
 	}
 
@@ -77,44 +109,44 @@ func TokenizeCommand(command string) ([]string, error) {
 	return args, nil
 }
 
-func parseQuoted(r rune, inSingle, inDouble, escaped *bool, current *strings.Builder) {
+func parseQuoted(params quotedParseParams) {
 	switch {
-	case *inSingle:
-		if r == '\'' {
-			*inSingle = false
+	case *params.InSingle:
+		if params.Rune == '\'' {
+			*params.InSingle = false
 		} else {
-			current.WriteRune(r)
+			params.Current.WriteRune(params.Rune)
 		}
-	case *inDouble:
-		switch r {
+	case *params.InDouble:
+		switch params.Rune {
 		case '\\':
-			*escaped = true
+			*params.Escaped = true
 		case '"':
-			*inDouble = false
+			*params.InDouble = false
 		default:
-			current.WriteRune(r)
+			params.Current.WriteRune(params.Rune)
 		}
 	}
 }
 
-func parseUnquoted(r rune, inSingle, inDouble, escaped, tokenStarted *bool, current *strings.Builder, flush func()) {
-	switch r {
+func parseUnquoted(params unquotedParseParams) {
+	switch params.Rune {
 	case '\\':
-		*escaped = true
-		*tokenStarted = true
+		*params.Escaped = true
+		*params.TokenStarted = true
 	case '\'':
-		*inSingle = true
-		*tokenStarted = true
+		*params.InSingle = true
+		*params.TokenStarted = true
 	case '"':
-		*inDouble = true
-		*tokenStarted = true
+		*params.InDouble = true
+		*params.TokenStarted = true
 	case ' ', '\t', '\n', '\r':
-		if *tokenStarted {
-			flush()
+		if *params.TokenStarted {
+			params.Flush()
 		}
 	default:
-		current.WriteRune(r)
+		params.Current.WriteRune(params.Rune)
 
-		*tokenStarted = true
+		*params.TokenStarted = true
 	}
 }

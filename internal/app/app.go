@@ -86,6 +86,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer) error {
 
 	return nil
 }
+
 func parseSharedFlags(commandName string, args []string, stdout io.Writer) (*parsedSharedFlagsResult, error) {
 	fs := flag.NewFlagSet(commandName, flag.ContinueOnError)
 	fs.SetOutput(stdout)

@@ -197,7 +197,7 @@ func TestAcquireRepoLockHonorsDirtyAndReleases(t *testing.T) {
 
 func TestExecuteWorkflowRunUsesRepoLockAndDirtyGuard(t *testing.T) {
 	fixture := newAppRepoFixture(t)
-	workflowPath := writeWorkflowFile(t, fixture.repoDir, "lock.yaml", "sleep 1")
+	workflowPath := writeWorkflowFile(workflowFileParams{Test: t, RepoDir: fixture.repoDir, Name: "lock.yaml", Command: "sleep 1"})
 	stateDir := filepath.Join(fixture.runsRoot, "run-lock")
 	runLockPath := filepath.Join(stateDir, "locks", "repo.lock.json")
 
@@ -276,7 +276,7 @@ func TestRunServiceOpenExistingRunSessionUsesPersistedWorkingDir(t *testing.T) {
 		t.Fatalf("MkdirAll(workingDir) error = %v", err)
 	}
 
-	writePausedCommandRunState(t, stateDir, workingDir, "pwd")
+	writePausedCommandRunState(pausedCommandRunStateParams{Test: t, StateDir: stateDir, WorkingDir: workingDir, Command: "pwd"})
 
 	session, err := runs.openExistingRunSession(stateDir, nil)
 	if err != nil {
@@ -354,6 +354,13 @@ type appRepoFixture struct {
 	runsRoot string
 }
 
+type workflowFileParams struct {
+	Test    *testing.T
+	RepoDir string
+	Name    string
+	Command string
+}
+
 func newAppRepoFixture(t *testing.T) appRepoFixture {
 	t.Helper()
 
@@ -406,13 +413,13 @@ func writeAppFile(t *testing.T, path string, content []byte) {
 	}
 }
 
-func writeWorkflowFile(t *testing.T, repoDir, name, command string) string {
-	t.Helper()
+func writeWorkflowFile(params workflowFileParams) string {
+	params.Test.Helper()
 
-	path := filepath.Join(repoDir, name)
-	content := fmt.Sprintf("apiVersion: cogito/v1alpha1\nkind: Workflow\nmetadata:\n  name: lock-check\nsteps:\n  - id: run\n    kind: command\n    command: %s\n", command)
-	writeAppFile(t, path, []byte(content))
-	runGitInRepo(t, repoDir, "add", name)
-	runGitCommitInRepo(t, repoDir, "add workflow "+name)
+	path := filepath.Join(params.RepoDir, params.Name)
+	content := fmt.Sprintf("apiVersion: cogito/v1alpha1\nkind: Workflow\nmetadata:\n  name: lock-check\nsteps:\n  - id: run\n    kind: command\n    command: %s\n", params.Command)
+	writeAppFile(params.Test, path, []byte(content))
+	runGitInRepo(params.Test, params.RepoDir, "add", params.Name)
+	runGitCommitInRepo(params.Test, params.RepoDir, "add workflow "+params.Name)
 	return path
 }

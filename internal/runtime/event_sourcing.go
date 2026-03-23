@@ -15,7 +15,12 @@ func (e *Engine) ensureInitialized() error {
 		return nil
 	}
 
-	return e.persistRunTransition(store.EventRunCreated, RunState(""), RunStatePending, "run created")
+	return e.persistRunTransition(RunTransitionParams{
+		EventType: store.EventRunCreated,
+		From:      RunState(""),
+		To:        RunStatePending,
+		Message:   "run created",
+	})
 }
 
 func (e *Engine) queueReadySteps() error {
@@ -128,15 +133,22 @@ func (e *Engine) persistApprovalResolution(params ApprovalResolutionParams) erro
 	return e.persistEvent(event)
 }
 
-func (e *Engine) persistRunTransition(eventType store.EventType, from, to RunState, message string) error {
-	summary := normalizeSummary(message, adapters.ExecutionStateRunning)
+type RunTransitionParams struct {
+	EventType store.EventType
+	From      RunState
+	To        RunState
+	Message   string
+}
+
+func (e *Engine) persistRunTransition(params RunTransitionParams) error {
+	summary := normalizeSummary(params.Message, adapters.ExecutionStateRunning)
 	event := store.Event{
-		Type:    eventType,
+		Type:    params.EventType,
 		Message: summary,
 		Data: map[string]string{
 			dataOccurredAt: e.clock().UTC().Format(time.RFC3339Nano),
-			dataFromState:  string(from),
-			dataToState:    string(to),
+			dataFromState:  string(params.From),
+			dataToState:    string(params.To),
 			dataSummary:    summary,
 		},
 	}
@@ -184,7 +196,12 @@ func (e *Engine) persistEvent(event store.Event) error {
 	previewEvent := cloneEvent(event)
 	previewEvent.Sequence = previewSnapshot.LastSequence + 1
 
-	if err := applyEvent(e.compiled, &previewSnapshot, nil, previewEvent, ErrorCodeState); err != nil {
+	if err := applyEvent(applyEventParams{
+		Compiled: e.compiled,
+		Snapshot: &previewSnapshot,
+		Event:    previewEvent,
+		Code:     ErrorCodeState,
+	}); err != nil {
 		return err
 	}
 
@@ -193,7 +210,13 @@ func (e *Engine) persistEvent(event store.Event) error {
 		return err
 	}
 
-	if err := applyEvent(e.compiled, &e.snapshot, &e.transitions, appended, ErrorCodeState); err != nil {
+	if err := applyEvent(applyEventParams{
+		Compiled:    e.compiled,
+		Snapshot:    &e.snapshot,
+		Transitions: &e.transitions,
+		Event:       appended,
+		Code:        ErrorCodeState,
+	}); err != nil {
 		return err
 	}
 
@@ -247,7 +270,12 @@ func (e *Engine) failRunForExecutionError(params FailRunParams) error {
 		return err
 	}
 
-	if err := e.persistRunTransition(store.EventRunFailed, RunStateRunning, RunStateFailed, summary); err != nil {
+	if err := e.persistRunTransition(RunTransitionParams{
+		EventType: store.EventRunFailed,
+		From:      RunStateRunning,
+		To:        RunStateFailed,
+		Message:   summary,
+	}); err != nil {
 		return err
 	}
 

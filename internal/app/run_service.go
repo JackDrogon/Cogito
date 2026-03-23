@@ -22,22 +22,30 @@ type runEngineResult struct {
 	wiring runtimeWiring
 }
 
-func (runService) newRunEngine(runID string, compiled *workflow.CompiledWorkflow, runStore *store.Store, flags *sharedFlags, approvalPolicy runtime.ApprovalPolicy) (*runEngineResult, error) {
-	if runStore == nil {
+type newRunEngineInput struct {
+	RunID          string
+	Compiled       *workflow.CompiledWorkflow
+	RunStore       *store.Store
+	Flags          *sharedFlags
+	ApprovalPolicy runtime.ApprovalPolicy
+}
+
+func (runService) newRunEngine(input newRunEngineInput) (*runEngineResult, error) {
+	if input.RunStore == nil {
 		return nil, errors.New("runService.newRunEngine: run store is required")
 	}
-	if compiled == nil {
+	if input.Compiled == nil {
 		return nil, errors.New("runService.newRunEngine: compiled workflow is required")
 	}
 
-	wiring, err := buildRuntimeWiring(runStore, flags)
+	wiring, err := buildRuntimeWiring(input.RunStore, input.Flags)
 	if err != nil {
 		return nil, err
 	}
 
-	engine, err := runtime.NewEngine(runID, compiled, runtime.MachineDependencies{
-		Store:          runStore,
-		ApprovalPolicy: approvalPolicy,
+	engine, err := runtime.NewEngine(input.RunID, input.Compiled, runtime.MachineDependencies{
+		Store:          input.RunStore,
+		ApprovalPolicy: input.ApprovalPolicy,
 		LookupAdapter:  wiring.LookupAdapter,
 		CommandRunner:  wiring.CommandRunner,
 		RepoPath:       wiring.RepoPath,
@@ -71,7 +79,12 @@ func (s runService) openExistingRunSession(stateDir string, flags *sharedFlags) 
 		return existingRunSession{}, err
 	}
 
-	runEngine, err := s.newRunEngine(runID, compiled, runStore, flags, nil)
+	runEngine, err := s.newRunEngine(newRunEngineInput{
+		RunID:    runID,
+		Compiled: compiled,
+		RunStore: runStore,
+		Flags:    flags,
+	})
 	if err != nil {
 		return existingRunSession{}, err
 	}

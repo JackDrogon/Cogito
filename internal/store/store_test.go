@@ -11,6 +11,13 @@ import (
 	"testing"
 )
 
+type artifactFileParams struct {
+	Test         *testing.T
+	Store        *Store
+	RelativePath string
+	Content      []byte
+}
+
 func TestAppendOnlyEventLog(t *testing.T) {
 	store := openTestStore(t)
 
@@ -192,7 +199,7 @@ func TestSecurePermissions(t *testing.T) {
 		t.Fatalf("SaveCheckpoint() error = %v", err)
 	}
 
-	writeArtifactFile(t, store, "outputs/result.txt", []byte("done\n"))
+	writeArtifactFile(artifactFileParams{Test: t, Store: store, RelativePath: "outputs/result.txt", Content: []byte("done\n")})
 
 	if err := store.SaveArtifacts([]ArtifactRecord{{Path: "outputs/result.txt", Kind: "log"}}); err != nil {
 		t.Fatalf("SaveArtifacts() error = %v", err)
@@ -261,7 +268,7 @@ func TestArtifactIndexRejectsPathTraversal(t *testing.T) {
 func TestArtifactDigestPersistence(t *testing.T) {
 	store := openTestStore(t)
 	content := []byte("artifact payload\n")
-	writeArtifactFile(t, store, "outputs/report.txt", content)
+	writeArtifactFile(artifactFileParams{Test: t, Store: store, RelativePath: "outputs/report.txt", Content: content})
 
 	if err := store.SaveArtifacts([]ArtifactRecord{{
 		Path:      "outputs/../outputs/report.txt",
@@ -306,7 +313,7 @@ func TestArtifactDigestPersistence(t *testing.T) {
 func TestRedactedSummariesExcludeSecrets(t *testing.T) {
 	store := openTestStore(t)
 	rawLog := []byte("token=super-secret\npassword=hunter2\n")
-	writeArtifactFile(t, store, "provider-logs/step-1.log", rawLog)
+	writeArtifactFile(artifactFileParams{Test: t, Store: store, RelativePath: "provider-logs/step-1.log", Content: rawLog})
 
 	secretSummary := "token=super-secret password=hunter2 authorization=Bearer abc123 api_key=xyz987"
 	if err := store.SaveArtifacts([]ArtifactRecord{{
@@ -390,15 +397,15 @@ func writeTestFile(t *testing.T, path string, content []byte) {
 	}
 }
 
-func writeArtifactFile(t *testing.T, store *Store, relativePath string, content []byte) {
-	t.Helper()
+func writeArtifactFile(params artifactFileParams) {
+	params.Test.Helper()
 
-	fullPath := filepath.Join(store.Layout().RunDir, filepath.FromSlash(relativePath))
+	fullPath := filepath.Join(params.Store.Layout().RunDir, filepath.FromSlash(params.RelativePath))
 	if err := os.MkdirAll(filepath.Dir(fullPath), persistedDirMode); err != nil {
-		t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(fullPath), err)
+		params.Test.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(fullPath), err)
 	}
 
-	writeTestFile(t, fullPath, content)
+	writeTestFile(params.Test, fullPath, params.Content)
 }
 
 func assertMode(t *testing.T, path string, want os.FileMode) {

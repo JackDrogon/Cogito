@@ -4,6 +4,13 @@
 **Commit:** 8d4abee
 **Branch:** master
 
+
+## RULES(P0)
+- 函数入参 <= 3， 多了就使用struct param
+- 返回值 <= 2
+- 代码风格尽量OOP，构建合理的抽象
+
+
 ## OVERVIEW
 Cogito is a Go CLI for deterministic, auditable AI workflow execution. The maintained code lives under `cmd/`, `internal/`, and `docs/design/`; `ref/tmp/` is the default home for runs, downloaded references, and scratch material.
 

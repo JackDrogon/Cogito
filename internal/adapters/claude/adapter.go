@@ -119,7 +119,7 @@ func (a *Adapter) Start(ctx context.Context, request shared.StartRequest) (*shar
 		return nil, adapterError(shared.ErrorCodeResult, "parse claude json output", parseErr)
 	}
 
-	execution := buildExecution(request, version, response, result.Stderr)
+	execution := buildExecution(executionParams{Request: request, Version: version, Response: response, Stderr: result.Stderr})
 
 	a.mu.Lock()
 	a.sessions[execution.Handle.ProviderSessionID] = cloneExecution(execution)

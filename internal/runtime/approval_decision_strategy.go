@@ -10,13 +10,19 @@ import (
 )
 
 type approvalDecisionHandler interface {
-	Handle(ctx context.Context, engine *Engine, pending pendingApproval, summary string) error
+	Handle(ctx context.Context, request approvalDecisionRequest) error
 }
 
-type approvalDecisionHandlerFunc func(ctx context.Context, engine *Engine, pending pendingApproval, summary string) error
+type approvalDecisionRequest struct {
+	Engine  *Engine
+	Pending pendingApproval
+	Summary string
+}
 
-func (f approvalDecisionHandlerFunc) Handle(ctx context.Context, engine *Engine, pending pendingApproval, summary string) error {
-	return f(ctx, engine, pending, summary)
+type approvalDecisionHandlerFunc func(ctx context.Context, request approvalDecisionRequest) error
+
+func (f approvalDecisionHandlerFunc) Handle(ctx context.Context, request approvalDecisionRequest) error {
+	return f(ctx, request)
 }
 
 func lookupApprovalDecisionHandler(decision ApprovalDecision) (approvalDecisionHandler, error) {
@@ -47,75 +53,75 @@ func resolveApprovalSummary(decision ApprovalDecision, step workflow.CompiledSte
 	return summary
 }
 
-func handleApprovalGranted(ctx context.Context, engine *Engine, pending pendingApproval, summary string) error {
-	if err := engine.persistApprovalResolution(ApprovalResolutionParams{
+func handleApprovalGranted(ctx context.Context, request approvalDecisionRequest) error {
+	if err := request.Engine.persistApprovalResolution(ApprovalResolutionParams{
 		EventType: store.EventApprovalGranted,
-		Pending:   pending,
+		Pending:   request.Pending,
 		From:      StepStateWaitingApproval,
 		To:        StepStateRunning,
-		Summary:   summary,
+		Summary:   request.Summary,
 	}); err != nil {
 		return err
 	}
 
-	if err := engine.persistRunTransition(
-		store.EventRunStarted,
-		RunStateWaitingApproval,
-		RunStateRunning,
-		"run resumed",
-	); err != nil {
+	if err := request.Engine.persistRunTransition(RunTransitionParams{
+		EventType: store.EventRunStarted,
+		From:      RunStateWaitingApproval,
+		To:        RunStateRunning,
+		Message:   "run resumed",
+	}); err != nil {
 		return err
 	}
 
-	if err := engine.continueApprovedStep(ctx, pending); err != nil {
+	if err := request.Engine.continueApprovedStep(ctx, request.Pending); err != nil {
 		return err
 	}
 
-	return engine.finalizeRunningState()
+	return request.Engine.finalizeRunningState()
 }
 
-func handleApprovalDenied(_ context.Context, engine *Engine, pending pendingApproval, summary string) error {
-	if err := engine.persistApprovalResolution(ApprovalResolutionParams{
+func handleApprovalDenied(_ context.Context, request approvalDecisionRequest) error {
+	if err := request.Engine.persistApprovalResolution(ApprovalResolutionParams{
 		EventType: store.EventApprovalDenied,
-		Pending:   pending,
+		Pending:   request.Pending,
 		From:      StepStateWaitingApproval,
 		To:        StepStateFailed,
-		Summary:   summary,
+		Summary:   request.Summary,
 	}); err != nil {
 		return err
 	}
 
-	if err := engine.persistRunTransition(
-		store.EventRunFailed,
-		RunStateWaitingApproval,
-		RunStateFailed,
-		summary,
-	); err != nil {
+	if err := request.Engine.persistRunTransition(RunTransitionParams{
+		EventType: store.EventRunFailed,
+		From:      RunStateWaitingApproval,
+		To:        RunStateFailed,
+		Message:   request.Summary,
+	}); err != nil {
 		return err
 	}
 
-	return newError(ErrorCodeExecution, summary)
+	return newError(ErrorCodeExecution, request.Summary)
 }
 
-func handleApprovalTimedOut(_ context.Context, engine *Engine, pending pendingApproval, summary string) error {
-	if err := engine.persistApprovalResolution(ApprovalResolutionParams{
+func handleApprovalTimedOut(_ context.Context, request approvalDecisionRequest) error {
+	if err := request.Engine.persistApprovalResolution(ApprovalResolutionParams{
 		EventType: store.EventApprovalTimedOut,
-		Pending:   pending,
+		Pending:   request.Pending,
 		From:      StepStateWaitingApproval,
 		To:        StepStateFailed,
-		Summary:   summary,
+		Summary:   request.Summary,
 	}); err != nil {
 		return err
 	}
 
-	if err := engine.persistRunTransition(
-		store.EventRunFailed,
-		RunStateWaitingApproval,
-		RunStateFailed,
-		summary,
-	); err != nil {
+	if err := request.Engine.persistRunTransition(RunTransitionParams{
+		EventType: store.EventRunFailed,
+		From:      RunStateWaitingApproval,
+		To:        RunStateFailed,
+		Message:   request.Summary,
+	}); err != nil {
 		return err
 	}
 
-	return newError(ErrorCodeExecution, summary)
+	return newError(ErrorCodeExecution, request.Summary)
 }

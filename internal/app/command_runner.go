@@ -45,6 +45,14 @@ type commandSessionResult struct {
 	err    error
 }
 
+type commandExecutionParams struct {
+	Handle      adapters.ExecutionHandle
+	CommandSpec executor.CommandSpec
+	StepID      string
+	StdoutPath  string
+	StderrPath  string
+}
+
 func newSupervisorCommandRunner(runStore *store.Store, workingDir string, timeout time.Duration) *supervisorCommandRunner {
 	return &supervisorCommandRunner{
 		store:      runStore,
@@ -99,7 +107,13 @@ func (r *supervisorCommandRunner) Start(ctx context.Context, request runtime.Com
 	r.mu.Unlock()
 
 	go func() {
-		result, err := r.runCommand(runCtx, handle, commandSpec, request.StepID, stdoutPath, stderrPath)
+		result, err := r.runCommand(runCtx, commandExecutionParams{
+			Handle:      handle,
+			CommandSpec: commandSpec,
+			StepID:      request.StepID,
+			StdoutPath:  stdoutPath,
+			StderrPath:  stderrPath,
+		})
 		session.complete(result, err)
 	}()
 
@@ -146,20 +160,20 @@ func (r *supervisorCommandRunner) NormalizeResult(_ context.Context, execution *
 	}, nil
 }
 
-func (r *supervisorCommandRunner) runCommand(ctx context.Context, handle adapters.ExecutionHandle, commandSpec executor.CommandSpec, stepID, stdoutPath, stderrPath string) (*adapters.Execution, error) {
+func (r *supervisorCommandRunner) runCommand(ctx context.Context, params commandExecutionParams) (*adapters.Execution, error) {
 	result, err := r.supervisor.Run(ctx, executor.RunRequest{
-		Handle:     handle,
-		Command:    commandSpec,
+		Handle:     params.Handle,
+		Command:    params.CommandSpec,
 		Timeout:    r.timeout,
-		StdoutPath: stdoutPath,
-		StderrPath: stderrPath,
+		StdoutPath: params.StdoutPath,
+		StderrPath: params.StderrPath,
 		Normalizer: executor.DefaultNormalizer(),
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	if err := r.saveArtifacts(stepID, stdoutPath, stderrPath); err != nil {
+	if err := r.saveArtifacts(params.StepID, params.StdoutPath, params.StderrPath); err != nil {
 		return nil, err
 	}
 

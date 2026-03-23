@@ -9,6 +9,13 @@ import (
 	"testing"
 )
 
+type workflowErrorExpectation struct {
+	Test        *testing.T
+	Error       error
+	WantCode    ErrorCode
+	WantMessage string
+}
+
 func TestParseWorkflow(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -81,7 +88,7 @@ func TestParseWorkflow(t *testing.T) {
 				return
 			}
 
-			assertWorkflowError(t, err, tt.wantCode, tt.wantMessage)
+			assertWorkflowError(workflowErrorExpectation{Test: t, Error: err, WantCode: tt.wantCode, WantMessage: tt.wantMessage})
 		})
 	}
 }
@@ -220,29 +227,29 @@ func TestValidateWorkflowDAG(t *testing.T) {
 				return
 			}
 
-			assertWorkflowError(t, err, tt.wantCode, tt.wantMessage)
+			assertWorkflowError(workflowErrorExpectation{Test: t, Error: err, WantCode: tt.wantCode, WantMessage: tt.wantMessage})
 		})
 	}
 }
 
-func assertWorkflowError(t *testing.T, err error, wantCode ErrorCode, wantMessage string) {
-	t.Helper()
+func assertWorkflowError(expectation workflowErrorExpectation) {
+	expectation.Test.Helper()
 
-	if err == nil {
-		t.Fatal("expected error, got nil")
+	if expectation.Error == nil {
+		expectation.Test.Fatal("expected error, got nil")
 	}
 
 	var workflowErr *Error
-	if !errors.As(err, &workflowErr) {
-		t.Fatalf("error type = %T, want *workflow.Error", err)
+	if !errors.As(expectation.Error, &workflowErr) {
+		expectation.Test.Fatalf("error type = %T, want *workflow.Error", expectation.Error)
 	}
 
-	if workflowErr.Code != wantCode {
-		t.Fatalf("error code = %q, want %q", workflowErr.Code, wantCode)
+	if workflowErr.Code != expectation.WantCode {
+		expectation.Test.Fatalf("error code = %q, want %q", workflowErr.Code, expectation.WantCode)
 	}
 
-	if !strings.Contains(workflowErr.Error(), wantMessage) {
-		t.Fatalf("error = %q, want substring %q", workflowErr.Error(), wantMessage)
+	if !strings.Contains(workflowErr.Error(), expectation.WantMessage) {
+		expectation.Test.Fatalf("error = %q, want substring %q", workflowErr.Error(), expectation.WantMessage)
 	}
 }
 
