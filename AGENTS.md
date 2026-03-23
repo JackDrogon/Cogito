@@ -58,17 +58,52 @@ Cogito/
 - Provider adapters are capability-driven rather than feature-assumed.
 - Package docs and design docs carry most subsystem-specific architecture notes; use them before inferring behavior from call sites alone.
 
-## COMMANDS
+## DEVELOPMENT WORKFLOW
+
+> **Always use `just` — never raw `go build` / `go test` / `golangci-lint` directly.**
+> The justfile injects version ldflags, enforces `gofumpt` formatting, and mirrors CI.
+> Running bare `go` commands skips these settings and will produce different results.
+
+### Build
 ```bash
-just build
-just test
-just lint
-just pre-commit
-just run -- --help
-go test ./...
+just build          # → bin/cogito  (includes version ldflags)
+just install        # → $GOPATH/bin/cogito
+just clean          # remove build artifacts
 ```
 
+### Format
+```bash
+just fmt            # gofumpt -l -w .  (not gofmt — the project uses gofumpt)
+```
+Run this before committing; `just pre-commit` also calls it automatically.
+
+### Lint
+```bash
+just lint           # golangci-lint run  (config: .golangci.yml)
+```
+Linting is strict; fix all warnings before pushing.
+
+### Test
+```bash
+just test           # go test ./...
+just test ./internal/runtime/...   # test a single package subtree
+just test-v         # verbose output
+just cover          # coverage report → coverage.out
+```
+
+### Run
+```bash
+just run -- --help          # build then execute with args
+just run -- run workflow.yaml
+```
+
+### Pre-commit (CI gate)
+```bash
+just pre-commit     # runs: fmt → lint → test  (in order)
+```
+This is the local equivalent of CI. Run it before pushing.
+
 ## NOTES
-- CI runs `go build ./cmd/cogito`, `go test ./...`, and `golangci-lint`; local changes should satisfy the same gates.
+- CI mirrors `just build`, `just test`, and `just lint`; run `just pre-commit` locally to validate before pushing.
 - `docs/design/README.md` is the index for numbered design notes; preserve numbering and update the map when adding docs.
 - If you need domain-specific guidance inside source packages, check `internal/AGENTS.md` first, then descend into child AGENTS files.
