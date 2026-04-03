@@ -165,7 +165,11 @@ func (s *Supervisor) setupCommand(request RunRequest, stdoutFile, stderrFile *os
 	return &commandSetup{cmd: cmd, handleID: handleID}, nil
 }
 
-func (s *Supervisor) monitorProcess(ctx context.Context, cmd *exec.Cmd, timeout time.Duration) (*processMonitorResult, error) {
+func (s *Supervisor) monitorProcess(
+	ctx context.Context,
+	cmd *exec.Cmd,
+	timeout time.Duration,
+) (*processMonitorResult, error) {
 	waitCh := make(chan error, 1)
 	go func() {
 		waitCh <- cmd.Wait()

@@ -49,6 +49,7 @@ func newAdapterLookup(resolver adapterResolver) runtime.AdapterLookup {
 		}
 
 		provider := strings.TrimSpace(step.Agent.Agent)
+
 		adapter, ok := resolver.Resolve(provider)
 		if !ok {
 			return nil, fmt.Errorf("adapter %q is not registered", provider)
@@ -59,9 +60,7 @@ func newAdapterLookup(resolver adapterResolver) runtime.AdapterLookup {
 }
 
 func builtinAdapterResolver() adapterResolver {
-	return adapterResolverFunc(func(provider string) (adapters.Adapter, bool) {
-		return lookupBuiltinLocalAdapter(provider)
-	})
+	return adapterResolverFunc(lookupBuiltinLocalAdapter)
 }
 
 func registeredAdapterResolver() adapterResolver {

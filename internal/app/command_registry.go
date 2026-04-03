@@ -47,6 +47,7 @@ func (r *commandRegistry) Lookup(name string) (command, bool) {
 	}
 
 	cmd, ok := r.index[strings.TrimSpace(name)]
+
 	return cmd, ok
 }
 

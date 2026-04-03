@@ -34,6 +34,7 @@ func (runService) newRunEngine(input newRunEngineInput) (*runEngineResult, error
 	if input.RunStore == nil {
 		return nil, errors.New("runService.newRunEngine: run store is required")
 	}
+
 	if input.Compiled == nil {
 		return nil, errors.New("runService.newRunEngine: compiled workflow is required")
 	}
@@ -67,6 +68,7 @@ func (s runService) openExistingRunSession(stateDir string, flags *sharedFlags) 
 
 		return existingRunSession{}, err
 	}
+
 	runStore := runStoreResult.store
 	runID := runStoreResult.runID
 

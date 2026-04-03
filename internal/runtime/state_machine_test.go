@@ -1197,7 +1197,7 @@ func (p testApprovalPolicy) EvaluateException(ctx context.Context, request Appro
 		return p.evaluateException(ctx, request)
 	}
 
-	return nil, nil
+	return nil, errNoApprovalException
 }
 
 type commandScript struct {

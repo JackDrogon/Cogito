@@ -308,10 +308,12 @@ func (execRunner) Run(ctx context.Context, command CommandSpec) (CommandResult, 
 	var stderr bytes.Buffer
 
 	stdoutWriter := command.Stdout
+	stderrWriter := command.Stderr
+
 	if stdoutWriter == nil {
 		stdoutWriter = io.Discard
 	}
-	stderrWriter := command.Stderr
+
 	if stderrWriter == nil {
 		stderrWriter = io.Discard
 	}

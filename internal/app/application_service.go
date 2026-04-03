@@ -81,7 +81,7 @@ func (applicationService) ValidateWorkflow(_ context.Context, input ValidateWork
 	return nil
 }
 
-func (s applicationService) RunWorkflow(ctx context.Context, input RunWorkflowInput) (output RunWorkflowOutput, err error) {
+func (s applicationService) RunWorkflow(ctx context.Context, input RunWorkflowInput) (RunWorkflowOutput, error) {
 	if input.Flags == nil {
 		return RunWorkflowOutput{}, errors.New("applicationService.RunWorkflow: flags are required")
 	}
@@ -105,6 +105,7 @@ func (s applicationService) RunWorkflow(ctx context.Context, input RunWorkflowIn
 	if err != nil {
 		return RunWorkflowOutput{}, err
 	}
+
 	defer func() {
 		if releaseErr := repoLock.Release(); err == nil && releaseErr != nil {
 			err = releaseErr
@@ -130,6 +131,7 @@ func (s applicationService) RunWorkflow(ctx context.Context, input RunWorkflowIn
 	if err != nil {
 		return RunWorkflowOutput{}, err
 	}
+
 	engine := runEngine.engine
 
 	if err := s.runs.executeUntilSettled(ctx, engine); err != nil {
@@ -152,6 +154,7 @@ func (s applicationService) StatusRun(_ context.Context, input StatusRunInput) (
 
 	snapshot := session.engine.Snapshot()
 	statusView := runtime.BuildRunStatusView(session.compiled, snapshot)
+
 	return StatusRunOutput{
 		StateDir: session.store.Layout().RunDir,
 		View:     statusView,

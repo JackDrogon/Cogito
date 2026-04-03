@@ -38,11 +38,14 @@ func (textPresenter) PresentMessage(stdout io.Writer, message string) error {
 func renderStatusView(stateDir string, view runtime.RunStatusView) string {
 	var builder strings.Builder
 	_, _ = fmt.Fprintf(&builder, "run_id=%s\nstate_dir=%s\nstate=%s\n", view.RunID, stateDir, view.State)
+
 	for _, step := range view.StepViews {
 		_, _ = fmt.Fprintf(&builder, "step=%s state=%s", step.StepID, step.State)
+
 		if strings.TrimSpace(step.Summary) != "" {
 			_, _ = fmt.Fprintf(&builder, " summary=%q", step.Summary)
 		}
+
 		builder.WriteByte('\n')
 	}
 
@@ -51,7 +54,9 @@ func renderStatusView(stateDir string, view runtime.RunStatusView) string {
 
 func renderReplayView(view runtime.ReplayView) string {
 	var builder strings.Builder
+
 	builder.WriteString("replay OK\n")
 	_, _ = fmt.Fprintf(&builder, "run_id=%s\nstate=%s\ntransitions=%d\n", view.RunID, view.State, len(view.Transitions))
+
 	return builder.String()
 }

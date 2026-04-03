@@ -42,6 +42,7 @@ func BuildRunStatusView(compiled *workflow.CompiledWorkflow, snapshot Snapshot) 
 	}
 
 	view.StepViews = make([]StepStatusView, 0, len(compiled.TopologicalOrder))
+
 	for _, stepID := range compiled.TopologicalOrder {
 		step := snapshot.Steps[stepID]
 		view.StepViews = append(view.StepViews, StepStatusView{
@@ -63,7 +64,8 @@ func BuildReplayView(compiled *workflow.CompiledWorkflow, replay ReplayResult) R
 		Transitions:  make([]TransitionView, 0, len(replay.Transitions)),
 	}
 
-	for _, transition := range replay.Transitions {
+	for i := range replay.Transitions {
+		transition := replay.Transitions[i]
 		view.Transitions = append(view.Transitions, TransitionView{
 			Sequence:  transition.Sequence,
 			EventType: string(transition.EventType),

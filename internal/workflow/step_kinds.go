@@ -15,33 +15,35 @@ type compileStepKindParams struct {
 	Compiled StepSpec
 }
 
-var stepKindDescriptors = map[StepKind]stepKindDescriptor{
-	StepKindAgent: {
-		required:  []string{"agent", "prompt"},
-		forbidden: []string{"command", "message"},
-		bind: func(values map[string]string, step *StepSpec) {
-			step.Agent = &AgentStepSpec{Agent: values["agent"], Prompt: values["prompt"]}
-		},
-	},
-	StepKindCommand: {
-		required:  []string{"command"},
-		forbidden: []string{"agent", "prompt", "message"},
-		bind: func(values map[string]string, step *StepSpec) {
-			step.Command = &CommandStepSpec{Command: values["command"]}
-		},
-	},
-	StepKindApproval: {
-		required:  []string{"message"},
-		forbidden: []string{"agent", "prompt", "command"},
-		bind: func(values map[string]string, step *StepSpec) {
-			step.Approval = &ApprovalStepSpec{Message: values["message"]}
-		},
-	},
-}
-
 func lookupStepKindDescriptor(kind StepKind) (stepKindDescriptor, bool) {
-	descriptor, ok := stepKindDescriptors[kind]
-	return descriptor, ok
+	switch kind {
+	case StepKindAgent:
+		return stepKindDescriptor{
+			required:  []string{"agent", "prompt"},
+			forbidden: []string{"command", "message"},
+			bind: func(values map[string]string, step *StepSpec) {
+				step.Agent = &AgentStepSpec{Agent: values["agent"], Prompt: values["prompt"]}
+			},
+		}, true
+	case StepKindCommand:
+		return stepKindDescriptor{
+			required:  []string{"command"},
+			forbidden: []string{"agent", "prompt", "message"},
+			bind: func(values map[string]string, step *StepSpec) {
+				step.Command = &CommandStepSpec{Command: values["command"]}
+			},
+		}, true
+	case StepKindApproval:
+		return stepKindDescriptor{
+			required:  []string{"message"},
+			forbidden: []string{"agent", "prompt", "command"},
+			bind: func(values map[string]string, step *StepSpec) {
+				step.Approval = &ApprovalStepSpec{Message: values["message"]}
+			},
+		}, true
+	default:
+		return stepKindDescriptor{}, false
+	}
 }
 
 func rawStepFieldValues(step rawStep) map[string]*string {
@@ -60,6 +62,7 @@ func compileStepKindSpec(params compileStepKindParams) (StepSpec, error) {
 	}
 
 	fields := rawStepFieldValues(params.Step)
+
 	values, err := requiredStepFields(stepFieldValidationParams{
 		StepID: params.ID,
 		Kind:   params.Kind,

@@ -29,6 +29,8 @@ type parsedSharedFlagsResult struct {
 }
 
 var (
+	errHelpRequested = errors.New("help requested")
+
 	workflowCommands = newCommandRegistry(
 		workflowValidateCommand{},
 	)
@@ -107,7 +109,7 @@ func parseSharedFlags(commandName string, args []string, stdout io.Writer) (*par
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			return nil, nil
+			return nil, errHelpRequested
 		}
 
 		return nil, err
@@ -118,6 +120,10 @@ func parseSharedFlags(commandName string, args []string, stdout io.Writer) (*par
 	}
 
 	return &parsedSharedFlagsResult{flags: &flags, remainingArgs: fs.Args()}, nil
+}
+
+func isHelpRequested(err error) bool {
+	return errors.Is(err, errHelpRequested)
 }
 
 func defaultStateDir() string {

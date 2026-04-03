@@ -22,28 +22,40 @@ type StepDriverRegistry struct {
 
 func NewStepDriverRegistry() *StepDriverRegistry {
 	registry := &StepDriverRegistry{factories: make(map[workflow.StepKind]StepDriverFactory, 3)}
-	registry.Register(workflow.StepKindAgent, StepDriverFactoryFunc(func(engine *Engine, step workflow.CompiledStep) (stepDriver, error) {
-		if engine.lookupAdapter == nil {
-			return nil, newError(ErrorCodeConfig, "adapter lookup is required for agent steps")
-		}
 
-		adapter, err := engine.lookupAdapter(step)
-		if err != nil {
-			return nil, err
-		}
+	registry.Register(
+		workflow.StepKindAgent,
+		StepDriverFactoryFunc(func(engine *Engine, step workflow.CompiledStep) (stepDriver, error) {
+			if engine.lookupAdapter == nil {
+				return nil, newError(ErrorCodeConfig, "adapter lookup is required for agent steps")
+			}
 
-		return agentDriver{adapter: adapter}, nil
-	}))
-	registry.Register(workflow.StepKindCommand, StepDriverFactoryFunc(func(engine *Engine, _ workflow.CompiledStep) (stepDriver, error) {
-		if engine.commandRunner == nil {
-			return nil, newError(ErrorCodeConfig, "command runner is required for command steps")
-		}
+			adapter, err := engine.lookupAdapter(step)
+			if err != nil {
+				return nil, err
+			}
 
-		return commandDriver{runner: engine.commandRunner}, nil
-	}))
-	registry.Register(workflow.StepKindApproval, StepDriverFactoryFunc(func(engine *Engine, _ workflow.CompiledStep) (stepDriver, error) {
-		return approvalDriver{runID: engine.runID, ids: engine.ids}, nil
-	}))
+			return agentDriver{adapter: adapter}, nil
+		}),
+	)
+
+	registry.Register(
+		workflow.StepKindCommand,
+		StepDriverFactoryFunc(func(engine *Engine, _ workflow.CompiledStep) (stepDriver, error) {
+			if engine.commandRunner == nil {
+				return nil, newError(ErrorCodeConfig, "command runner is required for command steps")
+			}
+
+			return commandDriver{runner: engine.commandRunner}, nil
+		}),
+	)
+
+	registry.Register(
+		workflow.StepKindApproval,
+		StepDriverFactoryFunc(func(engine *Engine, _ workflow.CompiledStep) (stepDriver, error) {
+			return approvalDriver{runID: engine.runID, ids: engine.ids}, nil
+		}),
+	)
 
 	return registry
 }

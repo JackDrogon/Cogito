@@ -27,6 +27,7 @@ func newRunStateRef(stateDir string) (runStateRef, error) {
 
 	runID := filepath.Base(stateDir)
 	baseDir := filepath.Dir(stateDir)
+
 	if runID == "." || runID == string(filepath.Separator) || strings.TrimSpace(runID) == "" {
 		return runStateRef{}, fmt.Errorf("invalid state dir %q", stateDir)
 	}
@@ -42,6 +43,7 @@ func newReplayRequest(eventsPath string) (replayRequest, error) {
 
 	runDir := filepath.Dir(eventsPath)
 	runID := filepath.Base(runDir)
+
 	if runID == "." || runID == string(filepath.Separator) || strings.TrimSpace(runID) == "" {
 		return replayRequest{}, fmt.Errorf("invalid events file path %q", eventsPath)
 	}

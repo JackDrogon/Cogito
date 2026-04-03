@@ -164,8 +164,10 @@ func requiredStepFields(params stepFieldValidationParams) (map[string]string, er
 }
 
 func rejectStepFieldNames(params stepFieldValidationParams) error {
+	fields := params.Fields
+
 	for _, name := range params.Names {
-		if params.Fields[name] != nil {
+		if fields[name] != nil {
 			return newError(ErrorCodeSchema, fmt.Sprintf("step %q field %q is not allowed for kind %q", params.StepID, name, params.Kind))
 		}
 	}

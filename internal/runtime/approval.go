@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -82,6 +83,8 @@ type pendingApproval struct {
 	Trigger           ApprovalTrigger
 }
 
+var errNoApprovalException = errors.New("no approval exception")
+
 func (e *Engine) requestExceptionalApproval(
 	ctx context.Context,
 	step workflow.CompiledStep,
@@ -95,6 +98,10 @@ func (e *Engine) requestExceptionalApproval(
 		Status:    adapters.ExecutionStateWaitingApproval,
 	})
 	if err != nil {
+		if errors.Is(err, errNoApprovalException) {
+			return false, nil
+		}
+
 		return false, err
 	}
 
@@ -405,7 +412,7 @@ func (approvalModePolicy) EvaluateException(
 	_ context.Context,
 	_ ApprovalExceptionRequest,
 ) (*ApprovalDecisionResult, error) {
-	return nil, nil
+	return nil, errNoApprovalException
 }
 
 func defaultApprovalSummary(step workflow.CompiledStep, status adapters.ExecutionState) string {

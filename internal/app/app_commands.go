@@ -16,6 +16,10 @@ func (workflowValidateCommand) Name() string    { return "validate" }
 func (workflowValidateCommand) Summary() string { return "Validate a workflow file" }
 func (workflowValidateCommand) Run(ctx context.Context, args []string, stdout io.Writer) error {
 	parsed, err := parseSharedFlags("workflow validate", args, stdout)
+	if isHelpRequested(err) {
+		return nil
+	}
+
 	if err != nil {
 		return err
 	}
@@ -42,43 +46,18 @@ func (workflowRunCommand) Name() string    { return "run" }
 func (workflowRunCommand) Summary() string { return "Execute a workflow" }
 func (workflowRunCommand) Run(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) > 0 && isSubcommandToken(args[0]) {
-		parsed, err := parseSharedFlags("run", args[1:], stdout)
-		if err != nil {
-			return err
-		}
-
-		if parsed == nil {
-			return nil
-		}
-
-		flags := parsed.flags
-		remainingArgs := parsed.remainingArgs
-
-		if len(remainingArgs) > 0 {
-			return fmt.Errorf("run does not accept extra positional arguments: %v", remainingArgs)
-		}
-
-		result, err := appsvc.RunWorkflow(ctx, RunWorkflowInput{WorkflowPath: args[0], Flags: flags})
-
-		if flags.verbose {
-			if err != nil && flags.stateDir != "" {
-				_ = printVerboseEvents(stdout, flags.stateDir)
-			} else if err == nil {
-				_ = printVerboseEvents(stdout, result.StateDir)
-			}
-		}
-
-		if err != nil {
-			return err
-		}
-
-		return presenter.PresentRunWorkflow(stdout, result)
+		return runWorkflowSubcommand(ctx, args[0], args[1:], stdout)
 	}
 
 	parsed, err := parseSharedFlags("run", args, stdout)
+	if isHelpRequested(err) {
+		return nil
+	}
+
 	if err != nil {
 		return err
 	}
+
 	if parsed == nil {
 		return nil
 	}
@@ -92,13 +71,8 @@ func (workflowRunCommand) Run(ctx context.Context, args []string, stdout io.Writ
 	}
 
 	result, err := appsvc.RunWorkflow(ctx, RunWorkflowInput{WorkflowPath: workflowPath, Flags: flags})
-
-	if flags.verbose {
-		if err != nil && flags.stateDir != "" {
-			_ = printVerboseEvents(stdout, flags.stateDir)
-		} else if err == nil {
-			_ = printVerboseEvents(stdout, result.StateDir)
-		}
+	if verboseErr := presentVerboseRun(stdout, flags, result, err); verboseErr != nil {
+		return verboseErr
 	}
 
 	if err != nil {
@@ -114,8 +88,12 @@ func (statusCommand) Name() string    { return "status" }
 func (statusCommand) Summary() string { return "Show workflow run status" }
 func (statusCommand) Run(ctx context.Context, args []string, stdout io.Writer) error {
 	request, err := parseStatusRequest(args, stdout)
-	if err != nil || request == nil {
+	if err != nil {
 		return err
+	}
+
+	if request == nil {
+		return nil
 	}
 
 	result, err := appsvc.StatusRun(ctx, StatusRunInput{StateDir: request.StateDir})
@@ -132,6 +110,10 @@ func (resumeCommand) Name() string    { return "resume" }
 func (resumeCommand) Summary() string { return "Resume a paused workflow" }
 func (resumeCommand) Run(ctx context.Context, args []string, stdout io.Writer) error {
 	flags, err := parseSharedFlagsWithoutArgs("resume", args, stdout)
+	if isHelpRequested(err) {
+		return nil
+	}
+
 	if err != nil || flags == nil {
 		return err
 	}
@@ -151,8 +133,13 @@ func (replayCommand) Summary() string { return "Replay workflow from event log" 
 func (replayCommand) Run(ctx context.Context, args []string, stdout io.Writer) error {
 	request, err := parseReplayRequest(args, stdout)
 	if err != nil {
+		if isHelpRequested(err) {
+			return nil
+		}
+
 		return err
 	}
+
 	if request == nil {
 		return nil
 	}
@@ -171,6 +158,10 @@ func (cancelCommand) Name() string    { return "cancel" }
 func (cancelCommand) Summary() string { return "Cancel a running workflow" }
 func (cancelCommand) Run(ctx context.Context, args []string, stdout io.Writer) error {
 	flags, err := parseSharedFlagsWithoutArgs("cancel", args, stdout)
+	if isHelpRequested(err) {
+		return nil
+	}
+
 	if err != nil || flags == nil {
 		return err
 	}
@@ -189,6 +180,10 @@ func (approveCommand) Name() string    { return "approve" }
 func (approveCommand) Summary() string { return "Approve a waiting workflow" }
 func (approveCommand) Run(ctx context.Context, args []string, stdout io.Writer) error {
 	flags, err := parseSharedFlagsWithoutArgs("approve", args, stdout)
+	if isHelpRequested(err) {
+		return nil
+	}
+
 	if err != nil || flags == nil {
 		return err
 	}
@@ -203,6 +198,10 @@ func (approveCommand) Run(ctx context.Context, args []string, stdout io.Writer) 
 
 func parseSharedFlagsWithoutArgs(commandName string, args []string, stdout io.Writer) (*sharedFlags, error) {
 	parsed, err := parseSharedFlags(commandName, args, stdout)
+	if isHelpRequested(err) {
+		return nil, errHelpRequested
+	}
+
 	if err != nil || parsed == nil {
 		return nil, err
 	}
@@ -239,6 +238,10 @@ type replayInputRequest struct {
 
 func parseStatusRequest(args []string, stdout io.Writer) (*statusRequest, error) {
 	flags, err := parseSharedFlagsWithoutArgs("status", args, stdout)
+	if isHelpRequested(err) {
+		return nil, errHelpRequested
+	}
+
 	if err != nil || flags == nil {
 		return nil, err
 	}
@@ -248,6 +251,10 @@ func parseStatusRequest(args []string, stdout io.Writer) (*statusRequest, error)
 
 func parseReplayRequest(args []string, stdout io.Writer) (*replayInputRequest, error) {
 	parsed, err := parseSharedFlags("replay", args, stdout)
+	if isHelpRequested(err) {
+		return nil, errHelpRequested
+	}
+
 	if err != nil || parsed == nil {
 		return nil, err
 	}
@@ -262,9 +269,57 @@ func parseReplayRequest(args []string, stdout io.Writer) (*replayInputRequest, e
 	return &replayInputRequest{EventsPath: eventsPath}, nil
 }
 
+func runWorkflowSubcommand(ctx context.Context, workflowPath string, args []string, stdout io.Writer) error {
+	parsed, err := parseSharedFlags("run", args, stdout)
+	if isHelpRequested(err) {
+		return nil
+	}
+
+	if err != nil {
+		return err
+	}
+
+	if parsed == nil {
+		return nil
+	}
+
+	flags := parsed.flags
+	remainingArgs := parsed.remainingArgs
+
+	if len(remainingArgs) > 0 {
+		return fmt.Errorf("run does not accept extra positional arguments: %v", remainingArgs)
+	}
+
+	result, err := appsvc.RunWorkflow(ctx, RunWorkflowInput{WorkflowPath: workflowPath, Flags: flags})
+	if verboseErr := presentVerboseRun(stdout, flags, result, err); verboseErr != nil {
+		return verboseErr
+	}
+
+	if err != nil {
+		return err
+	}
+
+	return presenter.PresentRunWorkflow(stdout, result)
+}
+
+func presentVerboseRun(stdout io.Writer, flags *sharedFlags, result RunWorkflowOutput, runErr error) error {
+	if flags == nil || !flags.verbose {
+		return nil
+	}
+
+	if runErr != nil && flags.stateDir != "" {
+		return printVerboseEvents(stdout, flags.stateDir)
+	}
+
+	if runErr == nil {
+		return printVerboseEvents(stdout, result.StateDir)
+	}
+
+	return nil
+}
+
 func printVerboseEvents(stdout io.Writer, stateDir string) error {
-	eventsPath := filepath.Join(stateDir, "events.jsonl")
-	events, err := store.ReadEventsFile(eventsPath)
+	events, err := store.ReadEventsFile(filepath.Join(stateDir, "events.jsonl"))
 	if err != nil {
 		return err
 	}
@@ -273,5 +328,6 @@ func printVerboseEvents(stdout io.Writer, stateDir string) error {
 	for _, event := range events {
 		logger.logEvent(event)
 	}
+
 	return nil
 }

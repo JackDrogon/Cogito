@@ -149,7 +149,9 @@ func NewEngine(runID string, compiled *workflow.CompiledWorkflow, deps MachineDe
 	}
 
 	checkpointResult, _ := deps.Store.LoadCheckpoint() //nolint:errcheck // checkpoint is optional
+
 	var checkpoint *store.Checkpoint
+
 	if checkpointResult != nil {
 		checkpoint = checkpointResult.Checkpoint
 	}

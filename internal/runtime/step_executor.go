@@ -70,33 +70,7 @@ func (e *Engine) executeStep(ctx context.Context, stepID string) error {
 	attemptID := e.ids.NewAttemptID(stepID)
 
 	if step.Kind == workflow.StepKindApproval {
-		providerSessionID := e.ids.NewSyntheticSessionID(stepID)
-		summary := defaultApprovalSummary(step, adapters.ExecutionStateWaitingApproval)
-
-		if err := e.persistStepTransition(StepTransitionParams{
-			EventType:         store.EventStepStarted,
-			StepID:            stepID,
-			From:              StepStateQueued,
-			To:                StepStateRunning,
-			AttemptID:         attemptID,
-			ProviderSessionID: providerSessionID,
-			Summary:           summary,
-			NormalizedStatus:  "",
-		}); err != nil {
-			return err
-		}
-
-		return e.requestApproval(
-			ctx,
-			approvalGateParams{
-				Step:              step,
-				AttemptID:         attemptID,
-				ProviderSessionID: providerSessionID,
-				Summary:           summary,
-				Trigger:           ApprovalTriggerExplicit,
-				Status:            adapters.ExecutionStateWaitingApproval,
-			},
-		)
+		return e.executeApprovalStep(ctx, stepID, step, attemptID)
 	}
 
 	handled, err := e.requestExceptionalApproval(ctx, step, attemptID)
@@ -110,27 +84,7 @@ func (e *Engine) executeStep(ctx context.Context, stepID string) error {
 
 	driver, err := e.buildDriver(step)
 	if err != nil {
-		providerSessionID := e.ids.NewSyntheticSessionID(stepID)
-		if startErr := e.persistStepTransition(StepTransitionParams{
-			EventType:         store.EventStepStarted,
-			StepID:            stepID,
-			From:              StepStateQueued,
-			To:                StepStateRunning,
-			AttemptID:         attemptID,
-			ProviderSessionID: providerSessionID,
-			Summary:           "step started",
-			NormalizedStatus:  "",
-		}); startErr != nil {
-			return startErr
-		}
-
-		return e.failRunForExecutionError(FailRunParams{
-			StepID:            stepID,
-			AttemptID:         attemptID,
-			ProviderSessionID: providerSessionID,
-			ExecutionErr:      err,
-			Message:           "driver setup failed",
-		})
+		return e.failStepStart(stepID, attemptID, err, "driver setup failed")
 	}
 
 	execution, err := driver.Start(ctx, stepStartRequest{
@@ -139,27 +93,7 @@ func (e *Engine) executeStep(ctx context.Context, stepID string) error {
 		Snapshot:  e.Snapshot(),
 	})
 	if err != nil {
-		providerSessionID := e.ids.NewSyntheticSessionID(stepID)
-		if startErr := e.persistStepTransition(StepTransitionParams{
-			EventType:         store.EventStepStarted,
-			StepID:            stepID,
-			From:              StepStateQueued,
-			To:                StepStateRunning,
-			AttemptID:         attemptID,
-			ProviderSessionID: providerSessionID,
-			Summary:           "step started",
-			NormalizedStatus:  "",
-		}); startErr != nil {
-			return startErr
-		}
-
-		return e.failRunForExecutionError(FailRunParams{
-			StepID:            stepID,
-			AttemptID:         attemptID,
-			ProviderSessionID: providerSessionID,
-			ExecutionErr:      err,
-			Message:           "step start failed",
-		})
+		return e.failStepStart(stepID, attemptID, err, "step start failed")
 	}
 
 	providerSessionID := strings.TrimSpace(execution.Handle.ProviderSessionID)
@@ -186,6 +120,63 @@ func (e *Engine) executeStep(ctx context.Context, stepID string) error {
 		AttemptID: attemptID,
 		Driver:    driver,
 		Execution: execution,
+	})
+}
+
+func (e *Engine) executeApprovalStep(
+	ctx context.Context,
+	stepID string,
+	step workflow.CompiledStep,
+	attemptID string,
+) error {
+	providerSessionID := e.ids.NewSyntheticSessionID(stepID)
+	summary := defaultApprovalSummary(step, adapters.ExecutionStateWaitingApproval)
+
+	if err := e.persistStepTransition(StepTransitionParams{
+		EventType:         store.EventStepStarted,
+		StepID:            stepID,
+		From:              StepStateQueued,
+		To:                StepStateRunning,
+		AttemptID:         attemptID,
+		ProviderSessionID: providerSessionID,
+		Summary:           summary,
+		NormalizedStatus:  "",
+	}); err != nil {
+		return err
+	}
+
+	return e.requestApproval(ctx, approvalGateParams{
+		Step:              step,
+		AttemptID:         attemptID,
+		ProviderSessionID: providerSessionID,
+		Summary:           summary,
+		Trigger:           ApprovalTriggerExplicit,
+		Status:            adapters.ExecutionStateWaitingApproval,
+	})
+}
+
+func (e *Engine) failStepStart(stepID, attemptID string, executionErr error, message string) error {
+	providerSessionID := e.ids.NewSyntheticSessionID(stepID)
+
+	if startErr := e.persistStepTransition(StepTransitionParams{
+		EventType:         store.EventStepStarted,
+		StepID:            stepID,
+		From:              StepStateQueued,
+		To:                StepStateRunning,
+		AttemptID:         attemptID,
+		ProviderSessionID: providerSessionID,
+		Summary:           "step started",
+		NormalizedStatus:  "",
+	}); startErr != nil {
+		return startErr
+	}
+
+	return e.failRunForExecutionError(FailRunParams{
+		StepID:            stepID,
+		AttemptID:         attemptID,
+		ProviderSessionID: providerSessionID,
+		ExecutionErr:      executionErr,
+		Message:           message,
 	})
 }
 
