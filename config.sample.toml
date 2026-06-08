@@ -1,0 +1,68 @@
+# Cogito configuration template.
+# Copy to cogito.toml (gitignored) and fill in the values you need.
+#
+# Sections are feature-scoped. Adding a section the running command does not
+# read is harmless; leaving an unused section out is also fine.
+
+# -----------------------------------------------------------------------------
+# [meegle] — Feishu Project (Meegle) task source.
+# Used by: cogito feishu pull, cogito feishu watch
+# Reference: docs at https://project.feishu.cn (domestic) or
+#            https://project.larksuite.com (international).
+# -----------------------------------------------------------------------------
+[meegle]
+# API endpoint. Pick the one matching your tenant:
+#   https://project.feishu.cn       (国内 / domestic)
+#   https://project.larksuite.com   (国际 / international)
+base_url = "https://project.feishu.cn"
+
+# Plugin App ID and Secret. Create from the Feishu Project admin console
+# under "插件开发" / Plugin Development.
+plugin_id     = "your_plugin_id"
+plugin_secret = "your_plugin_secret"
+
+# Operator user_key. The plugin acts on behalf of this user when reading
+# the project. Issued together with the plugin credentials.
+user_key = "your_user_key"
+
+# Target project space key. For URLs like
+# https://project.feishu.cn/<project_key>/overview, copy the segment after
+# the host.
+project_key = "your_project_key"
+
+# Optional. Set to "1" to opt into the strict auth mode header
+# (x-auth-mode: 1). Leave empty for the default.
+auth_mode = ""
+
+# Work item type to pull. Defaults to "story" if omitted.
+work_item_type_key = "story"
+
+# Pagination size for the work item filter. Defaults to 100 if omitted.
+page_size = 100
+
+# -----------------------------------------------------------------------------
+# [meegle.poll] — watch-mode controls. pull also reads state_file and
+# output_file so the two commands share the same on-disk layout.
+# -----------------------------------------------------------------------------
+[meegle.poll]
+# Watch tick interval. Any Go duration string (e.g. "30s", "5m", "1h").
+# Defaults to "1m" if omitted.
+interval = "1m"
+
+# JSON file holding the previously seen story fingerprints. Used to compute
+# added / updated / removed diffs across runs and across process restarts.
+state_file = "ref/tmp/feishu/state.json"
+
+# JSON snapshot written on every successful pull. Includes the full story
+# list and the diff against the previous state.
+output_file = "ref/tmp/feishu/stories.json"
+
+# -----------------------------------------------------------------------------
+# [repos] — map Meegle repo field values to local checkout paths.
+# When a pulled story has `repo = "<key>"` and that key matches an entry
+# here, Story.RepoPath is auto-populated with the absolute path. Unknown
+# repos simply leave RepoPath empty.
+# -----------------------------------------------------------------------------
+[repos]
+# test_repo = "/data/Work/you/TestRepo"
+# another   = "/data/Work/you/AnotherRepo"

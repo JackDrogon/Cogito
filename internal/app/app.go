@@ -36,6 +36,7 @@ var (
 	)
 	rootCommands = newCommandRegistry(
 		commandGroup{name: "workflow", summary: "Workflow operations", registry: workflowCommands},
+		commandGroup{name: "feishu", summary: "Feishu Project (Meegle) task operations", registry: feishuCommandRegistry},
 		workflowRunCommand{},
 		statusCommand{},
 		resumeCommand{},

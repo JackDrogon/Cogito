@@ -34,3 +34,7 @@ vendor/
 Thumbs.db
 ref/
 .envrc
+
+# Local Cogito config (contains plugin secrets and user keys)
+cogito.toml
+cogito
