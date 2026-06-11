@@ -140,19 +140,19 @@ func TestBuildAgentsRunPlanHappyPathCompiles(t *testing.T) {
 	flags := agentsRunFlags{prompt: "refactor auth module", agentName: "claude"}
 	flags.shared.repo = "/tmp/repo"
 
-	compiled, repoPath, err := buildAgentsRunPlan(flags)
+	plan, err := buildAgentsRunPlan(flags)
 	if err != nil {
 		t.Fatalf("buildAgentsRunPlan() error = %v", err)
 	}
-	if compiled == nil {
-		t.Fatal("buildAgentsRunPlan() compiled = nil, want compiled workflow")
+	if plan.compiled == nil {
+		t.Fatal("buildAgentsRunPlan() plan.compiled = nil, want plan.compiled workflow")
 	}
 	// Default flags (no skip) → agent + verify + commit_check.
-	if len(compiled.Steps) != 3 {
-		t.Fatalf("len(compiled.Steps) = %d, want 3", len(compiled.Steps))
+	if len(plan.compiled.Steps) != 3 {
+		t.Fatalf("len(plan.compiled.Steps) = %d, want 3", len(plan.compiled.Steps))
 	}
-	if repoPath != "/tmp/repo" {
-		t.Fatalf("buildAgentsRunPlan() repoPath = %q, want /tmp/repo", repoPath)
+	if plan.repoPath != "/tmp/repo" {
+		t.Fatalf("buildAgentsRunPlan() plan.repoPath = %q, want /tmp/repo", plan.repoPath)
 	}
 }
 
@@ -165,12 +165,12 @@ func TestBuildAgentsRunPlanSkipsVerifyAndCommit(t *testing.T) {
 	}
 	flags.shared.repo = "/tmp/repo"
 
-	compiled, _, err := buildAgentsRunPlan(flags)
+	plan, err := buildAgentsRunPlan(flags)
 	if err != nil {
 		t.Fatalf("buildAgentsRunPlan() error = %v", err)
 	}
-	if len(compiled.Steps) != 1 {
-		t.Fatalf("len(compiled.Steps) = %d, want 1", len(compiled.Steps))
+	if len(plan.compiled.Steps) != 1 {
+		t.Fatalf("len(plan.compiled.Steps) = %d, want 1", len(plan.compiled.Steps))
 	}
 }
 
@@ -183,12 +183,12 @@ func TestBuildAgentsRunPlanDefaultsRepoToCwd(t *testing.T) {
 		t.Fatalf("filepath.Abs() error = %v", err)
 	}
 
-	_, repoPath, err := buildAgentsRunPlan(agentsRunFlags{prompt: "do the thing", agentName: "codex"})
+	plan, err := buildAgentsRunPlan(agentsRunFlags{prompt: "do the thing", agentName: "codex"})
 	if err != nil {
 		t.Fatalf("buildAgentsRunPlan() error = %v", err)
 	}
-	if repoPath != cwd {
-		t.Fatalf("buildAgentsRunPlan() repoPath = %q, want cwd %q", repoPath, cwd)
+	if plan.repoPath != cwd {
+		t.Fatalf("buildAgentsRunPlan() plan.repoPath = %q, want cwd %q", plan.repoPath, cwd)
 	}
 }
 
@@ -196,12 +196,12 @@ func TestBuildAgentsRunPlanCanonicalizesRepo(t *testing.T) {
 	flags := agentsRunFlags{prompt: "do the thing", agentName: "codex"}
 	flags.shared.repo = "/tmp/repo/"
 
-	_, repoPath, err := buildAgentsRunPlan(flags)
+	plan, err := buildAgentsRunPlan(flags)
 	if err != nil {
 		t.Fatalf("buildAgentsRunPlan() error = %v", err)
 	}
-	if repoPath != "/tmp/repo" {
-		t.Fatalf("buildAgentsRunPlan() repoPath = %q, want /tmp/repo", repoPath)
+	if plan.repoPath != "/tmp/repo" {
+		t.Fatalf("buildAgentsRunPlan() plan.repoPath = %q, want /tmp/repo", plan.repoPath)
 	}
 }
 

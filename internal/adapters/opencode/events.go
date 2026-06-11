@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	shared "github.com/JackDrogon/Cogito/internal/adapters"
+	"github.com/JackDrogon/Cogito/internal/adapters/adapterutil"
 )
 
 type response struct {
@@ -58,7 +59,7 @@ func buildExecution(params executionParams) *shared.Execution {
 	))
 
 	state := shared.ExecutionStateSucceeded
-	summary := strings.TrimSpace(firstNonEmpty(params.Response.string("summary"), firstLine(outputText), "opencode adapter passed"))
+	summary := strings.TrimSpace(firstNonEmpty(params.Response.string("summary"), adapterutil.FirstLine(outputText), "opencode adapter passed"))
 
 	if params.Response.failed() || failedMessage != "" {
 		state = shared.ExecutionStateFailed
@@ -86,19 +87,7 @@ func providerSessionID(request shared.StartRequest, response *response) string {
 		}
 	}
 
-	return fmt.Sprintf("opencode-%s-%s", sanitizeID(request.StepID), sanitizeID(request.AttemptID))
-}
-
-func sanitizeID(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return "unknown"
-	}
-
-	value = strings.ReplaceAll(value, " ", "-")
-	value = strings.ReplaceAll(value, "/", "-")
-
-	return value
+	return fmt.Sprintf("opencode-%s-%s", adapterutil.SanitizeID(request.StepID), adapterutil.SanitizeID(request.AttemptID))
 }
 
 func buildLogs(version string, response *response, stderr []byte) []shared.LogEntry {
@@ -124,7 +113,7 @@ func buildLogs(version string, response *response, stderr []byte) []shared.LogEn
 				fields["message_count"] = messageCount
 			}
 
-			message := strings.TrimSpace(firstNonEmpty(response.string("summary"), firstLine(response.string("output_text")), "opencode response captured"))
+			message := strings.TrimSpace(firstNonEmpty(response.string("summary"), adapterutil.FirstLine(response.string("output_text")), "opencode response captured"))
 			logs = append(logs, shared.LogEntry{Level: "info", Message: message, Fields: fields})
 		}
 	}
@@ -295,17 +284,4 @@ func firstNonEmpty(values ...string) string {
 	}
 
 	return ""
-}
-
-func firstLine(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return ""
-	}
-
-	if idx := strings.IndexByte(value, '\n'); idx >= 0 {
-		return strings.TrimSpace(value[:idx])
-	}
-
-	return value
 }

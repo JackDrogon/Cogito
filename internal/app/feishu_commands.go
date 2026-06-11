@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/JackDrogon/Cogito/internal/task/agentflow"
 	"github.com/JackDrogon/Cogito/internal/task/feishuproject"
 	"github.com/JackDrogon/Cogito/internal/workflow"
 )
@@ -35,6 +36,7 @@ func (feishuPullCommand) Run(ctx context.Context, args []string, stdout io.Write
 	if isHelpRequested(err) {
 		return nil
 	}
+
 	if err != nil {
 		return err
 	}
@@ -54,6 +56,7 @@ func (feishuWatchCommand) Run(ctx context.Context, args []string, stdout io.Writ
 	if isHelpRequested(err) {
 		return nil
 	}
+
 	if err != nil {
 		return err
 	}
@@ -63,7 +66,7 @@ func (feishuWatchCommand) Run(ctx context.Context, args []string, stdout io.Writ
 
 type feishuRunCommand struct{}
 
-func (feishuRunCommand) Name() string { return "run" }
+func (feishuRunCommand) Name() string { return runCommandName }
 func (feishuRunCommand) Summary() string {
 	return "Delegate a Feishu Project story to a code agent workflow"
 }
@@ -73,6 +76,7 @@ func (feishuRunCommand) Run(ctx context.Context, args []string, stdout io.Writer
 	if isHelpRequested(err) {
 		return nil
 	}
+
 	if err != nil {
 		return err
 	}
@@ -99,11 +103,12 @@ type feishuRunFlags struct {
 // so the leading positional is split off before the flag set runs.
 func parseFeishuRunFlags(args []string, stdout io.Writer) (feishuRunFlags, error) {
 	var (
-		storyToken string
+		rawStoryID string
 		flagArgs   []string
 	)
+
 	if len(args) > 0 && isSubcommandToken(args[0]) {
-		storyToken = args[0]
+		rawStoryID = args[0]
 		flagArgs = args[1:]
 	} else {
 		flagArgs = args
@@ -115,13 +120,14 @@ func parseFeishuRunFlags(args []string, stdout io.Writer) (feishuRunFlags, error
 	flags := feishuRunFlags{}
 	fs.StringVar(&flags.configPath, "c", "", "Path to Cogito TOML config containing [meegle] section")
 	fs.StringVar(&flags.configPath, "config", "", "Path to Cogito TOML config containing [meegle] section")
-	fs.StringVar(&flags.agentName, "agent", "codex", "Code agent to delegate to (codex|claude|opencode)")
+	fs.StringVar(&flags.agentName, "agent", agentflow.DefaultAgentName, "Code agent to delegate to (codex|claude|opencode)")
 	fs.BoolVar(&flags.noVerify, "no-verify", false, "Skip the verify step")
 	fs.BoolVar(&flags.noCommitCheck, "no-commit-check", false, "Skip the commit_check step")
 	registerSharedFlags(fs, &flags.shared)
 
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stdout, "Usage: cogito feishu run <story-id> -c <config.toml> [--agent codex|claude|opencode] [--no-verify] [--no-commit-check] [flags]")
+
 		fs.PrintDefaults()
 	}
 
@@ -129,25 +135,29 @@ func parseFeishuRunFlags(args []string, stdout io.Writer) (feishuRunFlags, error
 		if errors.Is(err, flag.ErrHelp) {
 			return feishuRunFlags{}, errHelpRequested
 		}
+
 		return feishuRunFlags{}, err
 	}
 
 	rest := fs.Args()
-	if storyToken == "" {
+	if rawStoryID == "" {
 		if len(rest) == 0 {
 			return feishuRunFlags{}, errors.New("feishu run: <story-id> is required")
 		}
-		storyToken = rest[0]
+
+		rawStoryID = rest[0]
 		rest = rest[1:]
 	}
+
 	if len(rest) > 0 {
 		return feishuRunFlags{}, fmt.Errorf("feishu run: unexpected positional arguments: %v", rest)
 	}
 
-	storyID, err := strconv.ParseInt(storyToken, 10, 64)
+	storyID, err := strconv.ParseInt(rawStoryID, 10, 64)
 	if err != nil {
-		return feishuRunFlags{}, fmt.Errorf("feishu run: invalid story-id %q: must be an integer", storyToken)
+		return feishuRunFlags{}, fmt.Errorf("feishu run: invalid story-id %q: must be an integer", rawStoryID)
 	}
+
 	flags.storyID = storyID
 
 	if strings.TrimSpace(flags.configPath) == "" {
@@ -156,9 +166,10 @@ func parseFeishuRunFlags(args []string, stdout io.Writer) (feishuRunFlags, error
 
 	flags.agentName = strings.TrimSpace(flags.agentName)
 	if flags.agentName == "" {
-		flags.agentName = "codex"
+		flags.agentName = agentflow.DefaultAgentName
 	}
-	if !isValidAgentName(flags.agentName) {
+
+	if !agentflow.IsValidAgentName(flags.agentName) {
 		return feishuRunFlags{}, fmt.Errorf("feishu run: invalid --agent %q; must be one of codex, claude, opencode", flags.agentName)
 	}
 
@@ -166,16 +177,9 @@ func parseFeishuRunFlags(args []string, stdout io.Writer) (feishuRunFlags, error
 		flags.shared.stateDir = defaultStateDir(flags.shared.repo)
 	}
 
-	return flags, nil
-}
+	configureLogging(flags.shared.verbose)
 
-func isValidAgentName(name string) bool {
-	switch name {
-	case "codex", "claude", "opencode":
-		return true
-	default:
-		return false
-	}
+	return flags, nil
 }
 
 func runFeishuRun(ctx context.Context, flags feishuRunFlags, stdout io.Writer) error {
@@ -185,16 +189,20 @@ func runFeishuRun(ctx context.Context, flags feishuRunFlags, stdout io.Writer) e
 	}
 
 	svc := feishuproject.NewService(cfg)
+
 	result, err := svc.Pull(ctx)
 	if err != nil {
 		return err
 	}
-	reportWorkflowErrors(stdout, result.WorkflowErrors)
 
-	compiled, repoPath, err := buildFeishuRunPlan(result.Stories, flags)
+	reportWorkflowErrors(result.WorkflowErrors)
+
+	plan, err := buildFeishuRunPlan(result.Stories, flags)
 	if err != nil {
 		return err
 	}
+
+	compiled, repoPath := plan.compiled, plan.repoPath
 
 	// The agent prompt declares story.RepoPath as the project root, so the
 	// runtime wiring (runner Dir, repo lock, verify/commit_check workingDir)
@@ -203,10 +211,11 @@ func runFeishuRun(ctx context.Context, flags feishuRunFlags, stdout io.Writer) e
 	sharedCopy := flags.shared
 	sharedCopy.repo = repoPath
 
-	output, err := appsvc.RunCompiledWorkflow(ctx, RunCompiledWorkflowInput{Compiled: compiled, Flags: &sharedCopy})
+	output, err := appService.RunCompiledWorkflow(ctx, RunCompiledWorkflowInput{Compiled: compiled, Flags: &sharedCopy})
 	if verboseErr := presentVerboseRun(stdout, &sharedCopy, output, err); verboseErr != nil {
 		return verboseErr
 	}
+
 	if err != nil {
 		return err
 	}
@@ -219,20 +228,20 @@ func runFeishuRun(ctx context.Context, flags feishuRunFlags, stdout io.Writer) e
 // the compiled workflow so the caller can target the runtime wiring at the
 // story repo. It is split out from runFeishuRun so the post-pull logic is
 // unit-testable without hitting the Feishu API.
-func buildFeishuRunPlan(stories []feishuproject.Story, flags feishuRunFlags) (*workflow.CompiledWorkflow, string, error) {
+func buildFeishuRunPlan(stories []feishuproject.Story, flags feishuRunFlags) (runPlan, error) {
 	story, ok := findStory(stories, flags.storyID)
 	if !ok {
-		return nil, "", fmt.Errorf("feishu run: story %d not found", flags.storyID)
+		return runPlan{}, fmt.Errorf("feishu run: story %d not found", flags.storyID)
 	}
 
 	rawRepoPath := strings.TrimSpace(story.RepoPath)
 	if rawRepoPath == "" {
-		return nil, "", fmt.Errorf("feishu run: story %d has no repo_path mapping; configure [repos] in TOML", flags.storyID)
+		return runPlan{}, fmt.Errorf("feishu run: story %d has no repo_path mapping; configure [repos] in TOML", flags.storyID)
 	}
 
 	repoPath, err := canonicalRepoPath(rawRepoPath)
 	if err != nil {
-		return nil, "", fmt.Errorf("feishu run: resolve story %d repo_path %q: %w", flags.storyID, rawRepoPath, err)
+		return runPlan{}, fmt.Errorf("feishu run: resolve story %d repo_path %q: %w", flags.storyID, rawRepoPath, err)
 	}
 
 	// A user-supplied --repo that disagrees with the story mapping is almost
@@ -242,11 +251,11 @@ func buildFeishuRunPlan(stories []feishuproject.Story, flags feishuRunFlags) (*w
 	if userRepo := strings.TrimSpace(flags.shared.repo); userRepo != "" {
 		match, matchErr := repoMatches(rawRepoPath, userRepo)
 		if matchErr != nil {
-			return nil, "", fmt.Errorf("feishu run: resolve --repo %q: %w", userRepo, matchErr)
+			return runPlan{}, fmt.Errorf("feishu run: resolve --repo %q: %w", userRepo, matchErr)
 		}
 
 		if !match {
-			return nil, "", fmt.Errorf("feishu run: --repo %q conflicts with story %d repo_path %q", userRepo, flags.storyID, rawRepoPath)
+			return runPlan{}, fmt.Errorf("feishu run: --repo %q conflicts with story %d repo_path %q", userRepo, flags.storyID, rawRepoPath)
 		}
 	}
 
@@ -258,15 +267,15 @@ func buildFeishuRunPlan(stories []feishuproject.Story, flags feishuRunFlags) (*w
 		WithCommitCheck: !flags.noCommitCheck,
 	})
 	if err != nil {
-		return nil, "", err
+		return runPlan{}, err
 	}
 
 	compiled, err := workflow.CompileWorkflow(spec)
 	if err != nil {
-		return nil, "", err
+		return runPlan{}, err
 	}
 
-	return compiled, repoPath, nil
+	return runPlan{compiled: compiled, repoPath: repoPath}, nil
 }
 
 // canonicalRepoPath normalizes a repo path to an absolute, slash-trimmed,
@@ -310,9 +319,9 @@ func repoMatches(story, user string) (bool, error) {
 }
 
 func findStory(stories []feishuproject.Story, id int64) (feishuproject.Story, bool) {
-	for _, story := range stories {
-		if story.ID == id {
-			return story, true
+	for i := range stories {
+		if stories[i].ID == id {
+			return stories[i], true
 		}
 	}
 
@@ -333,6 +342,7 @@ func parseFeishuFlags(commandName string, args []string, stdout io.Writer) (feis
 
 	fs.Usage = func() {
 		_, _ = fmt.Fprintf(stdout, "Usage: cogito %s -c <config.toml>\n", commandName)
+
 		fs.PrintDefaults()
 	}
 
@@ -340,12 +350,14 @@ func parseFeishuFlags(commandName string, args []string, stdout io.Writer) (feis
 		if errors.Is(err, flag.ErrHelp) {
 			return feishuFlags{}, errHelpRequested
 		}
+
 		return feishuFlags{}, err
 	}
 
 	if len(fs.Args()) > 0 {
 		return feishuFlags{}, fmt.Errorf("%s: unexpected positional arguments: %v", commandName, fs.Args())
 	}
+
 	if strings.TrimSpace(flags.configPath) == "" {
 		return feishuFlags{}, fmt.Errorf("%s: --config (or -c) is required", commandName)
 	}
@@ -360,16 +372,18 @@ func runFeishuPull(ctx context.Context, flags feishuFlags, stdout io.Writer) err
 	}
 
 	svc := feishuproject.NewService(cfg)
+
 	result, err := svc.Pull(ctx)
 	if err != nil {
 		return err
 	}
+
 	if err := svc.Persist(result); err != nil {
 		return err
 	}
 
 	feishuproject.WriteSummary(stdout, result)
-	reportWorkflowErrors(stdout, result.WorkflowErrors)
+	reportWorkflowErrors(result.WorkflowErrors)
 
 	return nil
 }
@@ -384,10 +398,11 @@ func runFeishuWatch(ctx context.Context, flags feishuFlags, stdout io.Writer) er
 	observer := feishuproject.FuncObserver{
 		Tick: func(result feishuproject.PullResult) {
 			feishuproject.WriteSummary(stdout, result)
-			reportWorkflowErrors(stdout, result.WorkflowErrors)
+			reportWorkflowErrors(result.WorkflowErrors)
 		},
 		Error: func(err error) {
-			_, _ = fmt.Fprintf(stdout, "feishu watch: tick failed: %v\n", err)
+			// Diagnostics go to stderr so machine-readable stdout stays clean.
+			_, _ = fmt.Fprintf(diagnosticOutput, "feishu watch: tick failed: %v\n", err)
 		},
 	}
 
@@ -395,6 +410,7 @@ func runFeishuWatch(ctx context.Context, flags feishuFlags, stdout io.Writer) er
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil
 		}
+
 		return err
 	}
 
@@ -404,12 +420,13 @@ func runFeishuWatch(ctx context.Context, flags feishuFlags, stdout io.Writer) er
 // reportWorkflowErrors surfaces per-story workflow fetch warnings without
 // failing the command. The story list and snapshot are already persisted at
 // this point, so these are diagnostics only.
-func reportWorkflowErrors(out io.Writer, errs []error) {
+func reportWorkflowErrors(errs []error) {
 	if len(errs) == 0 {
 		return
 	}
-	_, _ = fmt.Fprintf(out, "feishu pull: %d workflow fetch(es) failed:\n", len(errs))
+
+	_, _ = fmt.Fprintf(diagnosticOutput, "feishu pull: %d workflow fetch(es) failed:\n", len(errs))
 	for _, err := range errs {
-		_, _ = fmt.Fprintf(out, "  - %v\n", err)
+		_, _ = fmt.Fprintf(diagnosticOutput, "  - %v\n", err)
 	}
 }

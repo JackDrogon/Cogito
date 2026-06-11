@@ -2,18 +2,24 @@ package runtime
 
 import "github.com/JackDrogon/Cogito/internal/workflow"
 
+// StepStatusView is a read-only projection of a single step's current state
+// and summary, suitable for display by CLI presenters.
 type StepStatusView struct {
 	StepID  string
 	State   StepState
 	Summary string
 }
 
+// RunStatusView is a read-only projection of a run's current state and the
+// ordered list of step statuses, suitable for display by CLI presenters.
 type RunStatusView struct {
 	RunID     string
 	State     RunState
 	StepViews []StepStatusView
 }
 
+// TransitionView is a read-only projection of one persisted state transition,
+// used by the replay presenter to show the ordered event history.
 type TransitionView struct {
 	Sequence  int64
 	EventType string
@@ -24,6 +30,9 @@ type TransitionView struct {
 	Summary   string
 }
 
+// ReplayView is a read-only projection of a full replay result, combining the
+// ordered transition history with the final per-step statuses. It is consumed
+// by the replay presenter to render the complete event log.
 type ReplayView struct {
 	RunID        string
 	State        RunState
@@ -31,6 +40,9 @@ type ReplayView struct {
 	StepStatuses []StepStatusView
 }
 
+// BuildRunStatusView constructs a RunStatusView from a compiled workflow and
+// the current snapshot. Steps are ordered by the workflow's topological order.
+// A nil compiled workflow returns a view with only the run-level fields set.
 func BuildRunStatusView(compiled *workflow.CompiledWorkflow, snapshot Snapshot) RunStatusView {
 	view := RunStatusView{
 		RunID: snapshot.RunID,
@@ -55,6 +67,9 @@ func BuildRunStatusView(compiled *workflow.CompiledWorkflow, snapshot Snapshot) 
 	return view
 }
 
+// BuildReplayView constructs a ReplayView from a compiled workflow and a
+// ReplayResult, combining the ordered transition history with the final
+// per-step statuses derived from the replay snapshot.
 func BuildReplayView(compiled *workflow.CompiledWorkflow, replay ReplayResult) ReplayView {
 	statusView := BuildRunStatusView(compiled, replay.Snapshot)
 	view := ReplayView{

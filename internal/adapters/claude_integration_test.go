@@ -224,7 +224,7 @@ func TestClaudeResumeUsesRealSessionID(t *testing.T) {
 // TestClaudeStructuredOutputFromResponseResult is v3.2 N1: a real claude run
 // returns the AGENT_RESULT_JSON marker inside the parsed response.Result string,
 // never as a standalone stdout line (the raw stdout is one JSON object with the
-// marker escaped inside a string value). collectTerminal must scan the
+// marker escaped inside a string value). CollectTerminal must scan the
 // normalized response.Result so StructuredOutput is populated.
 func TestClaudeStructuredOutputFromResponseResult(t *testing.T) {
 	resultText := "Work complete.\nAGENT_RESULT_JSON: {\"commits\":[\"claude-commit\"],\"summary\":\"ok\"}"

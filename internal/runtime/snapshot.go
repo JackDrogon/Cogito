@@ -37,6 +37,9 @@ type Snapshot struct {
 	Steps        map[string]StepSnapshot
 }
 
+// Transition records one persisted state change folded from an event. It is
+// accumulated during replay and exposed via Engine.Transitions so callers can
+// render the full ordered history without re-reading the event log.
 type Transition struct {
 	Sequence          int64
 	EventType         store.EventType
@@ -50,16 +53,20 @@ type Transition struct {
 	Summary           string
 }
 
+// ReplayResult is the output of a full event-log replay. It pairs the final
+// Snapshot with the ordered list of Transitions so callers can inspect both
+// the current state and the complete history in one pass.
 type ReplayResult struct {
 	Snapshot    Snapshot
 	Transitions []Transition
 }
 
-func checkpointFromSnapshot(snapshot Snapshot, repoPath, workingDir string) *store.Checkpoint {
-	repoPath, workingDir = normalizeExecutionContext(repoPath, workingDir)
+func checkpointFromSnapshot(snapshot Snapshot, execContext executionContext) *store.Checkpoint {
+	execContext = normalizeExecutionContext(execContext)
+	repoPath, workingDir := execContext.repoPath, execContext.workingDir
 
 	steps := make(map[string]store.StepCheckpoint, len(snapshot.Steps))
-	for stepID, step := range snapshot.Steps {
+	for stepID, step := range snapshot.Steps { //nolint:gocritic // map values cannot be addressed; the copy is inherent
 		steps[stepID] = store.StepCheckpoint{
 			State:             string(step.State),
 			AttemptID:         step.AttemptID,
@@ -148,30 +155,40 @@ func snapshotFromCheckpoint(
 	return snapshot, nil
 }
 
-func checkpointExecutionContext(checkpoint *store.Checkpoint, repoPath, workingDir string) (string, string) {
-	if checkpoint == nil {
-		return normalizeExecutionContext(repoPath, workingDir)
-	}
-
-	return normalizeExecutionContext(
-		firstNonEmpty(strings.TrimSpace(checkpoint.RepoPath), repoPath),
-		firstNonEmpty(strings.TrimSpace(checkpoint.WorkingDir), workingDir),
-	)
+// executionContext pairs the repo root with the step working directory; the
+// two values always travel together (engine state, checkpoint persistence)
+// and fall back to each other when one is missing.
+type executionContext struct {
+	repoPath   string
+	workingDir string
 }
 
-func normalizeExecutionContext(repoPath, workingDir string) (string, string) {
-	repoPath = strings.TrimSpace(repoPath)
-	workingDir = strings.TrimSpace(workingDir)
-
-	if repoPath == "" {
-		repoPath = workingDir
+func checkpointExecutionContext(checkpoint *store.Checkpoint, fallback executionContext) executionContext {
+	if checkpoint == nil {
+		return normalizeExecutionContext(fallback)
 	}
 
-	if workingDir == "" {
-		workingDir = repoPath
+	return normalizeExecutionContext(executionContext{
+		repoPath:   firstNonEmpty(strings.TrimSpace(checkpoint.RepoPath), fallback.repoPath),
+		workingDir: firstNonEmpty(strings.TrimSpace(checkpoint.WorkingDir), fallback.workingDir),
+	})
+}
+
+// normalizeExecutionContext trims both paths and lets each fall back to the
+// other so a context with only one of the two still yields a usable pair.
+func normalizeExecutionContext(ctx executionContext) executionContext {
+	ctx.repoPath = strings.TrimSpace(ctx.repoPath)
+	ctx.workingDir = strings.TrimSpace(ctx.workingDir)
+
+	if ctx.repoPath == "" {
+		ctx.repoPath = ctx.workingDir
 	}
 
-	return repoPath, workingDir
+	if ctx.workingDir == "" {
+		ctx.workingDir = ctx.repoPath
+	}
+
+	return ctx
 }
 
 func firstNonEmpty(values ...string) string {
@@ -193,7 +210,7 @@ func cloneSnapshot(snapshot Snapshot) Snapshot {
 		Steps:        make(map[string]StepSnapshot, len(snapshot.Steps)),
 	}
 
-	for stepID, step := range snapshot.Steps {
+	for stepID, step := range snapshot.Steps { //nolint:gocritic // map values cannot be addressed; the copy is inherent
 		step.StructuredOutput = cloneRawMessage(step.StructuredOutput)
 		cloned.Steps[stepID] = step
 	}
@@ -263,4 +280,16 @@ func recordTransition(transitions *[]Transition, transition Transition) {
 	}
 
 	*transitions = append(*transitions, transition)
+}
+
+// executionContext returns the engine's current repo/working-dir pair.
+func (e *Engine) executionContext() executionContext {
+	return executionContext{repoPath: e.repoPath, workingDir: e.workingDir}
+}
+
+// applyExecutionContext installs a resolved repo/working-dir pair on the
+// engine.
+func (e *Engine) applyExecutionContext(ctx executionContext) {
+	e.repoPath = ctx.repoPath
+	e.workingDir = ctx.workingDir
 }

@@ -399,7 +399,7 @@ func TestResumeCommandResumesPausedRunAndRejectsDuplicate(t *testing.T) {
 		t.Fatalf("Run(resume) output = %q, want %q", out.String(), "run resumed\n")
 	}
 
-	status, err := appsvc.StatusRun(t.Context(), StatusRunInput{StateDir: stateDir})
+	status, err := appService.StatusRun(t.Context(), StatusRunInput{StateDir: stateDir})
 	if err != nil {
 		t.Fatalf("StatusRun() after resume error = %v", err)
 	}
@@ -494,7 +494,7 @@ func TestCancelCommandCancelsPausedRunAndRejectsDuplicate(t *testing.T) {
 		t.Fatalf("Run(cancel) output = %q, want %q", out.String(), "run canceled\n")
 	}
 
-	status, err := appsvc.StatusRun(t.Context(), StatusRunInput{StateDir: stateDir})
+	status, err := appService.StatusRun(t.Context(), StatusRunInput{StateDir: stateDir})
 	if err != nil {
 		t.Fatalf("StatusRun() after cancel error = %v", err)
 	}

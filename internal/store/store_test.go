@@ -92,11 +92,10 @@ func TestAtomicCheckpointRecovery(t *testing.T) {
 	}
 
 	tests := []struct {
-		name            string
-		mutate          func(t *testing.T, layout Layout)
-		wantState       string
-		wantRecovered   bool
-		wantLogContains string
+		name          string
+		mutate        func(t *testing.T, layout Layout)
+		wantState     string
+		wantRecovered bool
 	}{
 		{
 			name: "ignore interrupted temp write when primary is intact",
@@ -114,9 +113,8 @@ func TestAtomicCheckpointRecovery(t *testing.T) {
 				writeTestFile(t, layout.CheckpointPath, []byte("{"))
 				writeTestFile(t, layout.CheckpointTempPath, []byte("{\n  \"run_id\": \"run-123\",\n  \"state\": \"paused\",\n  \"last_sequence\": 8\n}\n"))
 			},
-			wantState:       "paused",
-			wantRecovered:   true,
-			wantLogContains: "recovered from last good checkpoint",
+			wantState:     "paused",
+			wantRecovered: true,
 		},
 	}
 
@@ -142,10 +140,6 @@ func TestAtomicCheckpointRecovery(t *testing.T) {
 
 			if recovered != tt.wantRecovered {
 				t.Fatalf("recovered = %t, want %t", recovered, tt.wantRecovered)
-			}
-
-			if tt.wantLogContains != "" {
-				t.Log(tt.wantLogContains)
 			}
 		})
 	}

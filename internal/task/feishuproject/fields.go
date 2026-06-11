@@ -8,9 +8,9 @@ import (
 	"github.com/larksuite/project-oapi-sdk-golang/v2/service/workitem"
 )
 
-// typeContext caches the field keys resolved for a particular work item type
+// workItemFieldKeys caches the field keys resolved for a particular work item type
 // so Pull does not re-detect them on every story.
-type typeContext struct {
+type workItemFieldKeys struct {
 	TypeKey            string
 	OwnerFieldKey      string
 	PlannedEffortKey   string
@@ -32,14 +32,16 @@ type typeContext struct {
 // RepoFieldKey targets a custom select field whose alias is conventionally
 // "repo"; the concrete key is a project-scoped hash so we keyword-detect
 // rather than hard-code it.
-func detectTypeContext(typeKey string, fields []workitem.SimpleField) typeContext {
-	ctx := typeContext{TypeKey: typeKey}
+func detectTypeContext(typeKey string, fields []workitem.SimpleField) workItemFieldKeys {
+	ctx := workItemFieldKeys{TypeKey: typeKey}
 
 	ctx.OwnerFieldKey = resolveStrictOwnerFieldKey(fields)
 	if ctx.OwnerFieldKey == "" {
 		ctx.OwnerFieldKey = detectFieldKey(fields, []string{"owner", "assignee", "负责人"})
 	}
-	ctx.PlannedEffortKey = detectFieldKey(fields, []string{"计划工时", "预估工时", "planned effort", "planned hour", "planned work"})
+
+	ctx.PlannedEffortKey = detectFieldKey(fields,
+		[]string{"计划工时", "预估工时", "planned effort", "planned hour", "planned work"})
 	ctx.EstimatePointKey = detectFieldKey(fields, []string{"story point", "story_point", "estimate point", "估点", "点数"})
 	ctx.RequirementTypeKey = detectFieldKey(fields, []string{"template"})
 	ctx.RepoFieldKey = detectFieldKey(fields, []string{"repo"})
@@ -54,10 +56,12 @@ func extractFirstString(item workitem.WorkItemInfo, fieldKey string) string {
 	if fieldKey == "" {
 		return ""
 	}
+
 	field, ok := findField(item.Fields, fieldKey)
 	if !ok {
 		return ""
 	}
+
 	values := stringsFromAny(field.FieldValue)
 	if len(values) == 0 {
 		return ""
@@ -74,9 +78,11 @@ func extractDescription(item workitem.WorkItemInfo) string {
 		if derefString(mt.FieldKey) != "description" {
 			continue
 		}
+
 		if mt.FieldValue == nil {
 			return ""
 		}
+
 		return strings.TrimSpace(derefString(mt.FieldValue.DocText))
 	}
 
@@ -84,12 +90,14 @@ func extractDescription(item workitem.WorkItemInfo) string {
 }
 
 func resolveStrictOwnerFieldKey(fields []workitem.SimpleField) string {
-	for _, field := range fields {
+	for i := range fields {
+		field := &fields[i]
 		parts := []string{
 			strings.ToLower(strings.TrimSpace(derefString(field.FieldKey))),
 			strings.ToLower(strings.TrimSpace(derefString(field.FieldAlias))),
 			strings.ToLower(strings.TrimSpace(derefString(field.FieldName))),
 		}
+
 		for _, part := range parts {
 			switch part {
 			case "workitem_owner", "当前需求的负责人":
@@ -104,13 +112,15 @@ func resolveStrictOwnerFieldKey(fields []workitem.SimpleField) string {
 func detectFieldKey(fields []workitem.SimpleField, keywords []string) string {
 	bestKey := ""
 	bestScore := -1
-	for _, field := range fields {
-		score := scoreField(field, keywords)
+
+	for i := range fields {
+		score := scoreField(fields[i], keywords)
 		if score > bestScore {
 			bestScore = score
-			bestKey = derefString(field.FieldKey)
+			bestKey = derefString(fields[i].FieldKey)
 		}
 	}
+
 	if bestScore <= 0 {
 		return ""
 	}
@@ -125,8 +135,10 @@ func scoreField(field workitem.SimpleField, keywords []string) int {
 		strings.ToLower(derefString(field.FieldAlias)),
 	}
 	score := 0
+
 	for _, keyword := range keywords {
 		lowerKeyword := strings.ToLower(keyword)
+
 		for _, part := range parts {
 			switch {
 			case part == lowerKeyword:
@@ -156,6 +168,7 @@ func extractNumber(item workitem.WorkItemInfo, fieldKey string) (float64, bool) 
 	if fieldKey == "" {
 		return 0, false
 	}
+
 	field, ok := findField(item.Fields, fieldKey)
 	if !ok {
 		return 0, false
@@ -177,6 +190,7 @@ func extractPriority(item workitem.WorkItemInfo) string {
 	if !ok {
 		return ""
 	}
+
 	values := stringsFromAny(field.FieldValue)
 	if len(values) == 0 {
 		return ""
@@ -190,6 +204,7 @@ func extractBusinessID(item workitem.WorkItemInfo) string {
 	if !ok {
 		return ""
 	}
+
 	values := stringsFromAny(field.FieldValue)
 	if len(values) == 0 {
 		return ""
@@ -202,10 +217,12 @@ func extractOwnerNames(item workitem.WorkItemInfo, fieldKey string) []string {
 	if fieldKey == "" {
 		return nil
 	}
+
 	field, ok := findField(item.Fields, fieldKey)
 	if !ok {
 		return nil
 	}
+
 	userKeys := uniqueStrings(stringsFromAny(field.FieldValue))
 	if len(userKeys) == 0 {
 		return nil
@@ -219,7 +236,9 @@ func extractCreatorName(item workitem.WorkItemInfo) string {
 	if !ok {
 		return ""
 	}
+
 	userKeys := uniqueStrings(stringsFromAny(field.FieldValue))
+
 	names := resolveUserNames(userKeys, item.UserDetails)
 	if len(names) == 0 {
 		return ""
@@ -230,11 +249,13 @@ func extractCreatorName(item workitem.WorkItemInfo) string {
 
 func resolveUserNames(userKeys []string, details []workitem.UserDetail) []string {
 	nameByKey := make(map[string]string, len(details))
+
 	for _, detail := range details {
 		key := derefString(detail.UserKey)
 		if key == "" {
 			continue
 		}
+
 		nameByKey[key] = firstNonEmpty(
 			derefString(detail.NameCn),
 			derefString(detail.NameEn),
@@ -245,11 +266,13 @@ func resolveUserNames(userKeys []string, details []workitem.UserDetail) []string
 	}
 
 	names := make([]string, 0, len(userKeys))
+
 	for _, key := range userKeys {
 		if name, ok := nameByKey[key]; ok && name != "" {
 			names = append(names, name)
 			continue
 		}
+
 		names = append(names, key)
 	}
 
@@ -269,6 +292,7 @@ func stringsFromAny(value any) []string {
 		if typed == "" {
 			return nil
 		}
+
 		return []string{typed}
 	case []string:
 		return uniqueStrings(typed)
@@ -277,6 +301,7 @@ func stringsFromAny(value any) []string {
 		for _, item := range typed {
 			values = append(values, stringsFromAny(item)...)
 		}
+
 		return uniqueStrings(values)
 	case map[string]any:
 		return stringsFromMap(typed)
@@ -285,17 +310,22 @@ func stringsFromAny(value any) []string {
 		for key, item := range typed {
 			converted[key] = item
 		}
+
 		return stringsFromMap(converted)
 	default:
 		if number, ok := numberFromAny(value); ok {
 			return []string{strconv.FormatFloat(number, 'f', -1, 64)}
 		}
+
 		return nil
 	}
 }
 
 func stringsFromMap(value map[string]any) []string {
-	preferred := []string{"name_cn", "name_en", "username", "name", "label", "title", "display_name", "email", "user_key", "value", "key", "id"}
+	preferred := []string{
+		"name_cn", "name_en", "username", "name", "label", "title",
+		"display_name", "email", "user_key", "value", "key", "id",
+	}
 	for _, key := range preferred {
 		if raw, ok := value[key]; ok {
 			values := stringsFromAny(raw)
@@ -339,15 +369,19 @@ func numberFromAny(value any) (float64, bool) {
 func uniqueStrings(values []string) []string {
 	seen := make(map[string]struct{}, len(values))
 	result := make([]string, 0, len(values))
+
 	for _, value := range values {
 		trimmed := strings.TrimSpace(value)
 		if trimmed == "" {
 			continue
 		}
+
 		if _, ok := seen[trimmed]; ok {
 			continue
 		}
+
 		seen[trimmed] = struct{}{}
+
 		result = append(result, trimmed)
 	}
 

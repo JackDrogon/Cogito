@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -37,7 +38,7 @@ func buildRuntimeWiring(runStore *store.Store, flags *sharedFlags) (runtimeWirin
 		return runtimeWiring{}, errors.New("buildRuntimeWiring: run store is required")
 	}
 
-	context, err := resolveExecutionContext(runStore, flags)
+	execContext, err := resolveExecutionContext(runStore, flags)
 	if err != nil {
 		return runtimeWiring{}, err
 	}
@@ -49,21 +50,19 @@ func buildRuntimeWiring(runStore *store.Store, flags *sharedFlags) (runtimeWirin
 			LogDirRoot: runStore.Layout().RunDir,
 			LiveSink:   liveOutputSink(flags),
 		}),
-		CommandRunner: newSupervisorCommandRunner(runStore, context.workingDir, providerTimeout(flags)),
-		RepoPath:      context.repoPath,
-		WorkingDir:    context.workingDir,
+		CommandRunner: newSupervisorCommandRunner(runStore, execContext.workingDir, providerTimeout(flags)),
+		RepoPath:      execContext.repoPath,
+		WorkingDir:    execContext.workingDir,
 	}, nil
 }
 
-// codexSandbox resolves the codex sandbox mode from the environment, falling
-// back to the adapter default when CODEX_SANDBOX is unset. Model is intentionally
+// codexSandbox resolves the codex sandbox mode from the environment. An empty
+// return means "unset": the codex adapter applies its own DefaultSandbox, so
+// the app layer never needs a provider import beyond the wiring-time blank
+// registration imports (see internal/app/AGENTS.md). Model is intentionally
 // left empty: the workflow DSL has no per-step model field yet (L1 revisits).
 func codexSandbox() string {
-	if value := strings.TrimSpace(os.Getenv(codexSandboxEnv)); value != "" {
-		return value
-	}
-
-	return "danger-full-access"
+	return strings.TrimSpace(os.Getenv(codexSandboxEnv))
 }
 
 func resolveExecutionContext(runStore *store.Store, flags *sharedFlags) (*executionContext, error) {
@@ -146,10 +145,19 @@ func providerTimeout(flags *sharedFlags) time.Duration {
 	return flags.providerTimeout
 }
 
-func acquireRepoLock(flags *sharedFlags, runID, runsRoot string) (*runtime.RepoLock, error) {
-	manager := runtime.NewRepoLockManager(runtime.Dependencies{})
+// acquireRepoLockInput bundles the lock inputs so the function stays within
+// the three-parameter rule with ctx threaded through.
+type acquireRepoLockInput struct {
+	flags    *sharedFlags
+	runID    string
+	runsRoot string
+}
 
-	return manager.Acquire(runtime.AcquireOptions{
+func acquireRepoLock(ctx context.Context, input acquireRepoLockInput) (*runtime.RepoLock, error) {
+	manager := runtime.NewRepoLockManager(runtime.Dependencies{})
+	flags, runID, runsRoot := input.flags, input.runID, input.runsRoot
+
+	return manager.Acquire(ctx, runtime.AcquireOptions{
 		RunID:         runID,
 		RepoPath:      repoPath(flags),
 		RunsRoot:      runsRoot,

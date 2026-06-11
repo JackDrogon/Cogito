@@ -142,6 +142,10 @@ func (s *Supervisor) Run(ctx context.Context, request RunRequest) (*adapters.Ste
 }
 
 func (s *Supervisor) setupCommand(request RunRequest, stdoutFile, stderrFile *os.File) (*commandSetup, error) {
+	// Intentionally NOT exec.CommandContext: the monitor goroutine owns
+	// cancellation and SIGKILLs the whole -pgid tree; CommandContext would
+	// only kill the direct child behind the monitor's back.
+	//nolint:noctx // lifecycle owned by the monitor goroutine, not ctx
 	cmd := exec.Command(request.Command.Path, request.Command.Args...)
 	cmd.Dir = request.Command.Dir
 	cmd.Env = append(os.Environ(), request.Command.Env...)
@@ -171,6 +175,7 @@ func (s *Supervisor) monitorProcess(
 	timeout time.Duration,
 ) (*processMonitorResult, error) {
 	waitCh := make(chan error, 1)
+
 	go func() {
 		waitCh <- cmd.Wait()
 	}()
@@ -180,6 +185,7 @@ func (s *Supervisor) monitorProcess(
 	if timeout > 0 {
 		timer := time.NewTimer(timeout)
 		defer timer.Stop()
+
 		timeoutCh = timer.C
 	}
 
@@ -328,12 +334,14 @@ func (s *Supervisor) killProcessGroup(pid int) error {
 func (s *Supervisor) track(handleID string, cmd *exec.Cmd) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	s.running[handleID] = cmd
 }
 
 func (s *Supervisor) untrack(handleID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	delete(s.running, handleID)
 }
 

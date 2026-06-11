@@ -162,7 +162,11 @@ func TestAcquireRepoLockHonorsDirtyAndReleases(t *testing.T) {
 	fixture := newAppRepoFixture(t)
 	writeAppFile(t, filepath.Join(fixture.repoDir, "tracked.txt"), []byte("dirty now\n"))
 
-	_, err := acquireRepoLock(&sharedFlags{repo: fixture.repoDir}, "run-dirty", fixture.runsRoot)
+	_, err := acquireRepoLock(t.Context(), acquireRepoLockInput{
+		flags:    &sharedFlags{repo: fixture.repoDir},
+		runID:    "run-dirty",
+		runsRoot: fixture.runsRoot,
+	})
 	if err == nil {
 		t.Fatal("acquireRepoLock() error = nil, want dirty worktree rejection")
 	}
@@ -175,7 +179,11 @@ func TestAcquireRepoLockHonorsDirtyAndReleases(t *testing.T) {
 		t.Fatalf("error code = %q, want %q", runtimeErr.Code, runtime.ErrorCodeDirtyWorktree)
 	}
 
-	lock, err := acquireRepoLock(&sharedFlags{repo: fixture.repoDir, allowDirty: true}, "run-dirty", fixture.runsRoot)
+	lock, err := acquireRepoLock(t.Context(), acquireRepoLockInput{
+		flags:    &sharedFlags{repo: fixture.repoDir, allowDirty: true},
+		runID:    "run-dirty",
+		runsRoot: fixture.runsRoot,
+	})
 	if err != nil {
 		t.Fatalf("acquireRepoLock() with allowDirty error = %v", err)
 	}
@@ -203,7 +211,7 @@ func TestExecuteWorkflowRunUsesRepoLockAndDirtyGuard(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		_, err := appsvc.RunWorkflow(t.Context(), RunWorkflowInput{WorkflowPath: workflowPath, Flags: &sharedFlags{repo: fixture.repoDir, stateDir: stateDir, allowDirty: false}})
+		_, err := appService.RunWorkflow(t.Context(), RunWorkflowInput{WorkflowPath: workflowPath, Flags: &sharedFlags{repo: fixture.repoDir, stateDir: stateDir, allowDirty: false}})
 		errCh <- err
 	}()
 
@@ -226,7 +234,7 @@ func TestExecuteWorkflowRunUsesRepoLockAndDirtyGuard(t *testing.T) {
 	}
 
 	writeAppFile(t, filepath.Join(fixture.repoDir, "tracked.txt"), []byte("dirty now\n"))
-	_, err := appsvc.RunWorkflow(t.Context(), RunWorkflowInput{WorkflowPath: workflowPath, Flags: &sharedFlags{repo: fixture.repoDir, stateDir: filepath.Join(fixture.runsRoot, "run-dirty")}})
+	_, err := appService.RunWorkflow(t.Context(), RunWorkflowInput{WorkflowPath: workflowPath, Flags: &sharedFlags{repo: fixture.repoDir, stateDir: filepath.Join(fixture.runsRoot, "run-dirty")}})
 	if err == nil {
 		t.Fatal("RunWorkflow() dirty error = nil, want dirty worktree rejection")
 	}
@@ -234,7 +242,7 @@ func TestExecuteWorkflowRunUsesRepoLockAndDirtyGuard(t *testing.T) {
 		t.Fatalf("RunWorkflow() error = %v, want dirty worktree", err)
 	}
 
-	if _, err := appsvc.RunWorkflow(t.Context(), RunWorkflowInput{WorkflowPath: workflowPath, Flags: &sharedFlags{repo: fixture.repoDir, stateDir: filepath.Join(fixture.runsRoot, "run-dirty-allowed"), allowDirty: true}}); err != nil {
+	if _, err := appService.RunWorkflow(t.Context(), RunWorkflowInput{WorkflowPath: workflowPath, Flags: &sharedFlags{repo: fixture.repoDir, stateDir: filepath.Join(fixture.runsRoot, "run-dirty-allowed"), allowDirty: true}}); err != nil {
 		t.Fatalf("RunWorkflow() with allowDirty error = %v", err)
 	}
 }
@@ -323,7 +331,7 @@ func TestApplicationServiceStatusRunReturnsFormattedData(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "run-status-service")
 	writePausedRunState(t, stateDir)
 
-	result, err := appsvc.StatusRun(t.Context(), StatusRunInput{StateDir: stateDir})
+	result, err := appService.StatusRun(t.Context(), StatusRunInput{StateDir: stateDir})
 	if err != nil {
 		t.Fatalf("StatusRun() error = %v", err)
 	}

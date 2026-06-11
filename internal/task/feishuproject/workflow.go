@@ -40,36 +40,47 @@ func (s *Service) attachWorkflows(ctx context.Context, stories []Story) []error 
 	}
 
 	var (
-		mu      sync.Mutex
-		errs    []error
-		sem     = make(chan struct{}, workflowFetchConcurrency)
-		wg      sync.WaitGroup
-		typeKey = s.cfg.WorkItemTypeKey
+		mu             sync.Mutex
+		errs           []error
+		fetchSemaphore = make(chan struct{}, workflowFetchConcurrency)
+		wg             sync.WaitGroup
+		typeKey        = s.cfg.WorkItemTypeKey
 	)
 
+	// Memory model: each goroutine writes only stories[index].Workflow for its
+	// own index. Distinct slice elements are distinct memory locations, so the
+	// writes never race with each other; wg.Wait below provides the
+	// happens-before edge that makes them visible to the caller. Writing
+	// different FIELDS of one shared element from multiple goroutines would
+	// NOT be safe — keep the one-goroutine-per-index invariant.
 	for index := range stories {
-		index := index
 		select {
 		case <-ctx.Done():
 			mu.Lock()
+
 			errs = append(errs, ctx.Err())
 			mu.Unlock()
+
 			return errs
-		case sem <- struct{}{}:
+		case fetchSemaphore <- struct{}{}:
 		}
 
 		wg.Add(1)
+
 		go func() {
 			defer wg.Done()
-			defer func() { <-sem }()
+			defer func() { <-fetchSemaphore }()
 
 			nodes, err := s.fetchWorkflow(ctx, typeKey, stories[index].ID)
 			if err != nil {
 				mu.Lock()
+
 				errs = append(errs, fmt.Errorf("workflow story=%d: %w", stories[index].ID, err))
 				mu.Unlock()
+
 				return
 			}
+
 			stories[index].Workflow = nodes
 		}()
 	}
@@ -91,12 +102,14 @@ func (s *Service) fetchWorkflow(ctx context.Context, typeKey string, storyID int
 	if err != nil {
 		return nil, fmt.Errorf("get workflow: %w", err)
 	}
+
 	if !resp.Success() {
 		return nil, fmt.Errorf(
 			"get workflow failed: code=%d request_id=%s msg=%s",
 			resp.Code(), resp.RequestId(), resp.ErrMsg,
 		)
 	}
+
 	if resp.Data == nil {
 		return nil, nil
 	}
@@ -104,14 +117,19 @@ func (s *Service) fetchWorkflow(ctx context.Context, typeKey string, storyID int
 	return mapWorkflowNodes(resp.Data.WorkflowNodes, resp.Data.UserDetails), nil
 }
 
-func mapWorkflowNodes(rawNodes []workitem.WorkItem_work_item_WorkflowNode, details []workitem.WorkItem_work_item_UserDetail) []WorkflowNode {
+func mapWorkflowNodes(
+	rawNodes []workitem.WorkItem_work_item_WorkflowNode,
+	details []workitem.WorkItem_work_item_UserDetail,
+) []WorkflowNode {
 	if len(rawNodes) == 0 {
 		return nil
 	}
 
 	nameByKey := workflowUserNames(details)
 	nodes := make([]WorkflowNode, 0, len(rawNodes))
-	for _, raw := range rawNodes {
+
+	for i := range rawNodes {
+		raw := &rawNodes[i]
 		nodes = append(nodes, WorkflowNode{
 			ID:               derefString(raw.ID),
 			Name:             derefString(raw.Name),
@@ -128,11 +146,13 @@ func mapWorkflowNodes(rawNodes []workitem.WorkItem_work_item_WorkflowNode, detai
 
 func workflowUserNames(details []workitem.WorkItem_work_item_UserDetail) map[string]string {
 	nameByKey := make(map[string]string, len(details))
+
 	for _, detail := range details {
 		key := derefString(detail.UserKey)
 		if key == "" {
 			continue
 		}
+
 		nameByKey[key] = firstNonEmpty(
 			derefString(detail.NameCn),
 			derefString(detail.NameEn),
@@ -149,12 +169,15 @@ func resolveOwnerNames(userKeys []string, nameByKey map[string]string) []string 
 	if len(userKeys) == 0 {
 		return nil
 	}
+
 	names := make([]string, 0, len(userKeys))
+
 	for _, key := range userKeys {
 		if name, ok := nameByKey[key]; ok && name != "" {
 			names = append(names, name)
 			continue
 		}
+
 		names = append(names, key)
 	}
 

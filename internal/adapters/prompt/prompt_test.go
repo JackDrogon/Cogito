@@ -11,7 +11,7 @@ import (
 var updateGolden = flag.Bool("update", false, "update golden prompt fixtures")
 
 func TestBuildMainGolden(t *testing.T) {
-	input := PromptInput{
+	input := Input{
 		Root: ".",
 		Tasks: []TaskRef{
 			{ID: "agent", Text: "实现示例任务"},
@@ -22,7 +22,7 @@ func TestBuildMainGolden(t *testing.T) {
 }
 
 func TestBuildCommitRecoveryGolden(t *testing.T) {
-	input := PromptInput{
+	input := Input{
 		Root: ".",
 		Tasks: []TaskRef{
 			{ID: "task-1", Text: "任务一"},
@@ -34,7 +34,7 @@ func TestBuildCommitRecoveryGolden(t *testing.T) {
 }
 
 func TestBuildDirtyWorktreeGolden(t *testing.T) {
-	input := PromptInput{
+	input := Input{
 		Root: ".",
 		Tasks: []TaskRef{
 			{ID: "agent", Text: "实现示例任务"},
@@ -45,7 +45,7 @@ func TestBuildDirtyWorktreeGolden(t *testing.T) {
 }
 
 func TestBuildMainRendersAllPlaceholders(t *testing.T) {
-	got := BuildMain(PromptInput{
+	got := BuildMain(Input{
 		Root:        "/repo",
 		Tasks:       []TaskRef{{ID: "a", Text: "task a"}},
 		FailedTasks: []TaskRef{{ID: "b", Text: "task b"}},
@@ -82,7 +82,7 @@ func TestBuildMainRendersAllPlaceholders(t *testing.T) {
 // update, or checkbox-mark one — that wording previously sent agents on
 // filesystem expeditions hunting for a todo file that does not exist.
 func TestPromptsCarryInlineTaskSemantics(t *testing.T) {
-	input := PromptInput{Root: "/repo", Tasks: []TaskRef{{ID: "a", Text: "task a"}}}
+	input := Input{Root: "/repo", Tasks: []TaskRef{{ID: "a", Text: "task a"}}}
 
 	prompts := map[string]string{
 		"main":            BuildMain(input),

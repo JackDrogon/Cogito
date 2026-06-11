@@ -15,7 +15,9 @@ import (
 	"github.com/JackDrogon/Cogito/internal/store"
 )
 
-const providerLogsDir = "provider-logs"
+// providerLogsDir aliases the store layout vocabulary so the app layer never
+// re-spells the on-disk directory name.
+const providerLogsDir = store.ProviderLogsDirName
 
 type supervisorCommandRunner struct {
 	store      *store.Store
@@ -29,8 +31,8 @@ type supervisorCommandRunner struct {
 }
 
 type commandSession struct {
-	cancel context.CancelFunc
-	done   chan commandSessionResult
+	cancel   context.CancelFunc
+	resultCh chan commandSessionResult
 
 	mu      sync.Mutex
 	settled bool
@@ -96,10 +98,10 @@ func (r *supervisorCommandRunner) Start(ctx context.Context, request runtime.Com
 	stdoutPath, stderrPath := r.logPaths(request.StepID, request.AttemptID)
 	runCtx, cancel := context.WithCancel(ctx)
 	session := &commandSession{
-		cancel: cancel,
-		done:   make(chan commandSessionResult, 1),
-		stdout: stdoutPath,
-		stderr: stderrPath,
+		cancel:   cancel,
+		resultCh: make(chan commandSessionResult, 1),
+		stdout:   stdoutPath,
+		stderr:   stderrPath,
 	}
 
 	r.mu.Lock()
@@ -107,6 +109,11 @@ func (r *supervisorCommandRunner) Start(ctx context.Context, request runtime.Com
 	r.mu.Unlock()
 
 	go func() {
+		// Release runCtx resources once the command settles; Interrupt shares
+		// the same cancel func via session.cancel, and canceling after
+		// completion is a harmless no-op.
+		defer cancel()
+
 		result, err := r.runCommand(runCtx, commandExecutionParams{
 			Handle:      handle,
 			CommandSpec: commandSpec,
@@ -218,8 +225,14 @@ func (r *supervisorCommandRunner) saveArtifacts(stepID, stdoutPath, stderrPath s
 	}
 
 	records = append(records,
-		store.ArtifactRecord{Path: relStdout, Kind: "log", StepID: stepID, Summary: "command stdout log", CreatedAt: createdAt},
-		store.ArtifactRecord{Path: relStderr, Kind: "log", StepID: stepID, Summary: "command stderr log", CreatedAt: createdAt},
+		store.ArtifactRecord{
+			Path: relStdout, Kind: store.ArtifactKindLog, StepID: stepID,
+			Summary: "command stdout log", CreatedAt: createdAt,
+		},
+		store.ArtifactRecord{
+			Path: relStderr, Kind: store.ArtifactKindLog, StepID: stepID,
+			Summary: "command stderr log", CreatedAt: createdAt,
+		},
 	)
 
 	return r.store.SaveArtifacts(records)
@@ -238,7 +251,7 @@ func (r *supervisorCommandRunner) lookupSession(handle adapters.ExecutionHandle)
 }
 
 func (s *commandSession) complete(result *adapters.Execution, err error) {
-	s.done <- commandSessionResult{result: cloneExecution(result), err: err}
+	s.resultCh <- commandSessionResult{result: cloneExecution(result), err: err}
 }
 
 func (s *commandSession) await() (*adapters.Execution, error) {
@@ -251,7 +264,7 @@ func (s *commandSession) await() (*adapters.Execution, error) {
 		return result, err
 	}
 
-	ch := s.done
+	ch := s.resultCh
 	s.mu.Unlock()
 
 	resolved := <-ch

@@ -37,6 +37,7 @@ func (textPresenter) PresentMessage(stdout io.Writer, message string) error {
 
 func renderStatusView(stateDir string, view runtime.RunStatusView) string {
 	var builder strings.Builder
+
 	_, _ = fmt.Fprintf(&builder, "run_id=%s\nstate_dir=%s\nstate=%s\n", view.RunID, stateDir, view.State)
 
 	for _, step := range view.StepViews {

@@ -6,11 +6,19 @@ package prompt
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 )
+
+// ErrNoAgentResult reports that no AGENT_RESULT_JSON marker line was found.
+// It is a sentinel, not a fault: callers distinguish "the agent reported
+// nothing" (fall back or fail a gate) from real read/decode errors with
+// errors.Is. This replaces the previous (value, bool, error) triple so every
+// function stays within the project's two-return-value rule.
+var ErrNoAgentResult = errors.New("no AGENT_RESULT_JSON marker found")
 
 // ResultPrefix is the single-line marker the agent must emit immediately before
 // its JSON result payload. Ported verbatim from AgentLoop config.ResultPrefix.
@@ -32,29 +40,28 @@ type AgentResult struct {
 }
 
 // ParseResult reads logPath and returns the AgentResult parsed from the last
-// AGENT_RESULT_JSON line. The bool reports whether a valid marker line was
-// found and decoded:
-//   - empty path or a missing file (os.IsNotExist) -> (zero, false, nil): the
+// AGENT_RESULT_JSON line:
+//   - empty path or a missing file (os.IsNotExist) -> ErrNoAgentResult: the
 //     agent simply produced no log, which callers treat as missing data.
-//   - any other read error (EACCES, etc.) -> (zero, false, err): a real I/O
+//   - any other read error (EACCES, etc.) is returned as-is: a real I/O
 //     fault must not be silently swallowed as "no result".
-//   - an absent marker -> (zero, false, nil).
-//   - a present-but-invalid JSON payload -> (zero, false, err): the agent tried
-//     to report but the payload is corrupt, which is a hard error rather than a
-//     trivially-passing empty result.
-func ParseResult(logPath string) (AgentResult, bool, error) {
+//   - an absent marker -> ErrNoAgentResult.
+//   - a present-but-invalid JSON payload -> a decode error: the agent tried
+//     to report but the payload is corrupt, which is a hard error rather than
+//     a trivially-passing empty result.
+func ParseResult(logPath string) (AgentResult, error) {
 	logPath = strings.TrimSpace(logPath)
 	if logPath == "" {
-		return AgentResult{}, false, nil
+		return AgentResult{}, ErrNoAgentResult
 	}
 
 	data, err := os.ReadFile(filepath.Clean(logPath))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return AgentResult{}, false, nil
+			return AgentResult{}, ErrNoAgentResult
 		}
 
-		return AgentResult{}, false, err
+		return AgentResult{}, err
 	}
 
 	return ParseResultBytes(data)
@@ -68,33 +75,29 @@ func ParseResult(logPath string) (AgentResult, bool, error) {
 // Real providers wrap the marker inside their own JSON envelope, so the marker
 // surfaces in the normalized text rather than the raw log/stdout stream that
 // StructuredOutputFromLog scans. Returns:
-//   - (bytes, true, nil) when a marker line decoded cleanly,
-//   - (nil, false, nil) when no marker line is present (caller may fall back),
-//   - (nil, false, err) when a marker is present but its JSON is corrupt.
-func StructuredOutputFromText(text string) (json.RawMessage, bool, error) {
-	result, found, err := ParseResultBytes([]byte(text))
+//   - (bytes, nil) when a marker line decoded cleanly,
+//   - ErrNoAgentResult when no marker line is present (caller may fall back),
+//   - a decode error when a marker is present but its JSON is corrupt.
+func StructuredOutputFromText(text string) (json.RawMessage, error) {
+	result, err := ParseResultBytes([]byte(text))
 	if err != nil {
-		return nil, false, err
-	}
-
-	if !found {
-		return nil, false, nil
+		return nil, err
 	}
 
 	data, err := json.Marshal(result)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 
-	return data, true, nil
+	return data, nil
 }
 
 // ParseResultBytes scans stdout in reverse line order for the last line
 // prefixed with ResultPrefix and unmarshals its JSON payload. The final marker
 // wins because agents may emit intermediate retries. A missing marker yields
-// (zero, false, nil); a present marker with an invalid payload yields
-// (zero, false, err) so corrupt results are surfaced, not swallowed.
-func ParseResultBytes(stdout []byte) (AgentResult, bool, error) {
+// ErrNoAgentResult; a present marker with an invalid payload yields a decode
+// error so corrupt results are surfaced, not swallowed.
+func ParseResultBytes(stdout []byte) (AgentResult, error) {
 	lines := strings.Split(string(stdout), "\n")
 
 	for i := len(lines) - 1; i >= 0; i-- {
@@ -107,11 +110,11 @@ func ParseResultBytes(stdout []byte) (AgentResult, bool, error) {
 
 		var result AgentResult
 		if err := json.Unmarshal([]byte(payload), &result); err != nil {
-			return AgentResult{}, false, fmt.Errorf("prompt.ParseResultBytes: decode %s payload: %w", ResultPrefix, err)
+			return AgentResult{}, fmt.Errorf("prompt.ParseResultBytes: decode %s payload: %w", ResultPrefix, err)
 		}
 
-		return result, true, nil
+		return result, nil
 	}
 
-	return AgentResult{}, false, nil
+	return AgentResult{}, ErrNoAgentResult
 }

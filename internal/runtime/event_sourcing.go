@@ -74,7 +74,8 @@ func (e *Engine) selectReadyPendingStepIDs() []string {
 	return ready
 }
 
-// ApprovalRequestedParams groups parameters for approval request events.
+// ApprovalRequestedParams groups the parameters needed to persist an approval
+// request event when a step enters the waiting_approval state.
 type ApprovalRequestedParams struct {
 	StepID            string
 	AttemptID         string
@@ -89,7 +90,7 @@ func (e *Engine) persistApprovalRequested(params ApprovalRequestedParams) error 
 		Type:       store.EventApprovalRequested,
 		StepID:     params.StepID,
 		AttemptID:  params.AttemptID,
-		ApprovalID: e.ids.NewApprovalID(params.StepID),
+		ApprovalID: e.idGen.NewApprovalID(params.StepID),
 		Message:    params.Summary,
 		Data: map[string]string{
 			dataOccurredAt:        e.clock().UTC().Format(time.RFC3339Nano),
@@ -105,7 +106,8 @@ func (e *Engine) persistApprovalRequested(params ApprovalRequestedParams) error 
 	return e.persistEvent(event)
 }
 
-// ApprovalResolutionParams groups parameters for approval resolution events.
+// ApprovalResolutionParams groups the parameters needed to persist an approval
+// resolution event (granted, denied, or timed out) for a pending gate.
 type ApprovalResolutionParams struct {
 	EventType store.EventType
 	Pending   pendingApproval
@@ -134,6 +136,8 @@ func (e *Engine) persistApprovalResolution(params ApprovalResolutionParams) erro
 	return e.persistEvent(event)
 }
 
+// RunTransitionParams groups the parameters needed to persist a run-level
+// state transition event.
 type RunTransitionParams struct {
 	EventType store.EventType
 	From      RunState
@@ -157,7 +161,8 @@ func (e *Engine) persistRunTransition(params RunTransitionParams) error {
 	return e.persistEvent(event)
 }
 
-// StepTransitionParams groups parameters for step state transitions.
+// StepTransitionParams groups the parameters needed to persist a step-level
+// state transition event.
 type StepTransitionParams struct {
 	EventType         store.EventType
 	StepID            string
@@ -234,7 +239,7 @@ func (e *Engine) persistEvent(event store.Event) error {
 		return err
 	}
 
-	return e.store.SaveCheckpoint(checkpointFromSnapshot(e.snapshot, e.repoPath, e.workingDir))
+	return e.store.SaveCheckpoint(checkpointFromSnapshot(e.snapshot, e.executionContext()))
 }
 
 func (e *Engine) lookupStep(stepID string) (workflow.CompiledStep, error) {
@@ -260,7 +265,8 @@ func (e *Engine) allStepsSucceeded() bool {
 	return true
 }
 
-// FailRunParams groups parameters for run failure events.
+// FailRunParams groups the parameters needed to persist a step failure event
+// followed by a run failure event when an execution error terminates a step.
 type FailRunParams struct {
 	StepID            string
 	AttemptID         string

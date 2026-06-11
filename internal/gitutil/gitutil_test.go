@@ -38,7 +38,7 @@ func runGit(t *testing.T, root string, args ...string) {
 func headSHA(t *testing.T, root string) string {
 	t.Helper()
 
-	out, err := GitOps{Root: root}.HeadCommit()
+	out, err := GitOps{Root: root}.HeadCommit(t.Context())
 	if err != nil {
 		t.Fatalf("HeadCommit() error = %v", err)
 	}
@@ -57,7 +57,7 @@ func writeFile(t *testing.T, path, content string) {
 func TestIsRepoTrueForRepoRoot(t *testing.T) {
 	root, _ := initRepo(t)
 
-	if !(GitOps{Root: root}).IsRepo() {
+	if !(GitOps{Root: root}).IsRepo(t.Context()) {
 		t.Fatal("IsRepo() = false, want true for repo root")
 	}
 }
@@ -65,7 +65,7 @@ func TestIsRepoTrueForRepoRoot(t *testing.T) {
 func TestIsRepoFalseForNonRepo(t *testing.T) {
 	dir := t.TempDir()
 
-	if (GitOps{Root: dir}).IsRepo() {
+	if (GitOps{Root: dir}).IsRepo(t.Context()) {
 		t.Fatal("IsRepo() = true, want false for non-repo dir")
 	}
 }
@@ -78,7 +78,7 @@ func TestIsRepoFalseForSubdirOfEnclosingRepo(t *testing.T) {
 	}
 
 	// nested is inside an enclosing repo but is not itself a work-tree top.
-	if (GitOps{Root: sub}).IsRepo() {
+	if (GitOps{Root: sub}).IsRepo(t.Context()) {
 		t.Fatal("IsRepo() = true, want false for subdir of enclosing repo")
 	}
 }
@@ -87,7 +87,7 @@ func TestHasUncommittedChanges(t *testing.T) {
 	root, _ := initRepo(t)
 	git := GitOps{Root: root}
 
-	dirty, err := git.HasUncommittedChanges()
+	dirty, err := git.HasUncommittedChanges(t.Context())
 	if err != nil {
 		t.Fatalf("HasUncommittedChanges() error = %v", err)
 	}
@@ -97,7 +97,7 @@ func TestHasUncommittedChanges(t *testing.T) {
 
 	writeFile(t, filepath.Join(root, "new.txt"), "change\n")
 
-	dirty, err = git.HasUncommittedChanges()
+	dirty, err = git.HasUncommittedChanges(t.Context())
 	if err != nil {
 		t.Fatalf("HasUncommittedChanges() error = %v", err)
 	}
@@ -109,7 +109,7 @@ func TestHasUncommittedChanges(t *testing.T) {
 func TestHeadCommit(t *testing.T) {
 	root, want := initRepo(t)
 
-	got, err := (GitOps{Root: root}).HeadCommit()
+	got, err := (GitOps{Root: root}).HeadCommit(t.Context())
 	if err != nil {
 		t.Fatalf("HeadCommit() error = %v", err)
 	}
@@ -135,7 +135,7 @@ func TestCommitsSinceReturnsOldestToNewest(t *testing.T) {
 	runGit(t, root, "commit", "-m", "third")
 	third := headSHA(t, root)
 
-	got, err := git.CommitsSince(first)
+	got, err := git.CommitsSince(t.Context(), first)
 	if err != nil {
 		t.Fatalf("CommitsSince() error = %v", err)
 	}
@@ -154,7 +154,7 @@ func TestCommitsSinceReturnsOldestToNewest(t *testing.T) {
 func TestCommitsSinceEmptyWhenAtHead(t *testing.T) {
 	root, head := initRepo(t)
 
-	got, err := (GitOps{Root: root}).CommitsSince(head)
+	got, err := (GitOps{Root: root}).CommitsSince(t.Context(), head)
 	if err != nil {
 		t.Fatalf("CommitsSince() error = %v", err)
 	}
@@ -166,7 +166,7 @@ func TestCommitsSinceEmptyWhenAtHead(t *testing.T) {
 func TestValidateCommitRefsMix(t *testing.T) {
 	root, head := initRepo(t)
 
-	result, err := (GitOps{Root: root}).ValidateCommitRefs([]string{head, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "HEAD"})
+	result, err := (GitOps{Root: root}).ValidateCommitRefs(t.Context(), []string{head, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "HEAD"})
 	if err != nil {
 		t.Fatalf("ValidateCommitRefs() error = %v", err)
 	}
@@ -182,7 +182,7 @@ func TestValidateCommitRefsMix(t *testing.T) {
 func TestValidateCommitRefsAllValid(t *testing.T) {
 	root, head := initRepo(t)
 
-	result, err := (GitOps{Root: root}).ValidateCommitRefs([]string{head})
+	result, err := (GitOps{Root: root}).ValidateCommitRefs(t.Context(), []string{head})
 	if err != nil {
 		t.Fatalf("ValidateCommitRefs() error = %v", err)
 	}

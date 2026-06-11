@@ -27,8 +27,8 @@ type TaskRef struct {
 	Text string
 }
 
-// PromptInput carries the substitution values shared by every prompt template.
-type PromptInput struct {
+// Input carries the substitution values shared by every prompt template.
+type Input struct {
 	// Root is the project root the agent operates on.
 	Root string
 	// Tasks are the runnable tasks for this invocation.
@@ -223,7 +223,7 @@ const dirtyWorktreeTemplate = `
 // template prose is an AgentLoop port adapted to inline-task semantics;
 // Cogito-specific values fill the placeholders (Root, inline tasks, and
 // bug-report directories).
-func BuildMain(input PromptInput) string {
+func BuildMain(input Input) string {
 	root := rootLabel(input.Root)
 	bugDir, reproDir := toolchainBugDirs(input.BugDir)
 
@@ -242,10 +242,10 @@ func BuildMain(input PromptInput) string {
 	return replacer.Replace(mainPromptTemplate)
 }
 
-// BuildCommitRecovery renders the commit-recovery prompt. missingCommits lists
+// BuildCommitRecovery renders the commit-recovery prompt. MissingCommits lists
 // the commit references the previous batch claimed but did not produce; they
 // render in the outstanding-reports section.
-func BuildCommitRecovery(input PromptInput, missingCommits []string) string {
+func BuildCommitRecovery(input Input, missingCommits []string) string {
 	root := rootLabel(input.Root)
 
 	replacer := strings.NewReplacer(
@@ -262,7 +262,7 @@ func BuildCommitRecovery(input PromptInput, missingCommits []string) string {
 // BuildDirtyWorktree renders the dirty-worktree recovery prompt. Cogito does not
 // thread live worktree status at build time, so the dirty preview defaults to
 // "无"; this template is wired in L5.
-func BuildDirtyWorktree(input PromptInput) string {
+func BuildDirtyWorktree(input Input) string {
 	root := rootLabel(input.Root)
 
 	replacer := strings.NewReplacer(
@@ -285,6 +285,12 @@ func rootLabel(root string) string {
 	return root
 }
 
+// gitRepoNote reports whether root looks like a git work tree for the prompt
+// text. The .git stat heuristic is deliberate: it covers normal repos (.git
+// dir), worktrees and submodules (.git file) without spawning a git
+// subprocess for every prompt build, and a wrong note only softens prompt
+// wording — commit_check performs the authoritative repo detection via
+// gitutil.
 func gitRepoNote(root string) string {
 	root = strings.TrimSpace(root)
 	if root == "" {

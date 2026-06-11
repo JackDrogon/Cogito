@@ -34,6 +34,7 @@ Error codes:
 - `schema`
 - `semantic`
 - `version`
+- `persist`
 
 Typical use:
 
@@ -41,6 +42,7 @@ Typical use:
 - unknown fields rejected by `KnownFields(true)`
 - unsupported `apiVersion` / `kind`
 - duplicate step IDs or invalid dependencies
+- resolved-workflow file IO failures (`persist`: saving/loading `workflow.json`)
 
 Rendered form:
 

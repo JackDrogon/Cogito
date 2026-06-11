@@ -2,6 +2,7 @@ package feishuproject
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/JackDrogon/Cogito/internal/adapters/prompt"
 	"github.com/JackDrogon/Cogito/internal/task/agentflow"
@@ -43,7 +44,7 @@ func BuildEphemeralSpec(opts EphemeralOptions) (*workflow.Spec, error) {
 		AgentName: opts.AgentName,
 		RepoPath:  opts.RepoPath,
 		Tasks: []prompt.TaskRef{{
-			ID:   fmt.Sprintf("%d", opts.Story.ID),
+			ID:   strconv.FormatInt(opts.Story.ID, 10),
 			Text: opts.Story.Description,
 		}},
 		WithVerify:      opts.WithVerify,

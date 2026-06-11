@@ -29,7 +29,9 @@ func readAgentResult(engine *Engine, stepID string) (prompt.AgentResult, error) 
 
 	var result prompt.AgentResult
 	if err := json.Unmarshal(raw, &result); err != nil {
-		return prompt.AgentResult{}, wrapError(ErrorCodeState, fmt.Sprintf("decode structured output from step %q", stepID), err)
+		message := fmt.Sprintf("decode structured output from step %q", stepID)
+
+		return prompt.AgentResult{}, wrapError(ErrorCodeState, message, err)
 	}
 
 	return result, nil
@@ -43,14 +45,18 @@ func syncStepHandle(engine *Engine, step workflow.CompiledStep, attemptID string
 		RunID:             engine.runID,
 		StepID:            step.ID,
 		AttemptID:         attemptID,
-		ProviderSessionID: engine.ids.NewSyntheticSessionID(step.ID),
+		ProviderSessionID: engine.idGen.NewSyntheticSessionID(step.ID),
 	}
 }
 
 // terminalExecution constructs an already-settled Execution. Synchronous
 // drivers return one directly from Start because their work completes inline;
 // the engine's poll loop is skipped for Normalizable states.
-func terminalExecution(handle adapters.ExecutionHandle, state adapters.ExecutionState, summary string) *adapters.Execution {
+func terminalExecution(
+	handle adapters.ExecutionHandle,
+	state adapters.ExecutionState,
+	summary string,
+) *adapters.Execution {
 	return &adapters.Execution{Handle: handle, State: state, Summary: summary}
 }
 
@@ -67,16 +73,19 @@ func (d syncTerminalDriver) Resume(_ context.Context, request stepResumeRequest)
 }
 
 func (d syncTerminalDriver) PollOrCollect(_ context.Context, _ adapters.ExecutionHandle) (*adapters.Execution, error) {
-	return nil, newError(ErrorCodeExecution, fmt.Sprintf("%s step does not support polling", d.kind))
+	return nil, newError(ErrorCodeExecution, d.kind+" step does not support polling")
 }
 
 func (d syncTerminalDriver) Interrupt(_ context.Context, handle adapters.ExecutionHandle) (*adapters.Execution, error) {
-	return terminalExecution(handle, adapters.ExecutionStateInterrupted, fmt.Sprintf("%s interrupted", d.kind)), nil
+	return terminalExecution(handle, adapters.ExecutionStateInterrupted, d.kind+" interrupted"), nil
 }
 
-func (d syncTerminalDriver) NormalizeResult(_ context.Context, execution *adapters.Execution) (*adapters.StepResult, error) {
+func (d syncTerminalDriver) NormalizeResult(
+	_ context.Context,
+	execution *adapters.Execution,
+) (*adapters.StepResult, error) {
 	if execution == nil {
-		return nil, newError(ErrorCodeExecution, fmt.Sprintf("%s execution is required", d.kind))
+		return nil, newError(ErrorCodeExecution, d.kind+" execution is required")
 	}
 
 	return &adapters.StepResult{Handle: execution.Handle, Status: execution.State, Summary: execution.Summary}, nil

@@ -84,6 +84,12 @@ type StepCheckpoint struct {
 
 // Checkpoint is a coarse-grained snapshot of run state used for resume after interruption.
 // Written atomically with temp-file-plus-rename to avoid exposing partial state.
+//
+// Field contracts (the store is a dumb persistence layer; semantics live in
+// internal/runtime, which validates on load):
+//   - State holds a runtime RunState literal ("pending", "running", "paused",
+//     "waiting_approval", "succeeded", "failed", "canceled").
+//   - UpdatedAt is an RFC 3339 timestamp string.
 type Checkpoint struct {
 	RunID        string                    `json:"run_id"`
 	RepoPath     string                    `json:"repo_path,omitempty"`
@@ -94,17 +100,23 @@ type Checkpoint struct {
 	Steps        map[string]StepCheckpoint `json:"steps,omitempty"`
 }
 
+// ArtifactKind classifies an artifact record. The constants below are the
+// only kinds Cogito itself writes; the field stays open for forward
+// compatibility with externally produced records.
+type ArtifactKind = string
+
+const (
+	// ArtifactKindLog marks captured process output (stdout/stderr logs).
+	ArtifactKindLog ArtifactKind = "log"
+)
+
+// ArtifactRecord describes one file produced by a run, addressed relative to
+// the run directory. CreatedAt is an RFC 3339 timestamp string.
 type ArtifactRecord struct {
-	Path      string `json:"path"`
-	Kind      string `json:"kind"`
-	StepID    string `json:"step_id,omitempty"`
-	Digest    string `json:"digest,omitempty"`
-	Summary   string `json:"summary,omitempty"`
-	CreatedAt string `json:"created_at,omitempty"`
-}
-
-type artifactPathError string
-
-func (e artifactPathError) Error() string {
-	return string(e)
+	Path      string       `json:"path"`
+	Kind      ArtifactKind `json:"kind"`
+	StepID    string       `json:"step_id,omitempty"`
+	Digest    string       `json:"digest,omitempty"`
+	Summary   string       `json:"summary,omitempty"`
+	CreatedAt string       `json:"created_at,omitempty"`
 }

@@ -62,6 +62,8 @@ func validateSemantic(spec *Spec) error {
 // Without this a verify step could read structured output from a non-agent step
 // or run BEFORE the agent it claims to verify, silently producing garbage.
 func validateStepReferences(spec *Spec, stepIndex map[string]int) error {
+	scope := referenceScope{spec: spec, stepIndex: stepIndex}
+
 	for _, step := range spec.Steps {
 		switch step.Kind {
 		case StepKindVerify:
@@ -70,7 +72,7 @@ func validateStepReferences(spec *Spec, stepIndex map[string]int) error {
 			}
 
 			if from := strings.TrimSpace(step.Verify.From); from != "" {
-				if err := validateFromReference(spec, stepIndex, step, from); err != nil {
+				if err := scope.validateFromReference(step, from); err != nil {
 					return err
 				}
 			}
@@ -80,14 +82,24 @@ func validateStepReferences(spec *Spec, stepIndex map[string]int) error {
 			}
 
 			if from := strings.TrimSpace(step.CommitCheck.From); from != "" {
-				if err := validateFromReference(spec, stepIndex, step, from); err != nil {
+				if err := scope.validateFromReference(step, from); err != nil {
 					return err
 				}
 			}
+		// Agent, command, and approval steps carry no cross-step references.
+		case StepKindAgent, StepKindCommand, StepKindApproval:
 		}
 	}
 
 	return nil
+}
+
+// referenceScope bundles the compiled-spec lookup state shared by the `from:`
+// reference checks, keeping their methods within the project's three-parameter
+// rule.
+type referenceScope struct {
+	spec      *Spec
+	stepIndex map[string]int
 }
 
 // validateFromReference enforces the three rules a `from:` target must satisfy:
@@ -95,19 +107,19 @@ func validateStepReferences(spec *Spec, stepIndex map[string]int) error {
 // step's needs (directly or transitively). A missing dependency is an explicit
 // error rather than an auto-injected edge: the user opted into `from`, so they
 // must also order the step after the agent they consume.
-func validateFromReference(spec *Spec, stepIndex map[string]int, step StepSpec, from string) error {
-	fromIndex, exists := stepIndex[from]
+func (s referenceScope) validateFromReference(step StepSpec, from string) error {
+	fromIndex, exists := s.stepIndex[from]
 	if !exists {
 		return newError(ErrorCodeSemantic, fmt.Sprintf("step %q references unknown step %q in from", step.ID, from))
 	}
 
-	if spec.Steps[fromIndex].Kind != StepKindAgent {
+	if s.spec.Steps[fromIndex].Kind != StepKindAgent {
 		return newError(ErrorCodeSemantic, fmt.Sprintf(
 			"step %q from %q must reference an agent step, got kind %q",
-			step.ID, from, spec.Steps[fromIndex].Kind))
+			step.ID, from, s.spec.Steps[fromIndex].Kind))
 	}
 
-	if !dependsOn(spec, stepIndex, step.ID, from) {
+	if !s.dependsOn(step.ID, from) {
 		return newError(ErrorCodeSemantic, fmt.Sprintf(
 			"step %q references step %q in from but does not declare it in needs (directly or transitively)",
 			step.ID, from))
@@ -119,7 +131,8 @@ func validateFromReference(spec *Spec, stepIndex map[string]int, step StepSpec, 
 // dependsOn reports whether stepID reaches targetID through the needs graph. It
 // uses a visited set so a cycle (caught separately by validateDAG) cannot make
 // this loop forever.
-func dependsOn(spec *Spec, stepIndex map[string]int, stepID, targetID string) bool {
+func (s referenceScope) dependsOn(stepID, targetID string) bool {
+	spec, stepIndex := s.spec, s.stepIndex
 	visited := make(map[string]struct{}, len(spec.Steps))
 	queue := []string{stepID}
 
@@ -143,6 +156,7 @@ func dependsOn(spec *Spec, stepIndex map[string]int, stepID, targetID string) bo
 			}
 
 			visited[need] = struct{}{}
+
 			queue = append(queue, need)
 		}
 	}
@@ -204,6 +218,10 @@ func validateDAG(compiled *CompiledWorkflow) error {
 			indegree[dependentID]--
 			if indegree[dependentID] == 0 {
 				ready = append(ready, dependentID)
+				// Re-sorting the ready queue on every insertion keeps the
+				// topological order DETERMINISTIC (declaration order breaks
+				// ties), which replay correctness depends on. Workflows are
+				// CLI-sized, so the extra sorts are irrelevant in practice.
 				sortStepIDsByDeclaration(ready, compiled.StepIndex)
 			}
 		}

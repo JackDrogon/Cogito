@@ -68,15 +68,20 @@ func normalizeRepos(raw map[string]string) map[string]string {
 	if len(raw) == 0 {
 		return nil
 	}
+
 	repos := make(map[string]string, len(raw))
+
 	for key, value := range raw {
 		key = strings.TrimSpace(key)
 		value = strings.TrimSpace(value)
+
 		if key == "" || value == "" {
 			continue
 		}
+
 		repos[key] = value
 	}
+
 	if len(repos) == 0 {
 		return nil
 	}
@@ -127,6 +132,7 @@ func (r rawMeegle) toConfig() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+
 	cfg.Poll = poll
 
 	if err := cfg.Validate(); err != nil {
@@ -148,6 +154,7 @@ func (r rawPoll) toConfig() (PollConfig, error) {
 		if err != nil {
 			return PollConfig{}, fmt.Errorf("meegle.poll.interval: %w", err)
 		}
+
 		poll.Interval = parsed
 	}
 
@@ -160,6 +167,7 @@ func (c *Config) applyDefaults() {
 	if c.WorkItemTypeKey == "" {
 		c.WorkItemTypeKey = defaultWorkItemTypeKey
 	}
+
 	if c.PageSize <= 0 {
 		c.PageSize = defaultPageSize
 	}
@@ -169,9 +177,11 @@ func (p *PollConfig) applyDefaults() {
 	if p.Interval <= 0 {
 		p.Interval = defaultPollInterval
 	}
+
 	if p.StateFile == "" {
 		p.StateFile = defaultStateFile
 	}
+
 	if p.OutputFile == "" {
 		p.OutputFile = defaultOutputFile
 	}
@@ -179,23 +189,28 @@ func (p *PollConfig) applyDefaults() {
 
 // Validate ensures the credentials needed to talk to the API are present.
 // Missing values fail fast so the CLI never silently no-ops.
-func (c Config) Validate() error {
-	missing := make([]string, 0, 5)
+func (c *Config) Validate() error {
+	var missing []string
 	if c.BaseURL == "" {
 		missing = append(missing, "base_url")
 	}
+
 	if c.PluginID == "" {
 		missing = append(missing, "plugin_id")
 	}
+
 	if c.PluginSecret == "" {
 		missing = append(missing, "plugin_secret")
 	}
+
 	if c.UserKey == "" {
 		missing = append(missing, "user_key")
 	}
+
 	if c.ProjectKey == "" {
 		missing = append(missing, "project_key")
 	}
+
 	if len(missing) > 0 {
 		return errors.New("meegle: required fields missing: " + strings.Join(missing, ", "))
 	}

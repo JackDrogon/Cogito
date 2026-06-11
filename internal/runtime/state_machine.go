@@ -161,14 +161,28 @@ func applyRunEvent(request stateMachineEventRequest) error {
 	return nil
 }
 
-func applyStepEvent(request stateMachineEventRequest) error {
+// stepEventFold is the shared decode/validate/fold prefix for every
+// step-scoped event. Plain step transitions and approval transitions differ
+// only in their event-specific fields, so both build on this common fold and
+// finish with commit.
+type stepEventFold struct {
+	stepID string
+	step   StepSnapshot
+	from   StepState
+	to     StepState
+}
+
+// foldStepEventCommon validates the step reference and transition order, then
+// folds the fields every step-scoped event shares (state, attempt, provider
+// session, summary) into a copy of the step snapshot.
+func foldStepEventCommon(request stateMachineEventRequest) (stepEventFold, error) {
 	stepID := strings.TrimSpace(request.Event.StepID)
 	if stepID == "" {
-		return newError(request.Code, fmt.Sprintf("event %s missing step id", request.Event.Type))
+		return stepEventFold{}, newError(request.Code, fmt.Sprintf("event %s missing step id", request.Event.Type))
 	}
 
 	if _, ok := request.Compiled.StepIndex[stepID]; !ok {
-		return newError(request.Code, fmt.Sprintf("event references unknown step %q", stepID))
+		return stepEventFold{}, newError(request.Code, fmt.Sprintf("event references unknown step %q", stepID))
 	}
 
 	current := request.Snapshot.Steps[stepID]
@@ -178,7 +192,7 @@ func applyStepEvent(request stateMachineEventRequest) error {
 	providerSessionID := strings.TrimSpace(request.Data[dataProviderSessionID])
 
 	if err := ensureStepTransition(current.State, from, to); err != nil {
-		return wrapError(request.Code, "invalid transition order", err)
+		return stepEventFold{}, wrapError(request.Code, "invalid transition order", err)
 	}
 
 	current.State = to
@@ -194,11 +208,39 @@ func applyStepEvent(request stateMachineEventRequest) error {
 		current.Summary = summary
 	}
 
+	return stepEventFold{stepID: stepID, step: current, from: from, to: to}, nil
+}
+
+// commit writes the folded step back into the snapshot and records the
+// transition. Event.ApprovalID is empty for plain step events, so including it
+// unconditionally keeps both event families on one code path.
+func (f stepEventFold) commit(request stateMachineEventRequest) {
+	request.Snapshot.Steps[f.stepID] = f.step
+	recordTransition(request.Transitions, Transition{
+		Sequence:          request.Event.Sequence,
+		EventType:         request.Event.Type,
+		Scope:             "step",
+		StepID:            f.stepID,
+		ApprovalID:        request.Event.ApprovalID,
+		From:              string(f.from),
+		To:                string(f.to),
+		AttemptID:         request.Event.AttemptID,
+		ProviderSessionID: f.step.ProviderSessionID,
+		Summary:           normalizeSummary(f.step.Summary, adapters.ExecutionStateRunning),
+	})
+}
+
+func applyStepEvent(request stateMachineEventRequest) error {
+	fold, err := foldStepEventCommon(request)
+	if err != nil {
+		return err
+	}
+
 	// Fold structured output whenever an event carries it (only successful
 	// agent transitions do). The field is per-step, not per-attempt, so it is
 	// preserved through retries until a later attempt overwrites it.
 	if len(request.Event.StructuredOutput) > 0 {
-		current.StructuredOutput = append(json.RawMessage(nil), request.Event.StructuredOutput...)
+		fold.step.StructuredOutput = append(json.RawMessage(nil), request.Event.StructuredOutput...)
 	}
 
 	switch request.Event.Type {
@@ -206,96 +248,45 @@ func applyStepEvent(request stateMachineEventRequest) error {
 		// EventStepInterrupted parks a running step back in the queued state
 		// while preserving AttemptID + ProviderSessionID so executeStep can
 		// resume the same provider session on the next pass.
-		if to == StepStateQueued {
-			current.Resumable = true
+		if fold.to == StepStateQueued {
+			fold.step.Resumable = true
 		}
 	case store.EventStepRetried:
 		// EventStepRetried is a fresh attempt: drop the prior session and resume
 		// intent so the next pass performs a clean Start.
-		if to == StepStateQueued {
-			current.AttemptID = ""
-			current.ProviderSessionID = ""
-			current.Resumable = false
+		if fold.to == StepStateQueued {
+			fold.step.AttemptID = ""
+			fold.step.ProviderSessionID = ""
+			fold.step.Resumable = false
 		}
 	case store.EventStepStarted, store.EventStepSucceeded, store.EventStepFailed:
 		// Resume intent is single-shot. Once the step re-enters running (the
 		// resume actually fired) or reaches a terminal outcome, clear Resumable
 		// so a stale "true" cannot persist in the checkpoint indefinitely. Only
 		// EventStepInterrupted ever sets it back to true.
-		current.Resumable = false
+		fold.step.Resumable = false
 	}
 
-	request.Snapshot.Steps[stepID] = current
-	recordTransition(request.Transitions, Transition{
-		Sequence:          request.Event.Sequence,
-		EventType:         request.Event.Type,
-		Scope:             "step",
-		StepID:            stepID,
-		From:              string(from),
-		To:                string(to),
-		AttemptID:         request.Event.AttemptID,
-		ProviderSessionID: current.ProviderSessionID,
-		Summary:           normalizeSummary(current.Summary, adapters.ExecutionStateRunning),
-	})
+	fold.commit(request)
 
 	return nil
 }
 
 func applyApprovalEvent(request stateMachineEventRequest) error {
-	stepID := strings.TrimSpace(request.Event.StepID)
-	if stepID == "" {
-		return newError(request.Code, fmt.Sprintf("event %s missing step id", request.Event.Type))
-	}
-
-	if _, ok := request.Compiled.StepIndex[stepID]; !ok {
-		return newError(request.Code, fmt.Sprintf("event references unknown step %q", stepID))
-	}
-
-	current := request.Snapshot.Steps[stepID]
-	from := StepState(strings.TrimSpace(request.Data[dataFromState]))
-	to := StepState(strings.TrimSpace(request.Data[dataToState]))
-	summary := strings.TrimSpace(request.Data[dataSummary])
-	providerSessionID := strings.TrimSpace(request.Data[dataProviderSessionID])
-	approvalTrigger := ApprovalTrigger(strings.TrimSpace(request.Data[dataApprovalTrigger]))
-
-	if err := ensureStepTransition(current.State, from, to); err != nil {
-		return wrapError(request.Code, "invalid transition order", err)
-	}
-
-	current.State = to
-	if request.Event.AttemptID != "" {
-		current.AttemptID = request.Event.AttemptID
-	}
-
-	if providerSessionID != "" {
-		current.ProviderSessionID = providerSessionID
-	}
-
-	if summary != "" {
-		current.Summary = summary
+	fold, err := foldStepEventCommon(request)
+	if err != nil {
+		return err
 	}
 
 	if request.Event.Type == store.EventApprovalRequested {
-		current.ApprovalID = request.Event.ApprovalID
-		current.ApprovalTrigger = approvalTrigger
+		fold.step.ApprovalID = request.Event.ApprovalID
+		fold.step.ApprovalTrigger = ApprovalTrigger(strings.TrimSpace(request.Data[dataApprovalTrigger]))
 	} else {
-		current.ApprovalID = ""
-		current.ApprovalTrigger = ""
+		fold.step.ApprovalID = ""
+		fold.step.ApprovalTrigger = ""
 	}
 
-	request.Snapshot.Steps[stepID] = current
-	recordTransition(request.Transitions, Transition{
-		Sequence:          request.Event.Sequence,
-		EventType:         request.Event.Type,
-		Scope:             "step",
-		StepID:            stepID,
-		ApprovalID:        request.Event.ApprovalID,
-		From:              string(from),
-		To:                string(to),
-		AttemptID:         request.Event.AttemptID,
-		ProviderSessionID: current.ProviderSessionID,
-		Summary:           normalizeSummary(current.Summary, adapters.ExecutionStateRunning),
-	})
+	fold.commit(request)
 
 	return nil
 }
@@ -400,7 +391,7 @@ func initializePendingSteps(snapshot *Snapshot, compiled *workflow.CompiledWorkf
 }
 
 func cancelActiveSteps(snapshot *Snapshot) {
-	for stepID, step := range snapshot.Steps {
+	for stepID, step := range snapshot.Steps { //nolint:gocritic // map values cannot be addressed; the copy is inherent
 		if terminalStepStates.Has(step.State) {
 			continue
 		}

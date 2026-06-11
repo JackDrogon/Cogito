@@ -10,7 +10,7 @@ import (
 )
 
 func TestRunCompiledWorkflowRequiresCompiled(t *testing.T) {
-	_, err := appsvc.RunCompiledWorkflow(t.Context(), RunCompiledWorkflowInput{Flags: &sharedFlags{}})
+	_, err := appService.RunCompiledWorkflow(t.Context(), RunCompiledWorkflowInput{Flags: &sharedFlags{}})
 	if err == nil {
 		t.Fatal("RunCompiledWorkflow() error = nil, want compiled workflow required")
 	}
@@ -29,7 +29,7 @@ func TestRunCompiledWorkflowRunsCompiledWorkflow(t *testing.T) {
 	}
 
 	stateDir := filepath.Join(fixture.runsRoot, "run-compiled")
-	output, err := appsvc.RunCompiledWorkflow(t.Context(), RunCompiledWorkflowInput{
+	output, err := appService.RunCompiledWorkflow(t.Context(), RunCompiledWorkflowInput{
 		Compiled: compiled,
 		Flags:    &sharedFlags{repo: fixture.repoDir, stateDir: stateDir},
 	})
@@ -61,7 +61,7 @@ func TestRunCompiledWorkflowParityWithRunWorkflow(t *testing.T) {
 	fixture := newAppRepoFixture(t)
 	workflowPath := writeWorkflowFile(workflowFileParams{Test: t, RepoDir: fixture.repoDir, Name: "parity.yaml", Command: "printf 'parity\\n'"})
 
-	loadedOutput, err := appsvc.RunWorkflow(t.Context(), RunWorkflowInput{
+	loadedOutput, err := appService.RunWorkflow(t.Context(), RunWorkflowInput{
 		WorkflowPath: workflowPath,
 		Flags:        &sharedFlags{repo: fixture.repoDir, stateDir: filepath.Join(fixture.runsRoot, "run-loaded")},
 	})
@@ -73,7 +73,7 @@ func TestRunCompiledWorkflowParityWithRunWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFile() error = %v", err)
 	}
-	compiledOutput, err := appsvc.RunCompiledWorkflow(t.Context(), RunCompiledWorkflowInput{
+	compiledOutput, err := appService.RunCompiledWorkflow(t.Context(), RunCompiledWorkflowInput{
 		Compiled: compiled,
 		Flags:    &sharedFlags{repo: fixture.repoDir, stateDir: filepath.Join(fixture.runsRoot, "run-compiled-parity")},
 	})

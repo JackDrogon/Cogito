@@ -19,7 +19,9 @@ func run() int {
 	defer stop()
 
 	if err := app.Run(ctx, os.Args[1:], os.Stdout); err != nil {
-		_, _ = fmt.Fprintln(os.Stderr, err)
+		// Prefix per CLI convention so users can attribute the failure when
+		// cogito runs inside scripts or pipelines.
+		_, _ = fmt.Fprintln(os.Stderr, "cogito:", err)
 		return 1
 	}
 

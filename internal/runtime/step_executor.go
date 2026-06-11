@@ -67,10 +67,10 @@ func (e *Engine) executeStep(ctx context.Context, stepID string) error {
 		return err
 	}
 
-	attemptID := e.ids.NewAttemptID(stepID)
+	attemptID := e.idGen.NewAttemptID(stepID)
 
 	if step.Kind == workflow.StepKindApproval {
-		return e.executeApprovalStep(ctx, stepID, step, attemptID)
+		return e.executeApprovalStep(ctx, step, attemptID)
 	}
 
 	handled, err := e.requestExceptionalApproval(ctx, step, attemptID)
@@ -84,7 +84,10 @@ func (e *Engine) executeStep(ctx context.Context, stepID string) error {
 
 	driver, err := e.buildDriver(step)
 	if err != nil {
-		return e.failStepStart(stepID, attemptID, err, "driver setup failed")
+		return e.failStepStart(failStepStartParams{
+			StepID: stepID, AttemptID: attemptID,
+			Err: err, Message: "driver setup failed",
+		})
 	}
 
 	// An interrupted step is parked in StepStateQueued with Resumable=true and a
@@ -109,12 +112,15 @@ func (e *Engine) executeStep(ctx context.Context, stepID string) error {
 		WorkingDir: e.workingDir,
 	})
 	if err != nil {
-		return e.failStepStart(stepID, attemptID, err, "step start failed")
+		return e.failStepStart(failStepStartParams{
+			StepID: stepID, AttemptID: attemptID,
+			Err: err, Message: "step start failed",
+		})
 	}
 
 	providerSessionID := strings.TrimSpace(execution.Handle.ProviderSessionID)
 	if providerSessionID == "" {
-		providerSessionID = e.ids.NewSyntheticSessionID(stepID)
+		providerSessionID = e.idGen.NewSyntheticSessionID(stepID)
 		execution.Handle.ProviderSessionID = providerSessionID
 	}
 
@@ -168,10 +174,13 @@ func (e *Engine) resumeStep(ctx context.Context, params resumeStepParams) error 
 		Handle:         handle,
 		Snapshot:       e.Snapshot(),
 		WorkingDir:     e.workingDir,
-		RecoveryPrompt: e.recoveryPromptOverride(params.Step, prior),
+		RecoveryPrompt: e.recoveryPromptOverride(ctx, params.Step, prior),
 	})
 	if err != nil {
-		return e.failStepStart(params.Step.ID, params.AttemptID, err, "step resume failed")
+		return e.failStepStart(failStepStartParams{
+			StepID: params.Step.ID, AttemptID: params.AttemptID,
+			Err: err, Message: "step resume failed",
+		})
 	}
 
 	providerSessionID := strings.TrimSpace(execution.Handle.ProviderSessionID)
@@ -203,11 +212,11 @@ func (e *Engine) resumeStep(ctx context.Context, params resumeStepParams) error 
 
 func (e *Engine) executeApprovalStep(
 	ctx context.Context,
-	stepID string,
 	step workflow.CompiledStep,
 	attemptID string,
 ) error {
-	providerSessionID := e.ids.NewSyntheticSessionID(stepID)
+	stepID := step.ID
+	providerSessionID := e.idGen.NewSyntheticSessionID(stepID)
 	summary := defaultApprovalSummary(step, adapters.ExecutionStateWaitingApproval)
 
 	if err := e.persistStepTransition(StepTransitionParams{
@@ -223,7 +232,7 @@ func (e *Engine) executeApprovalStep(
 		return err
 	}
 
-	return e.requestApproval(ctx, approvalGateParams{
+	return e.requestApproval(ctx, ApprovalRequestParams{
 		Step:              step,
 		AttemptID:         attemptID,
 		ProviderSessionID: providerSessionID,
@@ -233,8 +242,19 @@ func (e *Engine) executeApprovalStep(
 	})
 }
 
-func (e *Engine) failStepStart(stepID, attemptID string, executionErr error, message string) error {
-	providerSessionID := e.ids.NewSyntheticSessionID(stepID)
+// failStepStartParams carries the inputs for recording a failed step start;
+// a struct keeps the call sites within the three-parameter rule.
+type failStepStartParams struct {
+	StepID    string
+	AttemptID string
+	Err       error
+	Message   string
+}
+
+func (e *Engine) failStepStart(params failStepStartParams) error {
+	stepID, attemptID := params.StepID, params.AttemptID
+	executionErr, message := params.Err, params.Message
+	providerSessionID := e.idGen.NewSyntheticSessionID(stepID)
 
 	if startErr := e.persistStepTransition(StepTransitionParams{
 		EventType:         store.EventStepStarted,
@@ -268,7 +288,7 @@ type executionContinuationRequest struct {
 func (e *Engine) continueExecution(ctx context.Context, request executionContinuationRequest) error {
 	providerSessionID := strings.TrimSpace(request.Execution.Handle.ProviderSessionID)
 	if providerSessionID == "" {
-		providerSessionID = e.ids.NewSyntheticSessionID(request.Step.ID)
+		providerSessionID = e.idGen.NewSyntheticSessionID(request.Step.ID)
 		request.Execution.Handle.ProviderSessionID = providerSessionID
 	}
 
@@ -325,7 +345,7 @@ func (e *Engine) applyResult(ctx context.Context, request executionResultRequest
 
 	providerSessionID := strings.TrimSpace(request.Result.Handle.ProviderSessionID)
 	if providerSessionID == "" {
-		providerSessionID = e.ids.NewSyntheticSessionID(request.Step.ID)
+		providerSessionID = e.idGen.NewSyntheticSessionID(request.Step.ID)
 	}
 
 	summary := normalizeSummary(request.Result.Summary, request.Result.Status)
@@ -366,7 +386,7 @@ func (e *Engine) applyResult(ctx context.Context, request executionResultRequest
 	case adapters.ExecutionStateWaitingApproval:
 		return e.requestApproval(
 			ctx,
-			approvalGateParams{
+			ApprovalRequestParams{
 				Step:              request.Step,
 				AttemptID:         request.AttemptID,
 				ProviderSessionID: providerSessionID,

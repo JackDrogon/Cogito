@@ -60,6 +60,23 @@ The store package exposes four persisted data structures:
 - one store-local mutex serializes appends
 - every event is `fsync`'d before the append is considered durable
 
+### Sequence accounting on failed appends
+
+Replay requires strictly contiguous sequences, so `AppendEvent` follows a
+candidate-commit scheme:
+
+- failures before any byte can reach the file (marshal, open) leave the
+  counter untouched; the next append reuses the candidate sequence
+- failures after the write started (write, sync) leave the on-disk state
+  unknown — a failed `fsync` may still have persisted the data — so the
+  counter is re-synced from the events file itself (the file is the source
+  of truth), guaranteeing a later append can never duplicate a sequence
+  that already became durable
+- when the log cannot even be read back, the store poisons itself: every
+  further append fails fast with `store.ErrEventLogUnreliable` instead of
+  risking a gap or duplicate; reopening the store (after repairing the log)
+  re-primes the counter from the file
+
 ### Event shape
 
 ```json
@@ -136,6 +153,13 @@ Checkpoints are written using a temp-file-plus-rename strategy:
 
 If the primary checkpoint cannot be loaded, the store attempts to recover from the
 temp file and promote it to the primary path.
+
+When neither the primary checkpoint nor the recovery temp file exists,
+`LoadCheckpoint` reports the exported sentinel `store.ErrCheckpointNotFound`
+(wrapped in a `store.Error` with code `checkpoint`). Callers — the runtime
+engine — use it with `errors.Is` to distinguish the benign fresh-run case
+from real checkpoint corruption, which is logged before falling back to a
+full event replay.
 
 ## Artifact Index
 

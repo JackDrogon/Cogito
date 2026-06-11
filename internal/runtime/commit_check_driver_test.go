@@ -29,7 +29,7 @@ func initGitRepo(t *testing.T) (string, string) {
 	gitRun(t, root, "add", "README.md")
 	gitRun(t, root, "commit", "-m", "initial commit")
 
-	head, err := (gitutil.GitOps{Root: root}).HeadCommit()
+	head, err := (gitutil.GitOps{Root: root}).HeadCommit(t.Context())
 	if err != nil {
 		t.Fatalf("HeadCommit() error = %v", err)
 	}
@@ -51,7 +51,7 @@ func gitRun(t *testing.T, root string, args ...string) {
 func TestEvaluateCommitCheckSucceedsWithValidCommitsCleanTree(t *testing.T) {
 	root, head := initGitRepo(t)
 
-	failure, err := evaluateCommitCheck(commitCheckParams{
+	failure, err := evaluateCommitCheck(t.Context(), commitCheckParams{
 		Spec:    workflow.CommitCheckStepSpec{From: "agent", RequireSome: true},
 		Commits: []string{head},
 		Git:     gitutil.GitOps{Root: root},
@@ -67,7 +67,7 @@ func TestEvaluateCommitCheckSucceedsWithValidCommitsCleanTree(t *testing.T) {
 func TestEvaluateCommitCheckRequireSomeEmpty(t *testing.T) {
 	root, _ := initGitRepo(t)
 
-	failure, err := evaluateCommitCheck(commitCheckParams{
+	failure, err := evaluateCommitCheck(t.Context(), commitCheckParams{
 		Spec:    workflow.CommitCheckStepSpec{From: "agent", RequireSome: true},
 		Commits: nil,
 		Git:     gitutil.GitOps{Root: root},
@@ -83,7 +83,7 @@ func TestEvaluateCommitCheckRequireSomeEmpty(t *testing.T) {
 func TestEvaluateCommitCheckInvalidRef(t *testing.T) {
 	root, _ := initGitRepo(t)
 
-	failure, err := evaluateCommitCheck(commitCheckParams{
+	failure, err := evaluateCommitCheck(t.Context(), commitCheckParams{
 		Spec:    workflow.CommitCheckStepSpec{From: "agent"},
 		Commits: []string{"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"},
 		Git:     gitutil.GitOps{Root: root},
@@ -102,7 +102,7 @@ func TestEvaluateCommitCheckDirtyWorktree(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	failure, err := evaluateCommitCheck(commitCheckParams{
+	failure, err := evaluateCommitCheck(t.Context(), commitCheckParams{
 		Spec:    workflow.CommitCheckStepSpec{From: "agent"},
 		Commits: []string{head},
 		Git:     gitutil.GitOps{Root: root},
@@ -121,7 +121,7 @@ func TestEvaluateCommitCheckAllowDirtySkipsWorktreeCheck(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	failure, err := evaluateCommitCheck(commitCheckParams{
+	failure, err := evaluateCommitCheck(t.Context(), commitCheckParams{
 		Spec:    workflow.CommitCheckStepSpec{From: "agent", AllowDirty: true},
 		Commits: []string{head},
 		Git:     gitutil.GitOps{Root: root},

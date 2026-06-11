@@ -323,7 +323,7 @@ func TestResumeAfterApproval(t *testing.T) {
 			Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "publish ok"}},
 		},
 	}
-	fixture := newRuntimeMachineFixtureWithPolicy(runtimeMachineFixtureParams{Test: t, Spec: approvalWorkflowSpec(), CommandScripts: commandScripts, ApprovalPolicy: newApprovalModePolicy(ApprovalModeAuto)})
+	fixture := newRuntimeMachineFixtureWithPolicy(runtimeMachineFixtureParams{Test: t, Spec: approvalWorkflowSpec(), CommandScripts: commandScripts, ApprovalPolicy: NewApprovalModePolicy(ApprovalModeAuto)})
 
 	if err := fixture.engine.ExecuteAll(t.Context()); err != nil {
 		t.Fatalf("ExecuteAll() before grant error = %v", err)
@@ -337,7 +337,7 @@ func TestResumeAfterApproval(t *testing.T) {
 		t.Fatalf("publish start count before grant = %d, want 0", got)
 	}
 
-	fixture = reloadRuntimeMachineFixtureWithPolicy(runtimeMachineFixtureParams{Test: t, CommandScripts: commandScripts, ApprovalPolicy: newApprovalModePolicy(ApprovalModeAuto)}, fixture)
+	fixture = reloadRuntimeMachineFixtureWithPolicy(runtimeMachineFixtureParams{Test: t, CommandScripts: commandScripts, ApprovalPolicy: NewApprovalModePolicy(ApprovalModeAuto)}, fixture)
 
 	reloadedSnapshot := fixture.engine.Snapshot()
 	if reloadedSnapshot.State != RunStateWaitingApproval {
@@ -395,7 +395,7 @@ func TestApprovalDenialStopsSideEffects(t *testing.T) {
 			Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "publish started"},
 			Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "publish ok"}},
 		},
-	}, ApprovalPolicy: newApprovalModePolicy(ApprovalModeDeny)})
+	}, ApprovalPolicy: NewApprovalModePolicy(ApprovalModeDeny)})
 
 	err := fixture.engine.ExecuteAll(t.Context())
 	if err == nil {
@@ -484,7 +484,7 @@ func TestApprovalResolutionBranches(t *testing.T) {
 					Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "publish started"},
 					Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "publish ok"}},
 				},
-			}, ApprovalPolicy: newApprovalModePolicy(ApprovalModeAuto)})
+			}, ApprovalPolicy: NewApprovalModePolicy(ApprovalModeAuto)})
 
 			if err := fixture.engine.ExecuteAll(t.Context()); err != nil {
 				t.Fatalf("ExecuteAll() before resolution error = %v", err)
@@ -540,7 +540,7 @@ func TestApprovalTriggerSources(t *testing.T) {
 						Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "publish started"},
 						Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "publish ok"}},
 					},
-				}, ApprovalPolicy: newApprovalModePolicy(ApprovalModeAuto)})
+				}, ApprovalPolicy: NewApprovalModePolicy(ApprovalModeAuto)})
 			},
 			stepID:      "legal",
 			wantTrigger: ApprovalTriggerExplicit,
@@ -559,7 +559,7 @@ func TestApprovalTriggerSources(t *testing.T) {
 							ResumePolls: []adapters.FakeSnapshot{{State: adapters.ExecutionStateSucceeded, Summary: "review ok"}},
 						},
 					},
-				}), ApprovalPolicy: newApprovalModePolicy(ApprovalModeAuto)})
+				}), ApprovalPolicy: NewApprovalModePolicy(ApprovalModeAuto)})
 			},
 			stepID:      "review",
 			wantTrigger: ApprovalTriggerAdapter,
@@ -956,7 +956,7 @@ func newRuntimeMachineFixtureWithPolicy(params runtimeMachineFixtureParams) runt
 		Clock: func() time.Time {
 			return time.Date(2026, time.March, 22, 15, 4, 5, 0, time.UTC)
 		},
-		IDs:            ids,
+		IDGen:          ids,
 		Store:          runStore,
 		ApprovalPolicy: params.ApprovalPolicy,
 		CommandRunner:  runner,
@@ -1043,7 +1043,7 @@ func reloadRuntimeMachineFixtureWithPolicy(params runtimeMachineFixtureParams, f
 		Clock: func() time.Time {
 			return time.Date(2026, time.March, 22, 15, 4, 5, 0, time.UTC)
 		},
-		IDs:            newTestIDGenerator(),
+		IDGen:          newTestIDGenerator(),
 		Store:          runStore,
 		ApprovalPolicy: params.ApprovalPolicy,
 		CommandRunner:  runner,

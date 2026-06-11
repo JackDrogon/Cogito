@@ -117,6 +117,8 @@ func (s applicationService) RunCompiledWorkflow(ctx context.Context, input RunCo
 // locking, durable workflow persistence, and engine execution. The only
 // difference between the two public entry points is the source of compiled:
 // a YAML file vs an in-memory build.
+//
+//nolint:nonamedreturns // the deferred lock release below must mutate err to surface release failures
 func (s applicationService) runCompiled(ctx context.Context, compiled *workflow.CompiledWorkflow, flags *sharedFlags) (output RunWorkflowOutput, err error) {
 	if flags == nil {
 		return RunWorkflowOutput{}, errors.New("applicationService.runCompiled: flags are required")
@@ -138,7 +140,11 @@ func (s applicationService) runCompiled(ctx context.Context, compiled *workflow.
 		return RunWorkflowOutput{}, err
 	}
 
-	repoLock, err := acquireRepoLock(flags, stateRef.runID, stateRef.baseDir)
+	repoLock, err := acquireRepoLock(ctx, acquireRepoLockInput{
+		flags:    flags,
+		runID:    stateRef.runID,
+		runsRoot: stateRef.baseDir,
+	})
 	if err != nil {
 		return RunWorkflowOutput{}, err
 	}
@@ -236,17 +242,17 @@ func (s applicationService) ResumeRun(ctx context.Context, input ResumeRunInput)
 }
 
 func (applicationService) ReplayRun(_ context.Context, input ReplayRunInput) (ReplayRunOutput, error) {
-	replayInput, err := loadReplayInput(input.EventsPath)
+	replay, err := loadReplayInput(input.EventsPath)
 	if err != nil {
 		return ReplayRunOutput{}, err
 	}
 
-	replay, err := runtime.Replay(replayInput.runID, replayInput.compiled, replayInput.events)
+	replayResult, err := runtime.Replay(replay.runID, replay.compiled, replay.events)
 	if err != nil {
 		return ReplayRunOutput{}, err
 	}
 
-	return ReplayRunOutput{View: runtime.BuildReplayView(replayInput.compiled, *replay)}, nil
+	return ReplayRunOutput{View: runtime.BuildReplayView(replay.compiled, *replayResult)}, nil
 }
 
 func (s applicationService) CancelRun(ctx context.Context, input CancelRunInput) (CancelRunOutput, error) {

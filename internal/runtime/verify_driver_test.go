@@ -162,7 +162,7 @@ func TestVerifyDriverFailsWhenUpstreamHasNoStructuredOutput(t *testing.T) {
 
 // TestVerifyDriverFailsWhenUpstreamReportsNoCommands covers the sibling case:
 // the agent emitted a valid AGENT_RESULT_JSON but with an empty verification
-// array. verify(from: agent) must still fail instead of passing with zero
+// array. Verify(from: agent) must still fail instead of passing with zero
 // commands run.
 func TestVerifyDriverFailsWhenUpstreamReportsNoCommands(t *testing.T) {
 	fixture := newRuntimeMachineFixture(runtimeMachineFixtureParams{

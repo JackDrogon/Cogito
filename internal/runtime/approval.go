@@ -12,24 +12,44 @@ import (
 	"github.com/JackDrogon/Cogito/internal/workflow"
 )
 
+// ApprovalMode controls how the engine responds to approval gates at run time.
 type ApprovalMode string
 
 const (
-	ApprovalModeAuto    ApprovalMode = "auto"
+	// ApprovalModeAuto leaves the gate open for manual resolution: the run
+	// parks in waiting_approval until an external caller grants or denies it.
+	ApprovalModeAuto ApprovalMode = "auto"
+	// ApprovalModeApprove automatically grants every approval gate without
+	// waiting for human input.
 	ApprovalModeApprove ApprovalMode = "approve"
-	ApprovalModeDeny    ApprovalMode = "deny"
+	// ApprovalModeDeny automatically denies every approval gate, causing the
+	// run to fail immediately at the first gate it encounters.
+	ApprovalModeDeny ApprovalMode = "deny"
 )
 
+// ApprovalTrigger identifies what caused a step to enter the waiting_approval
+// state. The trigger determines which continuation strategy is used after the
+// gate resolves.
 type ApprovalTrigger string
 
 const (
+	// ApprovalTriggerExplicit means the workflow DSL declared an explicit
+	// approval step; the step was already started and parked.
 	ApprovalTriggerExplicit ApprovalTrigger = "explicit"
-	ApprovalTriggerAdapter  ApprovalTrigger = "adapter"
-	ApprovalTriggerPolicy   ApprovalTrigger = "policy"
+	// ApprovalTriggerAdapter means the provider itself requested approval
+	// mid-execution; the step was already started and parked.
+	ApprovalTriggerAdapter ApprovalTrigger = "adapter"
+	// ApprovalTriggerPolicy means the approval policy intercepted the step
+	// before it started; continuation resumes with a fresh Start.
+	ApprovalTriggerPolicy ApprovalTrigger = "policy"
 )
 
+// ApprovalDecision is the outcome of an approval gate evaluation.
 type ApprovalDecision string
 
+// ApprovalRequestParams describes one approval request. Decision is empty
+// when entering through requestApproval (the gate policy supplies it) and
+// pre-filled when entering through requestApprovalWithDecision directly.
 type ApprovalRequestParams struct {
 	Step              workflow.CompiledStep
 	AttemptID         string
@@ -41,17 +61,27 @@ type ApprovalRequestParams struct {
 }
 
 const (
-	ApprovalDecisionWait    ApprovalDecision = "wait"
+	// ApprovalDecisionWait leaves the run parked in waiting_approval until an
+	// external caller resolves it.
+	ApprovalDecisionWait ApprovalDecision = "wait"
+	// ApprovalDecisionApprove grants the pending gate and resumes execution.
 	ApprovalDecisionApprove ApprovalDecision = "approve"
-	ApprovalDecisionDeny    ApprovalDecision = "deny"
+	// ApprovalDecisionDeny rejects the pending gate and fails the run.
+	ApprovalDecisionDeny ApprovalDecision = "deny"
+	// ApprovalDecisionTimeout treats the gate as expired and fails the run.
 	ApprovalDecisionTimeout ApprovalDecision = "timeout"
 )
 
+// ApprovalDecisionResult pairs an ApprovalDecision with a human-readable
+// summary that surfaces in the run's event log and CLI output.
 type ApprovalDecisionResult struct {
 	Decision ApprovalDecision
 	Summary  string
 }
 
+// ApprovalGateRequest carries the context passed to ApprovalPolicy.DecideGate
+// so the policy can inspect the current run state and step details before
+// returning a decision.
 type ApprovalGateRequest struct {
 	Trigger           ApprovalTrigger
 	Step              workflow.CompiledStep
@@ -62,6 +92,9 @@ type ApprovalGateRequest struct {
 	Status            adapters.ExecutionState
 }
 
+// ApprovalExceptionRequest carries the context passed to
+// ApprovalPolicy.EvaluateException so the policy can decide whether to
+// intercept a step before it starts and inject a policy-triggered gate.
 type ApprovalExceptionRequest struct {
 	Step      workflow.CompiledStep
 	Snapshot  Snapshot
@@ -70,6 +103,11 @@ type ApprovalExceptionRequest struct {
 	Status    adapters.ExecutionState
 }
 
+// ApprovalPolicy decides how the engine handles approval gates and policy
+// exceptions. DecideGate is called for every explicit, adapter-raised, or
+// policy-triggered gate; EvaluateException is called before a step starts to
+// let the policy intercept it. Implementations must return errNoApprovalException
+// (via errors.Is) from EvaluateException when no exception applies.
 type ApprovalPolicy interface {
 	DecideGate(ctx context.Context, request ApprovalGateRequest) (ApprovalDecisionResult, error)
 	EvaluateException(ctx context.Context, request ApprovalExceptionRequest) (*ApprovalDecisionResult, error)
@@ -109,7 +147,7 @@ func (e *Engine) requestExceptionalApproval(
 		return false, nil
 	}
 
-	providerSessionID := e.ids.NewSyntheticSessionID(step.ID)
+	providerSessionID := e.idGen.NewSyntheticSessionID(step.ID)
 
 	summary := strings.TrimSpace(decision.Summary)
 	if summary == "" {
@@ -140,9 +178,12 @@ func (e *Engine) requestExceptionalApproval(
 	})
 }
 
+// requestApproval consults the gate policy for a decision and then runs the
+// shared approval flow. Whatever params.Decision holds on entry is ignored:
+// the policy's decision overwrites it.
 func (e *Engine) requestApproval(
 	ctx context.Context,
-	params approvalGateParams,
+	params ApprovalRequestParams,
 ) error {
 	decision, err := e.approvalPolicy.DecideGate(ctx, ApprovalGateRequest{
 		Trigger:           params.Trigger,
@@ -157,24 +198,9 @@ func (e *Engine) requestApproval(
 		return err
 	}
 
-	return e.requestApprovalWithDecision(ctx, ApprovalRequestParams{
-		Step:              params.Step,
-		AttemptID:         params.AttemptID,
-		ProviderSessionID: params.ProviderSessionID,
-		Summary:           params.Summary,
-		Trigger:           params.Trigger,
-		Status:            params.Status,
-		Decision:          decision,
-	})
-}
+	params.Decision = decision
 
-type approvalGateParams struct {
-	Step              workflow.CompiledStep
-	AttemptID         string
-	ProviderSessionID string
-	Summary           string
-	Trigger           ApprovalTrigger
-	Status            adapters.ExecutionState
+	return e.requestApprovalWithDecision(ctx, params)
 }
 
 func (e *Engine) requestApprovalWithDecision(
@@ -360,6 +386,8 @@ type approvalModePolicy struct {
 	mode ApprovalMode
 }
 
+// ParseApprovalMode parses a string into an ApprovalMode. An empty string
+// returns ApprovalModeAuto. Unrecognized values return an ErrorCodeConfig error.
 func ParseApprovalMode(value string) (ApprovalMode, error) {
 	mode := ApprovalMode(strings.TrimSpace(value))
 	if mode == "" {
@@ -374,12 +402,10 @@ func ParseApprovalMode(value string) (ApprovalMode, error) {
 	}
 }
 
-func newApprovalModePolicy(mode ApprovalMode) ApprovalPolicy {
-	return approvalModePolicy{mode: mode}
-}
-
+// NewApprovalModePolicy builds the standard mode-driven gate policy
+// (approve / deny / wait-for-manual).
 func NewApprovalModePolicy(mode ApprovalMode) ApprovalPolicy {
-	return newApprovalModePolicy(mode)
+	return approvalModePolicy{mode: mode}
 }
 
 func (p approvalModePolicy) DecideGate(_ context.Context, request ApprovalGateRequest) (ApprovalDecisionResult, error) {

@@ -20,7 +20,7 @@ type commitCheckDriver struct {
 	engine *Engine
 }
 
-func (d commitCheckDriver) Start(_ context.Context, request stepStartRequest) (*adapters.Execution, error) {
+func (d commitCheckDriver) Start(ctx context.Context, request stepStartRequest) (*adapters.Execution, error) {
 	if request.Step.CommitCheck == nil {
 		return nil, newError(ErrorCodeConfig, fmt.Sprintf("commit_check config missing for step %q", request.Step.ID))
 	}
@@ -44,11 +44,12 @@ func (d commitCheckDriver) Start(_ context.Context, request stepStartRequest) (*
 	// leave commits empty outside a git repo, and there is no history or
 	// worktree to validate, so the gate passes as an explicit no-op instead of
 	// failing on git exit 128.
-	if !git.IsRepo() {
-		return terminalExecution(handle, adapters.ExecutionStateSucceeded, "commit_check skipped: not a git repository"), nil
+	if !git.IsRepo(ctx) {
+		return terminalExecution(handle, adapters.ExecutionStateSucceeded,
+			"commit_check skipped: not a git repository"), nil
 	}
 
-	failure, evalErr := evaluateCommitCheck(commitCheckParams{
+	failure, evalErr := evaluateCommitCheck(ctx, commitCheckParams{
 		Spec:    *spec,
 		Commits: result.Commits,
 		Git:     git,
@@ -61,7 +62,9 @@ func (d commitCheckDriver) Start(_ context.Context, request stepStartRequest) (*
 		return terminalExecution(handle, adapters.ExecutionStateFailed, failure), nil
 	}
 
-	return terminalExecution(handle, adapters.ExecutionStateSucceeded, fmt.Sprintf("commit_check passed: %d commit(s)", len(result.Commits))), nil
+	summary := fmt.Sprintf("commit_check passed: %d commit(s)", len(result.Commits))
+
+	return terminalExecution(handle, adapters.ExecutionStateSucceeded, summary), nil
 }
 
 // commitCheckParams groups the inputs for evaluateCommitCheck so the validation
@@ -77,24 +80,24 @@ type commitCheckParams struct {
 // failure summary when a gate is violated. The error return is reserved for
 // unexpected git failures (e.g. a missing binary), not for ordinary policy
 // failures, which are reported through the summary so the run folds normally.
-func evaluateCommitCheck(params commitCheckParams) (string, error) {
+func evaluateCommitCheck(ctx context.Context, params commitCheckParams) (string, error) {
 	if params.Spec.RequireSome && len(params.Commits) == 0 {
 		return "no commits self-reported", nil
 	}
 
 	if len(params.Commits) > 0 {
-		validation, err := params.Git.ValidateCommitRefs(params.Commits)
+		validation, err := params.Git.ValidateCommitRefs(ctx, params.Commits)
 		if err != nil {
 			return "", wrapError(ErrorCodeGit, "validate commit refs", err)
 		}
 
 		if len(validation.Invalid) > 0 {
-			return fmt.Sprintf("invalid commit refs: %s", strings.Join(validation.Invalid, ", ")), nil
+			return "invalid commit refs: " + strings.Join(validation.Invalid, ", "), nil
 		}
 	}
 
 	if !params.Spec.AllowDirty {
-		dirty, err := params.Git.HasUncommittedChanges()
+		dirty, err := params.Git.HasUncommittedChanges(ctx)
 		if err != nil {
 			return "", wrapError(ErrorCodeGit, "check worktree status", err)
 		}

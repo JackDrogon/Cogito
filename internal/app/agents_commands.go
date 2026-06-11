@@ -24,7 +24,7 @@ var agentsCommandRegistry = newCommandRegistry(
 
 type agentsRunCommand struct{}
 
-func (agentsRunCommand) Name() string { return "run" }
+func (agentsRunCommand) Name() string { return runCommandName }
 func (agentsRunCommand) Summary() string {
 	return "Run an ad hoc prompt through a code agent workflow"
 }
@@ -34,6 +34,7 @@ func (agentsRunCommand) Run(ctx context.Context, args []string, stdout io.Writer
 	if isHelpRequested(err) {
 		return nil
 	}
+
 	if err != nil {
 		return err
 	}
@@ -59,11 +60,12 @@ type agentsRunFlags struct {
 // so the leading positional is split off before the flag set runs.
 func parseAgentsRunFlags(args []string, stdout io.Writer) (agentsRunFlags, error) {
 	var (
-		promptToken string
-		flagArgs    []string
+		rawPrompt string
+		flagArgs  []string
 	)
+
 	if len(args) > 0 && isSubcommandToken(args[0]) {
-		promptToken = args[0]
+		rawPrompt = args[0]
 		flagArgs = args[1:]
 	} else {
 		flagArgs = args
@@ -81,6 +83,7 @@ func parseAgentsRunFlags(args []string, stdout io.Writer) (agentsRunFlags, error
 
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stdout, "Usage: cogito agents run <prompt> [-p codex|claude|opencode] [--no-verify] [--no-commit-check] [flags]")
+
 		fs.PrintDefaults()
 	}
 
@@ -88,22 +91,25 @@ func parseAgentsRunFlags(args []string, stdout io.Writer) (agentsRunFlags, error
 		if errors.Is(err, flag.ErrHelp) {
 			return agentsRunFlags{}, errHelpRequested
 		}
+
 		return agentsRunFlags{}, err
 	}
 
 	rest := fs.Args()
-	if promptToken == "" {
+	if rawPrompt == "" {
 		if len(rest) == 0 {
 			return agentsRunFlags{}, errors.New("agents run: <prompt> is required")
 		}
-		promptToken = rest[0]
+
+		rawPrompt = rest[0]
 		rest = rest[1:]
 	}
+
 	if len(rest) > 0 {
 		return agentsRunFlags{}, fmt.Errorf("agents run: unexpected positional arguments: %v (quote the prompt as a single argument)", rest)
 	}
 
-	flags.prompt = strings.TrimSpace(promptToken)
+	flags.prompt = strings.TrimSpace(rawPrompt)
 	if flags.prompt == "" {
 		return agentsRunFlags{}, errors.New("agents run: <prompt> is required")
 	}
@@ -112,6 +118,7 @@ func parseAgentsRunFlags(args []string, stdout io.Writer) (agentsRunFlags, error
 	if flags.agentName == "" {
 		flags.agentName = agentflow.DefaultAgentName
 	}
+
 	if !agentflow.IsValidAgentName(flags.agentName) {
 		return agentsRunFlags{}, fmt.Errorf("agents run: invalid -p/--agent %q; must be one of codex, claude, opencode", flags.agentName)
 	}
@@ -120,14 +127,18 @@ func parseAgentsRunFlags(args []string, stdout io.Writer) (agentsRunFlags, error
 		flags.shared.stateDir = defaultStateDir(flags.shared.repo)
 	}
 
+	configureLogging(flags.shared.verbose)
+
 	return flags, nil
 }
 
 func runAgentsRun(ctx context.Context, flags agentsRunFlags, stdout io.Writer) error {
-	compiled, repoPath, err := buildAgentsRunPlan(flags)
+	plan, err := buildAgentsRunPlan(flags)
 	if err != nil {
 		return err
 	}
+
+	compiled, repoPath := plan.compiled, plan.repoPath
 
 	// The agent prompt declares repoPath as the project root, so the runtime
 	// wiring (runner Dir, repo lock, verify/commit_check workingDir) must
@@ -136,10 +147,11 @@ func runAgentsRun(ctx context.Context, flags agentsRunFlags, stdout io.Writer) e
 	sharedCopy := flags.shared
 	sharedCopy.repo = repoPath
 
-	output, err := appsvc.RunCompiledWorkflow(ctx, RunCompiledWorkflowInput{Compiled: compiled, Flags: &sharedCopy})
+	output, err := appService.RunCompiledWorkflow(ctx, RunCompiledWorkflowInput{Compiled: compiled, Flags: &sharedCopy})
 	if verboseErr := presentVerboseRun(stdout, &sharedCopy, output, err); verboseErr != nil {
 		return verboseErr
 	}
+
 	if err != nil {
 		return err
 	}
@@ -152,7 +164,15 @@ func runAgentsRun(ctx context.Context, flags agentsRunFlags, stdout io.Writer) e
 // alongside the compiled workflow so the caller can target the runtime wiring
 // at that repo. It is split out from runAgentsRun so the plan logic is
 // unit-testable without executing a run.
-func buildAgentsRunPlan(flags agentsRunFlags) (*workflow.CompiledWorkflow, string, error) {
+// RunPlan bundles a compiled ephemeral workflow with the canonical repo path
+// the runtime wiring must target; one value keeps the plan builders within
+// the project's two-return-value rule.
+type runPlan struct {
+	compiled *workflow.CompiledWorkflow
+	repoPath string
+}
+
+func buildAgentsRunPlan(flags agentsRunFlags) (runPlan, error) {
 	// An empty --repo means "the current directory", matching `cogito run`.
 	// Canonicalize so the prompt and the runtime agree on one absolute root.
 	rawRepoPath := strings.TrimSpace(flags.shared.repo)
@@ -162,11 +182,11 @@ func buildAgentsRunPlan(flags agentsRunFlags) (*workflow.CompiledWorkflow, strin
 
 	repoPath, err := canonicalRepoPath(rawRepoPath)
 	if err != nil {
-		return nil, "", fmt.Errorf("agents run: resolve --repo %q: %w", rawRepoPath, err)
+		return runPlan{}, fmt.Errorf("agents run: resolve --repo %q: %w", rawRepoPath, err)
 	}
 
 	spec, err := agentflow.BuildSpec(agentflow.SpecOptions{
-		Name:            fmt.Sprintf("agents-%s", flags.agentName),
+		Name:            "agents-" + flags.agentName,
 		AgentName:       flags.agentName,
 		RepoPath:        repoPath,
 		Tasks:           []prompt.TaskRef{{ID: adhocTaskID, Text: flags.prompt}},
@@ -174,13 +194,13 @@ func buildAgentsRunPlan(flags agentsRunFlags) (*workflow.CompiledWorkflow, strin
 		WithCommitCheck: !flags.noCommitCheck,
 	})
 	if err != nil {
-		return nil, "", err
+		return runPlan{}, err
 	}
 
 	compiled, err := workflow.CompileWorkflow(spec)
 	if err != nil {
-		return nil, "", err
+		return runPlan{}, err
 	}
 
-	return compiled, repoPath, nil
+	return runPlan{compiled: compiled, repoPath: repoPath}, nil
 }

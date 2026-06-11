@@ -17,7 +17,7 @@ type existingRunStoreResult struct {
 	runID string
 }
 
-type replayInput struct {
+type replayParams struct {
 	runID    string
 	compiled *workflow.CompiledWorkflow
 	events   []store.Event
@@ -57,13 +57,13 @@ func openExistingRunStore(stateDir string) (*existingRunStoreResult, error) {
 	return &existingRunStoreResult{store: runStore, runID: ref.runID}, nil
 }
 
-func loadReplayInput(eventsPath string) (*replayInput, error) {
+func loadReplayInput(eventsPath string) (*replayParams, error) {
 	request, err := newReplayRequest(eventsPath)
 	if err != nil {
 		return nil, err
 	}
 
-	compiled, err := workflow.LoadResolvedFile(filepath.Join(request.runDir, "workflow.json"))
+	compiled, err := workflow.LoadResolvedFile(filepath.Join(request.runDir, store.WorkflowFileName))
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +73,7 @@ func loadReplayInput(eventsPath string) (*replayInput, error) {
 		return nil, err
 	}
 
-	return &replayInput{runID: request.runID, compiled: compiled, events: events}, nil
+	return &replayParams{runID: request.runID, compiled: compiled, events: events}, nil
 }
 
 func isMissingRunStateError(err error) bool {

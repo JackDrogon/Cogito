@@ -235,7 +235,7 @@ func TestOpenCodeResumeUsesRealSessionID(t *testing.T) {
 // TestOpenCodeStructuredOutputFromOutputText is v3.2 N1: a real opencode run
 // returns the AGENT_RESULT_JSON marker inside the normalized output_text message
 // body, never as a standalone stdout line (the raw stdout is one JSON object
-// with the marker escaped inside a string value). collectTerminal must scan the
+// with the marker escaped inside a string value). CollectTerminal must scan the
 // normalized OutputText so StructuredOutput is populated.
 func TestOpenCodeStructuredOutputFromOutputText(t *testing.T) {
 	outputText := "Finished.\nAGENT_RESULT_JSON: {\"commits\":[\"oc-commit\"],\"summary\":\"ok\"}"

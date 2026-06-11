@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -42,6 +43,14 @@ import (
 const (
 	DefaultExitGrace = 5 * time.Second
 	DefaultKillGrace = 3 * time.Second
+)
+
+// Tee buffer sizing for teeAndScan. The carry buffer accumulates output while
+// scanning for the session id and is trimmed back to one chunk once it exceeds
+// the limit, so a session line straddling the trim boundary is still matched.
+const (
+	teeChunkSize  = 4096
+	teeCarryLimit = 2 * teeChunkSize
 )
 
 // SessionIDPattern matches "session id: <uuid>" case-insensitively in agent
@@ -174,24 +183,32 @@ func Start(parentCtx context.Context, req StartRequest) (*Session, error) {
 
 	settings := applyDefaults(req)
 
-	logFile, err := openLogFile(req.LogPath)
-	if err != nil {
-		return nil, err
+	var logFile *os.File
+
+	if req.LogPath != "" {
+		file, err := openLogFile(req.LogPath)
+		if err != nil {
+			return nil, err
+		}
+
+		logFile = file
 	}
 
 	ctx, cancel := context.WithCancel(parentCtx)
 	cmd := buildCommand(ctx, req)
 
-	stdin, stdout, stderr, err := openPipes(cmd, req.PromptOnStdin)
+	pipes, err := openPipes(cmd, req.PromptOnStdin)
 	if err != nil {
 		closeLogFile(logFile)
 		cancel()
+
 		return nil, err
 	}
 
 	if err := cmd.Start(); err != nil {
 		closeLogFile(logFile)
 		cancel()
+
 		return nil, fmt.Errorf("runner.Start: exec: %w", err)
 	}
 
@@ -203,9 +220,9 @@ func Start(parentCtx context.Context, req StartRequest) (*Session, error) {
 		Cmd:         cmd,
 		Ctx:         ctx,
 		Cancel:      cancel,
-		Stdin:       stdin,
-		Stdout:      stdout,
-		Stderr:      stderr,
+		Stdin:       pipes.stdin,
+		Stdout:      pipes.stdout,
+		Stderr:      pipes.stderr,
 		LogFile:     logFile,
 		LogPath:     req.LogPath,
 		ExtraSink:   req.ExtraSink,
@@ -247,10 +264,6 @@ func applyDefaults(req StartRequest) startSettings {
 }
 
 func openLogFile(logPath string) (*os.File, error) {
-	if logPath == "" {
-		return nil, nil
-	}
-
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
 		return nil, fmt.Errorf("runner.Start: prepare log dir: %w", err)
 	}
@@ -279,7 +292,9 @@ func flushLogFile(logFile *os.File) {
 		return
 	}
 
-	_ = logFile.Sync()
+	if err := logFile.Sync(); err != nil {
+		slog.Warn("runner: log file sync failed", "path", logFile.Name(), "err", err)
+	}
 }
 
 func buildCommand(_ context.Context, req StartRequest) *exec.Cmd {
@@ -287,7 +302,7 @@ func buildCommand(_ context.Context, req StartRequest) *exec.Cmd {
 	// supervise goroutine so ctx never escalates to Process.Kill behind our
 	// back. The ctx parameter is kept in the signature for future propagation
 	// (env injection, otel, etc.).
-	cmd := exec.Command(req.Binary, req.Args...)
+	cmd := exec.Command(req.Binary, req.Args...) //nolint:noctx // cancellation is owned by signalOnCancel (SIGTERM→SIGKILL on the process group)
 
 	dir := strings.TrimSpace(req.Dir)
 	if dir != "" {
@@ -306,33 +321,49 @@ func buildCommand(_ context.Context, req StartRequest) *exec.Cmd {
 	return cmd
 }
 
-func openPipes(cmd *exec.Cmd, promptOnStdin bool) (io.WriteCloser, io.ReadCloser, io.ReadCloser, error) {
-	var stdin io.WriteCloser
+// pipeSet bundles the child-process IO pipes so openPipes stays within the
+// project's two-return-value rule. Stdin is nil unless the prompt is delivered
+// on stdin.
+type pipeSet struct {
+	stdin  io.WriteCloser
+	stdout io.ReadCloser
+	stderr io.ReadCloser
+}
+
+func openPipes(cmd *exec.Cmd, promptOnStdin bool) (pipeSet, error) {
+	var pipes pipeSet
+
 	if promptOnStdin {
 		pipe, err := cmd.StdinPipe()
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("runner.Start: stdin pipe: %w", err)
+			return pipeSet{}, fmt.Errorf("runner.Start: stdin pipe: %w", err)
 		}
 
-		stdin = pipe
+		pipes.stdin = pipe
 	}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("runner.Start: stdout pipe: %w", err)
+		return pipeSet{}, fmt.Errorf("runner.Start: stdout pipe: %w", err)
 	}
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("runner.Start: stderr pipe: %w", err)
+		return pipeSet{}, fmt.Errorf("runner.Start: stderr pipe: %w", err)
 	}
 
-	return stdin, stdout, stderr, nil
+	pipes.stdout = stdout
+	pipes.stderr = stderr
+
+	return pipes, nil
 }
 
 type superviseParams struct {
-	Cmd         *exec.Cmd
-	Ctx         context.Context
+	Cmd *exec.Cmd
+	// Ctx is carried in the params struct because supervise fans it out to
+	// the signal goroutine; the struct is a one-shot argument bag, not a
+	// stored field on a long-lived object.
+	Ctx         context.Context //nolint:containedctx // one-shot goroutine argument bag
 	Cancel      context.CancelFunc
 	Stdin       io.WriteCloser
 	Stdout      io.ReadCloser
@@ -364,8 +395,9 @@ func supervise(params superviseParams) {
 
 	go func() {
 		defer ioWG.Done()
+
 		teeAndScan(params.Stdout, teeParams{
-			Buf:       &stdoutBuf,
+			Buffer:    &stdoutBuf,
 			LogFile:   params.LogFile,
 			LogMu:     &logMu,
 			ExtraSink: params.ExtraSink,
@@ -376,8 +408,9 @@ func supervise(params superviseParams) {
 
 	go func() {
 		defer ioWG.Done()
+
 		teeAndScan(params.Stderr, teeParams{
-			Buf:       &stderrBuf,
+			Buffer:    &stderrBuf,
 			LogFile:   params.LogFile,
 			LogMu:     &logMu,
 			ExtraSink: params.ExtraSink,
@@ -427,13 +460,14 @@ func supervise(params superviseParams) {
 
 		params.Done <- Result{
 			ExitCode:    exitCode,
-			Stdout:      append([]byte(nil), stdoutBuf.Bytes()...),
-			Stderr:      append([]byte(nil), stderrBuf.Bytes()...),
+			Stdout:      bytes.Clone(stdoutBuf.Bytes()),
+			Stderr:      bytes.Clone(stderrBuf.Bytes()),
 			LogPath:     params.LogPath,
 			SessionID:   params.Session.SessionID(),
 			Interrupted: interrupted.Load(),
 			Err:         propagated,
 		}
+
 		close(params.Done)
 
 		// Cancel the supervising context AFTER Done resolves so any in-flight
@@ -450,14 +484,18 @@ func writePrompt(stdin io.WriteCloser, prompt string) {
 		return
 	}
 
-	_, _ = io.WriteString(stdin, prompt)
+	// A failed write means the agent ran with a truncated or empty prompt —
+	// the run will likely produce garbage, so the cause must be visible.
+	if _, err := io.WriteString(stdin, prompt); err != nil {
+		slog.Warn("runner: prompt delivery to stdin failed", "err", err)
+	}
 }
 
 // teeParams groups the per-stream destinations for teeAndScan. Stdout and
-// stderr each get their own Buf but share LogFile/LogMu/ExtraSink; only the
+// stderr each get their own Buffer but share LogFile/LogMu/ExtraSink; only the
 // stdout stream carries a Pattern for session-id scraping.
 type teeParams struct {
-	Buf       *bytes.Buffer
+	Buffer    *bytes.Buffer
 	LogFile   *os.File
 	LogMu     *sync.Mutex
 	ExtraSink io.Writer
@@ -470,8 +508,8 @@ type teeParams struct {
 // (when non-nil) to update Session.sessionID. Returns when src returns any
 // error including io.EOF.
 func teeAndScan(src io.Reader, params teeParams) {
-	buf, pattern, session := params.Buf, params.Pattern, params.Session
-	chunk := make([]byte, 4096)
+	buf, pattern, session := params.Buffer, params.Pattern, params.Session
+	chunk := make([]byte, teeChunkSize)
 
 	var carry []byte
 
@@ -495,11 +533,13 @@ func teeAndScan(src io.Reader, params teeParams) {
 				carry = append(carry, data...)
 				if match := pattern.FindSubmatch(carry); len(match) >= 2 {
 					session.sessionID.Store(string(match[1]))
+
 					carry = nil
-				} else if len(carry) > 8192 {
-					// Keep a 4KB tail in case a session line straddles the
-					// trim boundary; avoid unbounded growth on long outputs.
-					carry = append([]byte(nil), carry[len(carry)-4096:]...)
+				} else if len(carry) > teeCarryLimit {
+					// Keep a one-chunk tail in case a session line straddles
+					// the trim boundary; avoid unbounded growth on long
+					// outputs.
+					carry = bytes.Clone(carry[len(carry)-teeChunkSize:])
 				}
 			}
 		}
@@ -514,7 +554,9 @@ func teeAndScan(src io.Reader, params teeParams) {
 // the escalation needs more than three inputs (the project caps positional
 // params at three).
 type signalParams struct {
-	Ctx       context.Context
+	// Ctx mirrors superviseParams.Ctx: a one-shot argument bag for the
+	// escalation goroutine, not long-lived state.
+	Ctx       context.Context //nolint:containedctx // one-shot goroutine argument bag
 	Process   *os.Process
 	ExitGrace time.Duration
 	KillGrace time.Duration
@@ -548,9 +590,9 @@ func signalOnCancel(params signalParams) {
 
 	pgid, pgidErr := syscall.Getpgid(params.Process.Pid)
 	if pgidErr != nil {
-		_ = params.Process.Signal(syscall.SIGTERM)
+		logSignalError(params.Process.Signal(syscall.SIGTERM), "SIGTERM", params.Process.Pid)
 	} else {
-		_ = syscall.Kill(-pgid, syscall.SIGTERM)
+		logSignalError(syscall.Kill(-pgid, syscall.SIGTERM), "SIGTERM", -pgid)
 	}
 
 	termTimer := time.NewTimer(params.ExitGrace)
@@ -563,9 +605,9 @@ func signalOnCancel(params signalParams) {
 	}
 
 	if pgidErr != nil {
-		_ = params.Process.Kill()
+		logSignalError(params.Process.Kill(), "SIGKILL", params.Process.Pid)
 	} else {
-		_ = syscall.Kill(-pgid, syscall.SIGKILL)
+		logSignalError(syscall.Kill(-pgid, syscall.SIGKILL), "SIGKILL", -pgid)
 	}
 
 	// SIGKILL is uncatchable, so the process should die promptly. Wait KillGrace
@@ -600,7 +642,7 @@ func warnKillTimeout(logFile *os.File, logMu *sync.Mutex, sink func(string)) {
 		logMu.Lock()
 		defer logMu.Unlock()
 
-		_, _ = io.WriteString(logFile, "\n"+message+"\n")
+		_, _ = logFile.WriteString("\n" + message + "\n")
 
 		return
 	}
@@ -612,6 +654,18 @@ func warnKillTimeout(logFile *os.File, logMu *sync.Mutex, sink func(string)) {
 	}
 
 	_, _ = fmt.Fprintln(os.Stderr, message)
+}
+
+// logSignalError records a failed signal delivery. A vanished process
+// (ESRCH / ErrProcessDone) is the expected race between natural exit and the
+// escalation path and is not worth reporting; anything else means the child
+// may still be alive, which the operator should know about.
+func logSignalError(err error, signal string, target int) {
+	if err == nil || errors.Is(err, syscall.ESRCH) || errors.Is(err, os.ErrProcessDone) {
+		return
+	}
+
+	slog.Warn("runner: signal delivery failed", "signal", signal, "target", target, "err", err)
 }
 
 // classifyWaitError extracts ExitCode and decides whether the wait error is a

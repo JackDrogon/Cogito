@@ -23,13 +23,13 @@ func TestBuildFeishuRunPlanRepoMatchRelativeVsAbsolute(t *testing.T) {
 	flags := feishuRunFlags{storyID: 7, agentName: "codex"}
 	flags.shared.repo = abs
 
-	_, repoPath, err := buildFeishuRunPlan(stories, flags)
+	plan, err := buildFeishuRunPlan(stories, flags)
 	if err != nil {
 		t.Fatalf("buildFeishuRunPlan() error = %v, want relative/absolute match", err)
 	}
 
-	if repoPath != abs {
-		t.Fatalf("buildFeishuRunPlan() repoPath = %q, want canonical %q", repoPath, abs)
+	if plan.repoPath != abs {
+		t.Fatalf("buildFeishuRunPlan() plan.repoPath = %q, want canonical %q", plan.repoPath, abs)
 	}
 }
 
@@ -40,13 +40,13 @@ func TestBuildFeishuRunPlanRepoMatchTrailingSlash(t *testing.T) {
 	flags := feishuRunFlags{storyID: 7, agentName: "codex"}
 	flags.shared.repo = "/tmp/workrepo/"
 
-	_, repoPath, err := buildFeishuRunPlan(stories, flags)
+	plan, err := buildFeishuRunPlan(stories, flags)
 	if err != nil {
 		t.Fatalf("buildFeishuRunPlan() error = %v, want trailing-slash match", err)
 	}
 
-	if repoPath != "/tmp/workrepo" {
-		t.Fatalf("buildFeishuRunPlan() repoPath = %q, want /tmp/workrepo", repoPath)
+	if plan.repoPath != "/tmp/workrepo" {
+		t.Fatalf("buildFeishuRunPlan() plan.repoPath = %q, want /tmp/workrepo", plan.repoPath)
 	}
 }
 
@@ -164,7 +164,7 @@ func TestParseFeishuRunFlagsHelp(t *testing.T) {
 
 func TestBuildFeishuRunPlanStoryNotFound(t *testing.T) {
 	stories := []feishuproject.Story{{ID: 1, RepoPath: "/repo"}}
-	_, _, err := buildFeishuRunPlan(stories, feishuRunFlags{storyID: 999, agentName: "codex"})
+	_, err := buildFeishuRunPlan(stories, feishuRunFlags{storyID: 999, agentName: "codex"})
 	if err == nil {
 		t.Fatal("buildFeishuRunPlan() error = nil, want story not found")
 	}
@@ -175,7 +175,7 @@ func TestBuildFeishuRunPlanStoryNotFound(t *testing.T) {
 
 func TestBuildFeishuRunPlanMissingRepoPath(t *testing.T) {
 	stories := []feishuproject.Story{{ID: 7, RepoPath: "   "}}
-	_, _, err := buildFeishuRunPlan(stories, feishuRunFlags{storyID: 7, agentName: "codex"})
+	_, err := buildFeishuRunPlan(stories, feishuRunFlags{storyID: 7, agentName: "codex"})
 	if err == nil {
 		t.Fatal("buildFeishuRunPlan() error = nil, want missing repo_path")
 	}
@@ -186,21 +186,21 @@ func TestBuildFeishuRunPlanMissingRepoPath(t *testing.T) {
 
 func TestBuildFeishuRunPlanHappyPathCompiles(t *testing.T) {
 	stories := []feishuproject.Story{{ID: 7, Description: "do the thing", RepoPath: "/repo"}}
-	compiled, repoPath, err := buildFeishuRunPlan(stories, feishuRunFlags{storyID: 7, agentName: "codex"})
+	plan, err := buildFeishuRunPlan(stories, feishuRunFlags{storyID: 7, agentName: "codex"})
 	if err != nil {
 		t.Fatalf("buildFeishuRunPlan() error = %v", err)
 	}
-	if compiled == nil {
-		t.Fatal("buildFeishuRunPlan() compiled = nil, want compiled workflow")
+	if plan.compiled == nil {
+		t.Fatal("buildFeishuRunPlan() plan.compiled = nil, want plan.compiled workflow")
 	}
 	// Default flags (no skip) → agent + verify + commit_check.
-	if len(compiled.Steps) != 3 {
-		t.Fatalf("len(compiled.Steps) = %d, want 3", len(compiled.Steps))
+	if len(plan.compiled.Steps) != 3 {
+		t.Fatalf("len(plan.compiled.Steps) = %d, want 3", len(plan.compiled.Steps))
 	}
 	// Coverage #1: the story repo path must be surfaced so runtime wiring can
 	// target it via the shared --repo flag.
-	if repoPath != "/repo" {
-		t.Fatalf("buildFeishuRunPlan() repoPath = %q, want /repo", repoPath)
+	if plan.repoPath != "/repo" {
+		t.Fatalf("buildFeishuRunPlan() plan.repoPath = %q, want /repo", plan.repoPath)
 	}
 }
 
@@ -209,12 +209,12 @@ func TestBuildFeishuRunPlanHappyPathCompiles(t *testing.T) {
 // runFeishuRun can set sharedFlags.repo from it.
 func TestBuildFeishuRunPlanPropagatesRepoPath(t *testing.T) {
 	stories := []feishuproject.Story{{ID: 7, Description: "do the thing", RepoPath: "/tmp/repo"}}
-	_, repoPath, err := buildFeishuRunPlan(stories, feishuRunFlags{storyID: 7, agentName: "codex"})
+	plan, err := buildFeishuRunPlan(stories, feishuRunFlags{storyID: 7, agentName: "codex"})
 	if err != nil {
 		t.Fatalf("buildFeishuRunPlan() error = %v", err)
 	}
-	if repoPath != "/tmp/repo" {
-		t.Fatalf("buildFeishuRunPlan() repoPath = %q, want /tmp/repo", repoPath)
+	if plan.repoPath != "/tmp/repo" {
+		t.Fatalf("buildFeishuRunPlan() plan.repoPath = %q, want /tmp/repo", plan.repoPath)
 	}
 }
 
@@ -224,7 +224,7 @@ func TestBuildFeishuRunPlanRejectsConflictingRepo(t *testing.T) {
 	stories := []feishuproject.Story{{ID: 7, Description: "do the thing", RepoPath: "/tmp/repo"}}
 	flags := feishuRunFlags{storyID: 7, agentName: "codex"}
 	flags.shared.repo = "/somewhere/else"
-	_, _, err := buildFeishuRunPlan(stories, flags)
+	_, err := buildFeishuRunPlan(stories, flags)
 	if err == nil {
 		t.Fatal("buildFeishuRunPlan() error = nil, want repo conflict")
 	}
@@ -239,18 +239,18 @@ func TestBuildFeishuRunPlanAllowsMatchingRepo(t *testing.T) {
 	stories := []feishuproject.Story{{ID: 7, Description: "do the thing", RepoPath: "/tmp/repo"}}
 	flags := feishuRunFlags{storyID: 7, agentName: "codex"}
 	flags.shared.repo = "/tmp/repo"
-	_, repoPath, err := buildFeishuRunPlan(stories, flags)
+	plan, err := buildFeishuRunPlan(stories, flags)
 	if err != nil {
 		t.Fatalf("buildFeishuRunPlan() error = %v", err)
 	}
-	if repoPath != "/tmp/repo" {
-		t.Fatalf("buildFeishuRunPlan() repoPath = %q, want /tmp/repo", repoPath)
+	if plan.repoPath != "/tmp/repo" {
+		t.Fatalf("buildFeishuRunPlan() plan.repoPath = %q, want /tmp/repo", plan.repoPath)
 	}
 }
 
 func TestBuildFeishuRunPlanSkipsVerifyAndCommit(t *testing.T) {
 	stories := []feishuproject.Story{{ID: 7, Description: "do the thing", RepoPath: "/repo"}}
-	compiled, _, err := buildFeishuRunPlan(stories, feishuRunFlags{
+	plan, err := buildFeishuRunPlan(stories, feishuRunFlags{
 		storyID:       7,
 		agentName:     "codex",
 		noVerify:      true,
@@ -259,8 +259,8 @@ func TestBuildFeishuRunPlanSkipsVerifyAndCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildFeishuRunPlan() error = %v", err)
 	}
-	if len(compiled.Steps) != 1 {
-		t.Fatalf("len(compiled.Steps) = %d, want 1", len(compiled.Steps))
+	if len(plan.compiled.Steps) != 1 {
+		t.Fatalf("len(plan.compiled.Steps) = %d, want 1", len(plan.compiled.Steps))
 	}
 }
 

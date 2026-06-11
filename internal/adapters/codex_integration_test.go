@@ -301,7 +301,7 @@ func (s *codexRecordingStarter) start(_ context.Context, req runner.StartRequest
 
 // TestCodexStructuredOutputFromLastMessage is v3.2 N1: a real codex run wraps
 // the AGENT_RESULT_JSON marker inside its last-message file, NOT the raw event
-// stream. collectTerminal must scan the normalized last-message text so the
+// stream. CollectTerminal must scan the normalized last-message text so the
 // StructuredOutput is populated for downstream verify/commit_check steps, even
 // when the marker never appears on stdout.
 func TestCodexStructuredOutputFromLastMessage(t *testing.T) {

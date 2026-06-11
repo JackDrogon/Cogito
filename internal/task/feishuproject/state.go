@@ -33,6 +33,7 @@ func LoadState(path string) (State, error) {
 		if errors.Is(err, fs.ErrNotExist) {
 			return NewState(), nil
 		}
+
 		return State{}, fmt.Errorf("feishuproject: read state %s: %w", path, err)
 	}
 
@@ -40,6 +41,7 @@ func LoadState(path string) (State, error) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		return State{}, fmt.Errorf("feishuproject: decode state %s: %w", path, err)
 	}
+
 	if state.Fingerprints == nil {
 		state.Fingerprints = map[string]string{}
 	}
@@ -67,6 +69,7 @@ func SaveState(path string, state State) error {
 	if err := os.WriteFile(tmp, encoded, 0o600); err != nil {
 		return fmt.Errorf("feishuproject: write state tmp: %w", err)
 	}
+
 	if err := os.Rename(tmp, path); err != nil {
 		return fmt.Errorf("feishuproject: rename state file: %w", err)
 	}
@@ -98,13 +101,16 @@ func BuildDiff(prev State, stories []Story, now time.Time) (Diff, State) {
 	}
 
 	seen := make(map[string]bool, len(stories))
-	for _, story := range stories {
+
+	for i := range stories {
+		story := &stories[i]
 		key := storyKey(story.ID)
 		fingerprint := story.Fingerprint()
 		next.Fingerprints[key] = fingerprint
 		seen[key] = true
 
 		prior, existed := prev.Fingerprints[key]
+
 		switch {
 		case !existed:
 			diff.Added = append(diff.Added, story.ID)
@@ -117,10 +123,12 @@ func BuildDiff(prev State, stories []Story, now time.Time) (Diff, State) {
 		if seen[key] {
 			continue
 		}
+
 		id, err := parseStoryKey(key)
 		if err != nil {
 			continue
 		}
+
 		diff.Removed = append(diff.Removed, id)
 	}
 

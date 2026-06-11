@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	shared "github.com/JackDrogon/Cogito/internal/adapters"
+	"github.com/JackDrogon/Cogito/internal/adapters/adapterutil"
 )
 
 const eventTypeError = "error"
@@ -66,7 +67,7 @@ func parseEvents(payload []byte) ([]event, error) {
 			continue
 		}
 
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 
@@ -102,7 +103,7 @@ func buildExecution(params executionParams) *shared.Execution {
 
 	state := shared.ExecutionStateSucceeded
 
-	summary := strings.TrimSpace(firstLine(messageText))
+	summary := strings.TrimSpace(adapterutil.FirstLine(messageText))
 	if summary == "" {
 		summary = "codex execution succeeded"
 	}
@@ -138,19 +139,7 @@ func providerSessionID(request shared.StartRequest, events []event) string {
 		return latest
 	}
 
-	return fmt.Sprintf("codex-%s-%s", sanitizeID(request.StepID), sanitizeID(request.AttemptID))
-}
-
-func sanitizeID(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return "unknown"
-	}
-
-	value = strings.ReplaceAll(value, " ", "-")
-	value = strings.ReplaceAll(value, "/", "-")
-
-	return value
+	return fmt.Sprintf("codex-%s-%s", adapterutil.SanitizeID(request.StepID), adapterutil.SanitizeID(request.AttemptID))
 }
 
 func eventErrorMessage(events []event) string {
@@ -209,17 +198,4 @@ func buildLogs(version string, events []event, stderr []byte) []shared.LogEntry 
 	}
 
 	return logs
-}
-
-func firstLine(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return ""
-	}
-
-	if idx := strings.IndexByte(value, '\n'); idx >= 0 {
-		return strings.TrimSpace(value[:idx])
-	}
-
-	return value
 }

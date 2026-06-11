@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	shared "github.com/JackDrogon/Cogito/internal/adapters"
+	"github.com/JackDrogon/Cogito/internal/adapters/adapterutil"
 )
 
 type response struct {
@@ -36,6 +37,10 @@ func parseResponse(payload []byte) (*response, error) {
 		return nil, errors.New("claude.parseResponse: empty response payload")
 	}
 
+	// Two decodes of the same payload are intentional: the typed struct gives
+	// the fields the adapter consumes, while the map preserves EVERY field
+	// (including ones the struct does not model) for diagnostics in Raw. A
+	// single decode cannot produce both views.
 	var raw map[string]any
 	if err := json.Unmarshal([]byte(trimmed), &raw); err != nil {
 		return nil, err
@@ -66,7 +71,7 @@ func buildExecution(params executionParams) *shared.Execution {
 
 	state := shared.ExecutionStateSucceeded
 
-	summary := strings.TrimSpace(firstLine(outputText))
+	summary := strings.TrimSpace(adapterutil.FirstLine(outputText))
 	if summary == "" {
 		summary = "claude execution succeeded"
 	}
@@ -93,19 +98,7 @@ func providerSessionID(request shared.StartRequest, response *response) string {
 		return strings.TrimSpace(response.SessionID)
 	}
 
-	return fmt.Sprintf("claude-%s-%s", sanitizeID(request.StepID), sanitizeID(request.AttemptID))
-}
-
-func sanitizeID(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return "unknown"
-	}
-
-	value = strings.ReplaceAll(value, " ", "-")
-	value = strings.ReplaceAll(value, "/", "-")
-
-	return value
+	return fmt.Sprintf("claude-%s-%s", adapterutil.SanitizeID(request.StepID), adapterutil.SanitizeID(request.AttemptID))
 }
 
 func buildLogs(version string, response *response, stderr []byte) []shared.LogEntry {
@@ -151,7 +144,7 @@ func buildLogs(version string, response *response, stderr []byte) []shared.LogEn
 
 		level := "info"
 
-		message := strings.TrimSpace(firstLine(response.Result))
+		message := strings.TrimSpace(adapterutil.FirstLine(response.Result))
 		if message == "" {
 			message = "claude response captured"
 		}
@@ -169,17 +162,4 @@ func buildLogs(version string, response *response, stderr []byte) []shared.LogEn
 	}
 
 	return logs
-}
-
-func firstLine(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return ""
-	}
-
-	if idx := strings.IndexByte(value, '\n'); idx >= 0 {
-		return strings.TrimSpace(value[:idx])
-	}
-
-	return value
 }

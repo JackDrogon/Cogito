@@ -1,12 +1,12 @@
 package claude
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -19,12 +19,15 @@ import (
 )
 
 const (
-	ProviderName   = "claude"
-	binaryName     = "claude"
-	versionUnknown = "unknown"
+	ProviderName = "claude"
+	binaryName   = "claude"
 )
 
 func init() {
+	// Registration can only fail on deterministic composition bugs
+	// (duplicate or invalid registration), never on runtime conditions.
+	// Panicking at init makes such a bug unmissable in any test or first
+	// launch, mirroring regexp.MustCompile semantics.
 	if err := shared.Register(shared.Registration{
 		Name:         ProviderName,
 		Capabilities: Capabilities(),
@@ -39,7 +42,7 @@ func init() {
 			})
 		},
 	}); err != nil {
-		panic(err)
+		panic(fmt.Sprintf("%s: register adapter: %v", ProviderName, err))
 	}
 }
 
@@ -70,12 +73,11 @@ type Adapter struct {
 	logDir   string
 	liveSink io.Writer
 
-	mu       sync.Mutex
+	mu       sync.RWMutex
 	sessions map[string]*agentSession
 
 	versionOnce sync.Once
 	version     string
-	versionErr  error
 }
 
 // agentSession holds the live runner session plus the metadata needed to
@@ -95,23 +97,11 @@ type agentSession struct {
 	buildErr            error
 }
 
-type Runner interface {
-	Run(ctx context.Context, command CommandSpec) (CommandResult, error)
-}
+type Runner = adapterutil.Runner
 
-type CommandSpec struct {
-	Path   string
-	Args   []string
-	Dir    string
-	Stdin  string
-	Stdout io.Writer
-	Stderr io.Writer
-}
+type CommandSpec = adapterutil.CommandSpec
 
-type CommandResult struct {
-	Stdout []byte
-	Stderr []byte
-}
+type CommandResult = adapterutil.CommandResult
 
 func New(config Config) *Adapter {
 	lookPath := config.LookPath
@@ -121,7 +111,7 @@ func New(config Config) *Adapter {
 
 	r := config.Runner
 	if r == nil {
-		r = execRunner{}
+		r = adapterutil.ExecRunner{}
 	}
 
 	starter := config.Starter
@@ -152,7 +142,7 @@ func (a *Adapter) DescribeCapabilities() shared.CapabilityMatrix {
 // an ExecutionStateRunning execution. The terminal result is assembled later by
 // PollOrCollect once the runner session completes.
 func (a *Adapter) Start(ctx context.Context, request shared.StartRequest) (*shared.Execution, error) {
-	if err := adapterutil.ValidateStartRequest(request); err != nil {
+	if err := shared.ValidateStartRequest(request); err != nil {
 		return nil, err
 	}
 
@@ -163,19 +153,19 @@ func (a *Adapter) Start(ctx context.Context, request shared.StartRequest) (*shar
 
 	version := a.binaryVersion(ctx, binaryPath)
 
-	args := buildPrintArgs(printArgsParams{Model: a.model, ResumeSessionID: nil})
+	args := buildCLIArgs(cliArgsParams{Model: a.model, ResumeSessionID: nil})
 
 	session, startErr := a.starter(ctx, runner.StartRequest{
 		Binary:        binaryPath,
 		Args:          args,
-		Dir:           commandDir(request.WorkingDir),
-		Prompt:        agentPrompt(request),
+		Dir:           adapterutil.CommandDir(request.WorkingDir),
+		Prompt:        adapterutil.AgentPrompt(request),
 		PromptOnStdin: true,
 		LogPath:       a.logPath(request),
 		ExtraSink:     a.liveSink,
 	})
 	if startErr != nil {
-		return nil, adapterError(shared.ErrorCodeExecution, "start claude print", startErr)
+		return nil, adapterutil.AdapterError(shared.ErrorCodeExecution, "start claude print", startErr)
 	}
 
 	handle := shared.ExecutionHandle{
@@ -215,7 +205,7 @@ func (a *Adapter) PollOrCollect(_ context.Context, handle shared.ExecutionHandle
 		return nil, err
 	}
 
-	return adapterutil.CloneExecution(execution), nil
+	return shared.CloneExecution(execution), nil
 }
 
 // Interrupt cancels the live runner session (SIGTERM → grace → SIGKILL) and
@@ -231,15 +221,17 @@ func (a *Adapter) Interrupt(_ context.Context, handle shared.ExecutionHandle) (*
 		return nil, err
 	}
 
-	// Snapshot session + terminal together under the lock. cleanup nils the
-	// session AFTER publishing record.terminal (both under a.mu via cleanup), so
+	// Snapshot session + terminal together under the lock. releaseSession nils the
+	// session AFTER publishing record.terminal (both under a.mu via releaseSession), so
 	// observing session==nil here guarantees terminal is visible too.
-	a.mu.Lock()
+	a.mu.RLock()
+
 	session := record.session
 	terminal := record.terminal
-	a.mu.Unlock()
 
-	// The live session was already released by cleanup: the process finished and
+	a.mu.RUnlock()
+
+	// The live session was already released by releaseSession: the process finished and
 	// the terminal is cached. There is nothing to cancel, so resolve from the
 	// cached terminal instead of dereferencing a nil session (N3).
 	if session == nil {
@@ -254,26 +246,26 @@ func (a *Adapter) Interrupt(_ context.Context, handle shared.ExecutionHandle) (*
 	}
 
 	if execution.State == shared.ExecutionStateSucceeded && !record.terminalInterrupted {
-		return adapterutil.CloneExecution(execution), nil
+		return shared.CloneExecution(execution), nil
 	}
 
-	interrupted := adapterutil.CloneExecution(execution)
+	interrupted := shared.CloneExecution(execution)
 	interrupted.State = shared.ExecutionStateInterrupted
 
 	return interrupted, nil
 }
 
 // interruptFromTerminal resolves an Interrupt that raced a finished session: the
-// runner already exited and cleanup released the session, so only the cached
+// runner already exited and releaseSession released the session, so only the cached
 // terminal remains. A terminal that already settled into Succeeded/Failed is
 // returned verbatim (there is no work left to resume); a still-running terminal
 // is flipped to Interrupted.
 func interruptFromTerminal(terminal *shared.Execution) (*shared.Execution, error) {
 	if terminal == nil {
-		return nil, adapterError(shared.ErrorCodeExecution, "claude execution session not found", nil)
+		return nil, adapterutil.AdapterError(shared.ErrorCodeExecution, "claude execution session not found", nil)
 	}
 
-	clone := adapterutil.CloneExecution(terminal)
+	clone := shared.CloneExecution(terminal)
 	if clone.State == shared.ExecutionStateRunning {
 		clone.State = shared.ExecutionStateInterrupted
 	}
@@ -290,7 +282,7 @@ func (a *Adapter) Resume(ctx context.Context, request shared.ResumeRequest) (*sh
 		return nil, err
 	}
 
-	if err := adapterutil.ValidateHandle(request.Handle); err != nil {
+	if err := shared.ValidateHandle(request.Handle); err != nil {
 		return nil, err
 	}
 
@@ -304,19 +296,19 @@ func (a *Adapter) Resume(ctx context.Context, request shared.ResumeRequest) (*sh
 	resumeStart := a.resumeStartRequest(request)
 	sessionID := request.Handle.ProviderSessionID
 
-	args := buildPrintArgs(printArgsParams{Model: a.model, ResumeSessionID: &sessionID})
+	args := buildCLIArgs(cliArgsParams{Model: a.model, ResumeSessionID: &sessionID})
 
 	session, startErr := a.starter(ctx, runner.StartRequest{
 		Binary:        binaryPath,
 		Args:          args,
-		Dir:           commandDir(resumeStart.WorkingDir),
-		Prompt:        agentPrompt(resumeStart),
+		Dir:           adapterutil.CommandDir(resumeStart.WorkingDir),
+		Prompt:        adapterutil.AgentPrompt(resumeStart),
 		PromptOnStdin: true,
 		LogPath:       a.logPath(resumeStart),
 		ExtraSink:     a.liveSink,
 	})
 	if startErr != nil {
-		return nil, adapterError(shared.ErrorCodeExecution, "resume claude print", startErr)
+		return nil, adapterutil.AdapterError(shared.ErrorCodeExecution, "resume claude print", startErr)
 	}
 
 	a.mu.Lock()
@@ -339,68 +331,22 @@ func (a *Adapter) Resume(ctx context.Context, request shared.ResumeRequest) (*sh
 // the original working directory (and prompt fallback) from the live session map
 // when the resume happens in the same process.
 func (a *Adapter) resumeStartRequest(request shared.ResumeRequest) shared.StartRequest {
-	resume := shared.StartRequest{
-		RunID:      request.Handle.RunID,
-		StepID:     request.Handle.StepID,
-		AttemptID:  request.Handle.AttemptID,
-		Prompt:     request.Prompt,
-		WorkingDir: strings.TrimSpace(request.WorkingDir),
-	}
-
 	// Prefer the WorkingDir threaded on the resume request (works across a fresh
 	// `cogito resume` process); fall back to the live session map only for an
 	// in-process resume that did not carry one.
+	var priorRequest shared.StartRequest
+
 	a.mu.Lock()
 	if prior, ok := a.sessions[request.Handle.ProviderSessionID]; ok {
-		if resume.WorkingDir == "" {
-			resume.WorkingDir = prior.request.WorkingDir
-		}
-
-		if strings.TrimSpace(resume.Prompt) == "" {
-			resume.Prompt = prior.request.Prompt
-		}
+		priorRequest = prior.request
 	}
 	a.mu.Unlock()
 
-	return resume
+	return adapterutil.ResumeStartRequest(request, priorRequest)
 }
 
 func (a *Adapter) NormalizeResult(_ context.Context, request shared.NormalizeRequest) (*shared.StepResult, error) {
-	if request.Execution == nil {
-		return nil, adapterError(shared.ErrorCodeResult, "execution is required", nil)
-	}
-
-	if !request.Execution.State.Normalizable() {
-		return nil, adapterError(shared.ErrorCodeResult, "execution state cannot be normalized", nil)
-	}
-
-	if request.RequireStructuredOutput {
-		if err := a.DescribeCapabilities().Require(shared.CapabilityStructuredOutput); err != nil {
-			return nil, err
-		}
-	}
-
-	if request.RequireArtifactRefs {
-		if err := a.DescribeCapabilities().Require(shared.CapabilityArtifactRefs); err != nil {
-			return nil, err
-		}
-	}
-
-	if request.RequireMachineReadableLogs {
-		if err := a.DescribeCapabilities().Require(shared.CapabilityMachineReadableLogs); err != nil {
-			return nil, err
-		}
-	}
-
-	return &shared.StepResult{
-		Handle:           request.Execution.Handle,
-		Status:           request.Execution.State,
-		Summary:          request.Execution.Summary,
-		OutputText:       request.Execution.OutputText,
-		StructuredOutput: adapterutil.CloneJSON(request.Execution.StructuredOutput),
-		ArtifactRefs:     adapterutil.CloneArtifactRefs(request.Execution.ArtifactRefs),
-		Logs:             adapterutil.CloneLogs(request.Execution.Logs),
-	}, nil
+	return shared.NormalizeResult(request, a.DescribeCapabilities())
 }
 
 func (a *Adapter) binaryPath() (string, error) {
@@ -410,18 +356,21 @@ func (a *Adapter) binaryPath() (string, error) {
 	}
 
 	if errors.Is(err, exec.ErrNotFound) {
-		return "", adapterError(shared.ErrorCodeExecution, "claude binary not found", err)
+		return "", adapterutil.AdapterError(shared.ErrorCodeExecution, "claude binary not found", err)
 	}
 
-	return "", adapterError(shared.ErrorCodeExecution, "locate claude binary", err)
+	return "", adapterutil.AdapterError(shared.ErrorCodeExecution, "locate claude binary", err)
 }
 
 func (a *Adapter) binaryVersion(ctx context.Context, binaryPath string) string {
 	a.versionOnce.Do(func() {
-		result, err := a.runner.Run(ctx, CommandSpec{Path: binaryPath, Args: []string{"--version"}})
+		result, err := a.runner.Run(ctx, adapterutil.CommandSpec{Path: binaryPath, Args: []string{"--version"}})
 		if err != nil {
-			a.versionErr = err
-			a.version = versionUnknown
+			// The probe failing is non-fatal (version is cosmetic), but the
+			// cause should not vanish into an unread struct field.
+			slog.Warn("claude: version probe failed", "err", err)
+
+			a.version = adapterutil.VersionUnknown
 
 			return
 		}
@@ -432,32 +381,32 @@ func (a *Adapter) binaryVersion(ctx context.Context, binaryPath string) string {
 		}
 
 		if version == "" {
-			version = versionUnknown
+			version = adapterutil.VersionUnknown
 		}
 
 		a.version = version
 	})
 
 	if a.version == "" {
-		return versionUnknown
+		return adapterutil.VersionUnknown
 	}
 
 	return a.version
 }
 
-// printArgsParams carries the claude print argv inputs. ResumeSessionID is nil
+// cliArgsParams carries the claude print argv inputs. ResumeSessionID is nil
 // for fresh starts; L2 will pass a non-nil session id to append `--resume <sid>`.
-type printArgsParams struct {
+type cliArgsParams struct {
 	Model           string
 	ResumeSessionID *string
 }
 
-// buildPrintArgs assembles the claude print argv. The prompt is delivered on
+// buildCLIArgs assembles the claude print argv. The prompt is delivered on
 // stdin, so it never appears here. Shape:
 //
 //	--print --permission-mode bypassPermissions --output-format json
 //	[--model <m>] [--resume <sid>]
-func buildPrintArgs(params printArgsParams) []string {
+func buildCLIArgs(params cliArgsParams) []string {
 	args := []string{"--print", "--permission-mode", "bypassPermissions", "--output-format", "json"}
 
 	if model := strings.TrimSpace(params.Model); model != "" {
@@ -473,38 +422,29 @@ func buildPrintArgs(params printArgsParams) []string {
 	return args
 }
 
-func agentPrompt(request shared.StartRequest) string {
-	prompt := strings.TrimSpace(request.Prompt)
-	if prompt == "" {
-		prompt = fmt.Sprintf("run %s/%s", request.StepID, request.AttemptID)
-	}
-
-	return prompt
-}
-
 func (a *Adapter) logPath(request shared.StartRequest) string {
 	if a.logDir == "" {
 		return ""
 	}
 
-	return filepath.Join(a.logDir, sanitizeID(request.AttemptID)+"-claude.log")
+	return filepath.Join(a.logDir, adapterutil.SanitizeID(request.AttemptID)+"-claude.log")
 }
 
 func (a *Adapter) lookupSession(handle shared.ExecutionHandle) (*agentSession, error) {
-	if err := adapterutil.ValidateHandle(handle); err != nil {
+	if err := shared.ValidateHandle(handle); err != nil {
 		return nil, err
 	}
 
-	a.mu.Lock()
+	a.mu.RLock()
 	record, ok := a.sessions[handle.ProviderSessionID]
-	a.mu.Unlock()
+	a.mu.RUnlock()
 
 	if !ok {
-		return nil, adapterError(shared.ErrorCodeExecution, "claude execution session not found", nil)
+		return nil, adapterutil.AdapterError(shared.ErrorCodeExecution, "claude execution session not found", nil)
 	}
 
 	if record.handle.RunID != handle.RunID || record.handle.StepID != handle.StepID || record.handle.AttemptID != handle.AttemptID {
-		return nil, adapterError(shared.ErrorCodeExecution, "claude execution handle does not match session", nil)
+		return nil, adapterutil.AdapterError(shared.ErrorCodeExecution, "claude execution handle does not match session", nil)
 	}
 
 	return record, nil
@@ -517,7 +457,7 @@ func (a *Adapter) lookupSession(handle shared.ExecutionHandle) (*agentSession, e
 // handle but adopts the real provider session id when claude reported one (the
 // response session_id): that real id is what `--resume <sid>` needs, so
 // overwriting it with the synthetic Start-time fallback would make resume fail.
-// Once the terminal is built the heavy runner session is released (see cleanup).
+// Once the terminal is built the heavy runner session is released (see releaseSession).
 func (a *Adapter) collectTerminal(record *agentSession) (*shared.Execution, error) {
 	record.once.Do(func() {
 		result := <-record.session.Done
@@ -525,7 +465,7 @@ func (a *Adapter) collectTerminal(record *agentSession) (*shared.Execution, erro
 
 		response, parseErr := parseResponse(result.Stdout)
 		if parseErr != nil {
-			record.buildErr = adapterError(shared.ErrorCodeResult, "parse claude json output", parseErr)
+			record.buildErr = adapterutil.AdapterError(shared.ErrorCodeResult, "parse claude json output", parseErr)
 			return
 		}
 
@@ -542,6 +482,7 @@ func (a *Adapter) collectTerminal(record *agentSession) (*shared.Execution, erro
 		syntheticID := record.handle.ProviderSessionID
 		parsedSessionID := execution.Handle.ProviderSessionID
 		execution.Handle = record.handle
+
 		if parsedSessionID != "" && parsedSessionID != syntheticID {
 			execution.Handle.ProviderSessionID = parsedSessionID
 			a.aliasSession(record, parsedSessionID)
@@ -559,7 +500,7 @@ func (a *Adapter) collectTerminal(record *agentSession) (*shared.Execution, erro
 
 		// Release the live runner session + buffered stdout/stderr now that the
 		// terminal Execution captured everything we need.
-		a.cleanup(syntheticID)
+		a.releaseSession(syntheticID)
 	})
 
 	if record.buildErr != nil {
@@ -567,22 +508,10 @@ func (a *Adapter) collectTerminal(record *agentSession) (*shared.Execution, erro
 	}
 
 	if record.terminal == nil {
-		return nil, adapterError(shared.ErrorCodeExecution, "claude terminal execution unavailable", nil)
+		return nil, adapterutil.AdapterError(shared.ErrorCodeExecution, "claude terminal execution unavailable", nil)
 	}
 
 	return record.terminal, nil
-}
-
-// commandDir resolves the child process working directory, defaulting an empty
-// value to "." so a cross-process resume without a recovered directory never
-// runs the agent in an unexpected location.
-func commandDir(workingDir string) string {
-	dir := strings.TrimSpace(workingDir)
-	if dir == "" {
-		return "."
-	}
-
-	return dir
 }
 
 // structuredOutput recovers the normalized AgentResult JSON for a finished
@@ -597,18 +526,24 @@ func (a *Adapter) structuredOutput(response *response, result runner.Result) (js
 		normalized = response.Result
 	}
 
-	structured, found, err := prompt.StructuredOutputFromText(normalized)
-	if err != nil {
-		return nil, adapterError(shared.ErrorCodeResult, "parse claude structured output", err)
-	}
-
-	if found {
+	structured, err := prompt.StructuredOutputFromText(normalized)
+	if err == nil {
 		return structured, nil
 	}
 
-	structured, _, err = shared.StructuredOutputFromLog(result.LogPath, result.Stdout)
+	if !errors.Is(err, prompt.ErrNoAgentResult) {
+		return nil, adapterutil.AdapterError(shared.ErrorCodeResult, "parse claude structured output", err)
+	}
+
+	structured, err = shared.StructuredOutputFromLog(result.LogPath, result.Stdout)
 	if err != nil {
-		return nil, adapterError(shared.ErrorCodeResult, "read claude structured output", err)
+		// No marker anywhere is clean "no data": downstream gates treat the
+		// absent structured output explicitly instead of failing the build.
+		if errors.Is(err, prompt.ErrNoAgentResult) {
+			return nil, nil
+		}
+
+		return nil, adapterutil.AdapterError(shared.ErrorCodeResult, "read claude structured output", err)
 	}
 
 	return structured, nil
@@ -619,13 +554,10 @@ func (a *Adapter) structuredOutput(response *response, result runner.Result) (js
 // id (which the terminal handle now carries and which the runtime persists)
 // still resolves. Both the synthetic and real keys alias one record (N4).
 func (a *Adapter) aliasSession(record *agentSession, aliasID string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	a.sessions[aliasID] = record
+	adapterutil.SessionMap[*agentSession]{Mu: &a.mu, Sessions: a.sessions}.Alias(record, aliasID)
 }
 
-// cleanup releases the live runner session a finished invocation no longer
+// releaseSession releases the live runner session a finished invocation no longer
 // needs. The terminal Execution and terminalInterrupted flag stay on the record
 // for idempotent re-polls; only the heavy runner.Session reference (and the
 // stdout/stderr it buffered) is dropped, so long-running engines do not
@@ -634,53 +566,8 @@ func (a *Adapter) aliasSession(record *agentSession, aliasID string) {
 // Both the synthetic and real (aliased) session-map keys point at the same
 // record, so nilling record.session here clears the heavy reference for every
 // key under which the record is reachable. Safe to call repeatedly.
-func (a *Adapter) cleanup(sessionID string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	if record, ok := a.sessions[sessionID]; ok {
+func (a *Adapter) releaseSession(sessionID string) {
+	adapterutil.SessionMap[*agentSession]{Mu: &a.mu, Sessions: a.sessions}.Release(sessionID, func(record *agentSession) {
 		record.session = nil
-	}
-}
-
-type execRunner struct{}
-
-func (execRunner) Run(ctx context.Context, command CommandSpec) (CommandResult, error) {
-	cmd := exec.CommandContext(ctx, command.Path, command.Args...)
-	cmd.Dir = command.Dir
-
-	var stdout bytes.Buffer
-
-	var stderr bytes.Buffer
-
-	stdoutWriter := command.Stdout
-	stderrWriter := command.Stderr
-
-	if stdoutWriter == nil {
-		stdoutWriter = io.Discard
-	}
-
-	if stderrWriter == nil {
-		stderrWriter = io.Discard
-	}
-
-	cmd.Stdout = io.MultiWriter(&stdout, stdoutWriter)
-	cmd.Stderr = io.MultiWriter(&stderr, stderrWriter)
-
-	if command.Stdin != "" {
-		cmd.Stdin = strings.NewReader(command.Stdin)
-	}
-
-	err := cmd.Run()
-	result := CommandResult{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}
-
-	if err != nil {
-		return result, err
-	}
-
-	return result, nil
-}
-
-func adapterError(code shared.ErrorCode, message string, err error) *shared.Error {
-	return &shared.Error{Code: code, Message: message, Err: err}
+	})
 }

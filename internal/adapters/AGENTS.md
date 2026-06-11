@@ -13,6 +13,7 @@ internal/adapters/
 |-- <provider>_integration_test.go
 |-- prompt/                 # AgentLoop-ported prompt templates + AGENT_RESULT_JSON parsing
 |-- runner/                 # async provider process launcher (Start/Interrupt/Await + session map)
+|-- adapterutil/            # provider-facing shared helpers (exec runner, session map, validation/clone wrappers)
 |-- codex/
 |-- claude/
 `-- opencode/
@@ -39,7 +40,7 @@ internal/adapters/
 - Do not add provider-specific imports to runtime or app packages.
 - Do not skip `RunContractSuite()` when introducing or changing a provider.
 - Do not create duplicate SPI types in provider subdirs when the parent package already owns the contract.
-- Avoid copy-pasting shared validation/clone helpers across providers; prefer extracting reusable code to the parent package when duplication appears.
+- Avoid copy-pasting shared validation/clone helpers across providers; extract reusable code instead. SPI contract/value types belong in the parent package; helpers consumed BY provider subpackages live in `adapterutil/` (providers import the parent as `shared`, so parent-level helpers would not be reachable without an import cycle).
 
 ## NOTES
 - Current provider subdirs are `codex/`, `claude/`, and `opencode/`; mirror their layout before inventing a new one.

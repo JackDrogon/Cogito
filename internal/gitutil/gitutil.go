@@ -6,6 +6,7 @@
 package gitutil
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -23,10 +24,13 @@ type GitOps struct {
 }
 
 // command builds a git invocation rooted at Root with the ceiling guard set.
-func (g GitOps) command(args ...string) *exec.Cmd {
-	cmd := exec.Command("git", args...)
+// The context bounds the subprocess lifetime so a wedged git (network push,
+// slow filesystem) cannot stall the caller forever.
+func (g GitOps) command(ctx context.Context, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = g.Root
 	cmd.Env = append(os.Environ(), "GIT_CEILING_DIRECTORIES="+filepath.Dir(g.Root))
+
 	return cmd
 }
 
@@ -45,8 +49,8 @@ type CommitRefValidation struct {
 // repository does NOT count: with the ceiling guard git cannot find the outer
 // repo, and even without it the toplevel would differ from Root. Any git failure
 // (missing binary, non-repo) yields false.
-func (g GitOps) IsRepo() bool {
-	out, err := g.command("rev-parse", "--show-toplevel").Output()
+func (g GitOps) IsRepo(ctx context.Context) bool {
+	out, err := g.command(ctx, "rev-parse", "--show-toplevel").Output()
 	if err != nil {
 		return false
 	}
@@ -66,8 +70,8 @@ func (g GitOps) IsRepo() bool {
 
 // HasUncommittedChanges reports whether the work tree has staged or unstaged
 // changes via `git status --porcelain` (non-empty output means dirty).
-func (g GitOps) HasUncommittedChanges() (bool, error) {
-	out, err := g.command("status", "--porcelain").Output()
+func (g GitOps) HasUncommittedChanges(ctx context.Context) (bool, error) {
+	out, err := g.command(ctx, "status", "--porcelain").Output()
 	if err != nil {
 		return false, fmt.Errorf("git status --porcelain: %w", err)
 	}
@@ -76,8 +80,8 @@ func (g GitOps) HasUncommittedChanges() (bool, error) {
 }
 
 // HeadCommit returns the resolved HEAD commit hash.
-func (g GitOps) HeadCommit() (string, error) {
-	out, err := g.command("rev-parse", "HEAD").Output()
+func (g GitOps) HeadCommit(ctx context.Context) (string, error) {
+	out, err := g.command(ctx, "rev-parse", "HEAD").Output()
 	if err != nil {
 		return "", fmt.Errorf("git rev-parse HEAD: %w", err)
 	}
@@ -87,14 +91,22 @@ func (g GitOps) HeadCommit() (string, error) {
 
 // CommitsSince returns the SHAs reachable in ref..HEAD in oldest→newest order.
 // `git log` prints newest first, so the output is reversed before returning.
-func (g GitOps) CommitsSince(ref string) ([]string, error) {
-	out, err := g.command("log", "--format=%H", ref+"..HEAD").Output()
+func (g GitOps) CommitsSince(ctx context.Context, ref string) ([]string, error) {
+	if err := validateRef(ref); err != nil {
+		return nil, err
+	}
+
+	// The trailing "--" tells git the range is a revision, never a path, so a
+	// ref that happens to collide with a file name cannot change the meaning
+	// of the command.
+	out, err := g.command(ctx, "log", "--format=%H", ref+"..HEAD", "--").Output()
 	if err != nil {
 		return nil, fmt.Errorf("git log %s..HEAD: %w", ref, err)
 	}
 
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	commits := make([]string, 0, len(lines))
+
 	for i := len(lines) - 1; i >= 0; i-- {
 		if sha := strings.TrimSpace(lines[i]); sha != "" {
 			commits = append(commits, sha)
@@ -108,7 +120,7 @@ func (g GitOps) CommitsSince(ref string) ([]string, error) {
 // <ref>^{commit}` and buckets it into Valid or Invalid. A non-zero git exit
 // (ref does not resolve to a commit) is an expected "invalid" outcome; only
 // unexpected failures such as a missing git binary surface as an error.
-func (g GitOps) ValidateCommitRefs(refs []string) (CommitRefValidation, error) {
+func (g GitOps) ValidateCommitRefs(ctx context.Context, refs []string) (CommitRefValidation, error) {
 	result := CommitRefValidation{Valid: []string{}, Invalid: []string{}}
 
 	for _, ref := range refs {
@@ -117,7 +129,14 @@ func (g GitOps) ValidateCommitRefs(refs []string) (CommitRefValidation, error) {
 			continue
 		}
 
-		err := g.command("rev-parse", "--verify", "--quiet", trimmed+"^{commit}").Run()
+		// A leading "-" can never start a valid revision but could be parsed
+		// as a git flag; bucket it as invalid instead of passing it through.
+		if validateRef(trimmed) != nil {
+			result.Invalid = append(result.Invalid, trimmed)
+			continue
+		}
+
+		err := g.command(ctx, "rev-parse", "--verify", "--quiet", trimmed+"^{commit}").Run()
 		if err == nil {
 			result.Valid = append(result.Valid, trimmed)
 			continue
@@ -137,9 +156,41 @@ func (g GitOps) ValidateCommitRefs(refs []string) (CommitRefValidation, error) {
 
 // PushCommits runs `git push` best-effort. A clean tree with nothing to push
 // exits zero; a missing remote or upstream surfaces the git error to the caller.
-func (g GitOps) PushCommits() error {
-	if err := g.command("push").Run(); err != nil {
-		return fmt.Errorf("git push: %w", err)
+func (g GitOps) PushCommits(ctx context.Context) error {
+	if err := g.command(ctx, "push").Run(); err != nil {
+		return fmt.Errorf("git push (root %s): %w", g.Root, err)
+	}
+
+	return nil
+}
+
+// DiscoverToplevel resolves the enclosing git work-tree root for dir, walking
+// upward exactly as plain `git -C dir rev-parse --show-toplevel` does. Unlike
+// GitOps methods it intentionally does NOT pin GIT_CEILING_DIRECTORIES:
+// callers (repo locking) WANT a run started in a subdirectory to resolve to —
+// and contend on — the enclosing repository root. The trimmed git output is
+// folded into the error so callers keep git's own diagnostic.
+func DiscoverToplevel(ctx context.Context, dir string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--show-toplevel")
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		message := strings.TrimSpace(string(output))
+		if message == "" {
+			message = err.Error()
+		}
+
+		return "", fmt.Errorf("git rev-parse --show-toplevel: %s: %w", message, err)
+	}
+
+	return strings.TrimSpace(string(output)), nil
+}
+
+// validateRef rejects ref spellings that git would parse as a flag instead of
+// a revision. Refs come from agent self-reports, so they are untrusted input.
+func validateRef(ref string) error {
+	if strings.HasPrefix(strings.TrimSpace(ref), "-") {
+		return fmt.Errorf("gitutil: invalid ref %q: leading dash", ref)
 	}
 
 	return nil

@@ -310,7 +310,9 @@ still fails with the original git error.
 - `0` - success
 - `1` - any CLI, validation, execution, replay, or provider error
 
-The top-level `main` package prints the error to stderr and returns exit code `1`.
+The top-level `main` package prints the error to stderr as `cogito: <error>`
+(the prefix is stable for script consumption) and returns exit code `1`.
+Diagnostics and warnings also go to stderr; stdout carries only command output.
 
 ## Current limitations
 

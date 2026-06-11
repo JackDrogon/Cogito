@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -105,36 +106,38 @@ func (r *liveRenderer) renderLine(line string) {
 	if !strings.HasPrefix(trimmed, "{") || json.Unmarshal([]byte(trimmed), &event) != nil || event.Type == "" {
 		// Not a codex event (stderr noise, plain text): surface as a marker
 		// line so it still carries a timestamp.
-		r.mark("%s", line)
+		r.markf("%s", line)
 		return
 	}
 
 	r.renderEvent(event)
 }
 
+// renderEvent renders the event kinds a human reader cares about;
+// turn.started, item.updated, and future event types are progress noise and
+// fall through the switch unrendered.
 func (r *liveRenderer) renderEvent(event liveEvent) {
 	switch event.Type {
 	case "thread.started":
-		r.mark("thread %s", event.ThreadID)
+		r.markf("thread %s", event.ThreadID)
 	case "item.started":
 		if event.Item != nil && event.Item.Type == "command_execution" {
-			r.mark("$ %s", event.Item.Command)
+			r.markf("$ %s", event.Item.Command)
 		}
 	case "item.completed":
 		r.renderItem(event.Item)
 	case "turn.completed":
 		if event.Usage != nil {
-			r.mark("tokens: input=%d (cached %d) output=%d",
+			r.markf("tokens: input=%d (cached %d) output=%d",
 				event.Usage.InputTokens, event.Usage.CachedInputTokens, event.Usage.OutputTokens)
 		}
 	case "turn.failed", eventTypeError:
-		r.mark("error: %s", eventFailureMessage(event))
-	default:
-		// turn.started, item.updated, and future event types are progress
-		// noise for a human reader; skip them.
+		r.markf("error: %s", eventFailureMessage(event))
 	}
 }
 
+// renderItem renders completed items; task-list updates and unknown item
+// kinds add little for a live reader and fall through the switch unrendered.
 func (r *liveRenderer) renderItem(item *liveItem) {
 	if item == nil {
 		return
@@ -142,34 +145,31 @@ func (r *liveRenderer) renderItem(item *liveItem) {
 
 	switch item.Type {
 	case "agent_message":
-		r.mark("agent:")
+		r.markf("agent:")
 		r.raw(strings.TrimRight(item.Text, "\n"))
 	case "reasoning":
-		r.mark("thinking: %s", strings.TrimSpace(item.Text))
+		r.markf("thinking: %s", strings.TrimSpace(item.Text))
 	case "command_execution":
 		if output := strings.TrimRight(item.AggregatedOutput, "\n"); output != "" {
 			r.raw(output)
 		}
 
-		r.mark("exit %s", formatExit(item))
+		r.markf("exit %s", formatExit(item))
 	case "file_change":
 		for _, change := range item.Changes {
-			r.mark("file %s: %s", change.Kind, change.Path)
+			r.markf("file %s: %s", change.Kind, change.Path)
 		}
 	case "mcp_tool_call":
-		r.mark("tool: %s.%s (%s)", item.Server, item.Tool, item.Status)
+		r.markf("tool: %s.%s (%s)", item.Server, item.Tool, item.Status)
 	case "web_search":
-		r.mark("search: %s", item.Query)
-	default:
-		// todo_list updates and unknown item kinds add little for a live
-		// reader; skip them.
+		r.markf("search: %s", item.Query)
 	}
 }
 
-// mark emits one timestamped "[codex]" marker line. Markers bracket the raw
+// markf emits one timestamped "[codex]" marker line. Markers bracket the raw
 // content blocks, so a reader can always tell when each step of the agent's
 // activity happened.
-func (r *liveRenderer) mark(format string, args ...any) {
+func (r *liveRenderer) markf(format string, args ...any) {
 	_, _ = fmt.Fprintf(r.sink, "%s [codex] %s\n", r.now().Format(liveTimeLayout), fmt.Sprintf(format, args...))
 }
 
@@ -181,7 +181,7 @@ func (r *liveRenderer) raw(text string) {
 
 func formatExit(item *liveItem) string {
 	if item.ExitCode != nil {
-		return fmt.Sprintf("%d", *item.ExitCode)
+		return strconv.Itoa(*item.ExitCode)
 	}
 
 	if item.Status != "" {

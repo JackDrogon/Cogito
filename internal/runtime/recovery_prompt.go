@@ -1,7 +1,9 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
+	"log/slog"
 	"strings"
 
 	"github.com/JackDrogon/Cogito/internal/adapters/prompt"
@@ -26,7 +28,7 @@ import (
 //
 // A non-git working dir, an empty working dir, or any git read failure also
 // yields "" so the resume stays on the original main prompt.
-func (e *Engine) recoveryPromptOverride(step workflow.CompiledStep, prior StepSnapshot) string {
+func (e *Engine) recoveryPromptOverride(ctx context.Context, step workflow.CompiledStep, prior StepSnapshot) string {
 	if step.Kind != workflow.StepKindAgent || step.Agent == nil {
 		return ""
 	}
@@ -37,22 +39,32 @@ func (e *Engine) recoveryPromptOverride(step workflow.CompiledStep, prior StepSn
 	}
 
 	git := gitutil.GitOps{Root: workingDir}
-	if !git.IsRepo() {
+	if !git.IsRepo(ctx) {
 		return ""
 	}
 
-	input := prompt.PromptInput{
+	input := prompt.Input{
 		Root:  workingDir,
 		Tasks: []prompt.TaskRef{{ID: step.ID, Text: step.Agent.Prompt}},
 	}
 
 	// Missing self-reported commits take precedence over a dirty worktree:
 	// recovering lost commits is higher priority than finishing WIP.
-	if missing := missingReportedCommits(git, prior.StructuredOutput); len(missing) > 0 {
+	if missing := missingReportedCommits(ctx, git, prior.StructuredOutput); len(missing) > 0 {
 		return prompt.BuildCommitRecovery(input, missing)
 	}
 
-	if dirty, err := git.HasUncommittedChanges(); err == nil && dirty {
+	dirty, err := git.HasUncommittedChanges(ctx)
+	if err != nil {
+		// A git failure degrades to the main prompt, but silently treating it
+		// as a clean tree would mask real problems (e.g. missing binary), so
+		// record the degradation.
+		slog.Warn("recovery: git status failed; resuming with main prompt", "step", step.ID, "err", err)
+
+		return ""
+	}
+
+	if dirty {
 		return prompt.BuildDirtyWorktree(input)
 	}
 
@@ -64,7 +76,7 @@ func (e *Engine) recoveryPromptOverride(step workflow.CompiledStep, prior StepSn
 // the work tree. An empty/undecodable output, no reported commits, or a git
 // failure all yield no missing commits so the caller falls back to the main
 // prompt.
-func missingReportedCommits(git gitutil.GitOps, structuredOutput json.RawMessage) []string {
+func missingReportedCommits(ctx context.Context, git gitutil.GitOps, structuredOutput json.RawMessage) []string {
 	if len(structuredOutput) == 0 {
 		return nil
 	}
@@ -78,8 +90,13 @@ func missingReportedCommits(git gitutil.GitOps, structuredOutput json.RawMessage
 		return nil
 	}
 
-	validation, err := git.ValidateCommitRefs(result.Commits)
+	validation, err := git.ValidateCommitRefs(ctx, result.Commits)
 	if err != nil {
+		// Degrading to "no missing commits" keeps the resume on the main
+		// prompt; log so a broken git setup is not silently mistaken for a
+		// healthy history.
+		slog.Warn("recovery: commit validation failed; skipping commit recovery", "err", err)
+
 		return nil
 	}
 

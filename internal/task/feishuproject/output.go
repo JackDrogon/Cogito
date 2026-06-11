@@ -40,9 +40,10 @@ func WriteSnapshot(path string, snapshot Snapshot) error {
 	}
 
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, encoded, 0o644); err != nil {
+	if err := os.WriteFile(tmp, encoded, 0o600); err != nil {
 		return fmt.Errorf("feishuproject: write snapshot tmp: %w", err)
 	}
+
 	if err := os.Rename(tmp, path); err != nil {
 		return fmt.Errorf("feishuproject: rename snapshot: %w", err)
 	}

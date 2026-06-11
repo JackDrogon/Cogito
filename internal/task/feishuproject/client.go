@@ -28,7 +28,7 @@ func requestOptions(cfg Config) []sdkcore.RequestOptionFunc {
 
 	if cfg.AuthMode != "" {
 		headers := make(http.Header)
-		headers.Set("x-auth-mode", cfg.AuthMode)
+		headers.Set("X-Auth-Mode", cfg.AuthMode)
 		options = append(options, sdkcore.WithHeaders(headers))
 	}
 

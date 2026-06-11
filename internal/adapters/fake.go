@@ -66,7 +66,7 @@ func (a *FakeAdapter) DescribeCapabilities() CapabilityMatrix {
 }
 
 func (a *FakeAdapter) Start(_ context.Context, request StartRequest) (*Execution, error) {
-	if err := validateStartRequest(request); err != nil {
+	if err := ValidateStartRequest(request); err != nil {
 		return nil, err
 	}
 
@@ -93,11 +93,11 @@ func (a *FakeAdapter) Start(_ context.Context, request StartRequest) (*Execution
 		current: execution,
 	}
 
-	return cloneExecution(execution), nil
+	return CloneExecution(execution), nil
 }
 
 func (a *FakeAdapter) PollOrCollect(_ context.Context, handle ExecutionHandle) (*Execution, error) {
-	if err := validateHandle(handle); err != nil {
+	if err := ValidateHandle(handle); err != nil {
 		return nil, err
 	}
 
@@ -126,7 +126,7 @@ func (a *FakeAdapter) PollOrCollect(_ context.Context, handle ExecutionHandle) (
 		(*index)++
 	}
 
-	return cloneExecution(session.current), nil
+	return CloneExecution(session.current), nil
 }
 
 func (a *FakeAdapter) Interrupt(_ context.Context, handle ExecutionHandle) (*Execution, error) {
@@ -134,7 +134,7 @@ func (a *FakeAdapter) Interrupt(_ context.Context, handle ExecutionHandle) (*Exe
 		return nil, err
 	}
 
-	if err := validateHandle(handle); err != nil {
+	if err := ValidateHandle(handle); err != nil {
 		return nil, err
 	}
 
@@ -154,7 +154,7 @@ func (a *FakeAdapter) Interrupt(_ context.Context, handle ExecutionHandle) (*Exe
 	session.current = buildExecution(session.handle, snapshot)
 	session.interrupted = true
 
-	return cloneExecution(session.current), nil
+	return CloneExecution(session.current), nil
 }
 
 func (a *FakeAdapter) Resume(_ context.Context, request ResumeRequest) (*Execution, error) {
@@ -162,7 +162,7 @@ func (a *FakeAdapter) Resume(_ context.Context, request ResumeRequest) (*Executi
 		return nil, err
 	}
 
-	if err := validateHandle(request.Handle); err != nil {
+	if err := ValidateHandle(request.Handle); err != nil {
 		return nil, err
 	}
 
@@ -187,47 +187,11 @@ func (a *FakeAdapter) Resume(_ context.Context, request ResumeRequest) (*Executi
 	session.resumed = true
 	session.interrupted = false
 
-	return cloneExecution(session.current), nil
+	return CloneExecution(session.current), nil
 }
 
 func (a *FakeAdapter) NormalizeResult(_ context.Context, request NormalizeRequest) (*StepResult, error) {
-	if request.Execution == nil {
-		return nil, newError(ErrorCodeResult, "execution is required")
-	}
-
-	if !request.Execution.State.Normalizable() {
-		return nil, newError(ErrorCodeResult, "execution state cannot be normalized")
-	}
-
-	if request.RequireStructuredOutput {
-		if err := a.capabilities.Require(CapabilityStructuredOutput); err != nil {
-			return nil, err
-		}
-	}
-
-	if request.RequireArtifactRefs {
-		if err := a.capabilities.Require(CapabilityArtifactRefs); err != nil {
-			return nil, err
-		}
-	}
-
-	if request.RequireMachineReadableLogs {
-		if err := a.capabilities.Require(CapabilityMachineReadableLogs); err != nil {
-			return nil, err
-		}
-	}
-
-	result := &StepResult{
-		Handle:           request.Execution.Handle,
-		Status:           request.Execution.State,
-		Summary:          request.Execution.Summary,
-		OutputText:       request.Execution.OutputText,
-		StructuredOutput: cloneJSON(request.Execution.StructuredOutput),
-		ArtifactRefs:     cloneArtifactRefs(request.Execution.ArtifactRefs),
-		Logs:             cloneLogs(request.Execution.Logs),
-	}
-
-	return result, nil
+	return NormalizeResult(request, a.capabilities)
 }
 
 func (a *FakeAdapter) lookupSession(handle ExecutionHandle) (*fakeSession, error) {
@@ -249,25 +213,9 @@ func buildExecution(handle ExecutionHandle, snapshot FakeSnapshot) *Execution {
 		State:            snapshot.State,
 		Summary:          snapshot.Summary,
 		OutputText:       snapshot.OutputText,
-		StructuredOutput: cloneJSON(snapshot.StructuredOutput),
-		ArtifactRefs:     cloneArtifactRefs(snapshot.ArtifactRefs),
-		Logs:             cloneLogs(snapshot.Logs),
-	}
-}
-
-func cloneExecution(execution *Execution) *Execution {
-	if execution == nil {
-		return nil
-	}
-
-	return &Execution{
-		Handle:           execution.Handle,
-		State:            execution.State,
-		Summary:          execution.Summary,
-		OutputText:       execution.OutputText,
-		StructuredOutput: cloneJSON(execution.StructuredOutput),
-		ArtifactRefs:     cloneArtifactRefs(execution.ArtifactRefs),
-		Logs:             cloneLogs(execution.Logs),
+		StructuredOutput: CloneJSON(snapshot.StructuredOutput),
+		ArtifactRefs:     CloneArtifactRefs(snapshot.ArtifactRefs),
+		Logs:             CloneLogs(snapshot.Logs),
 	}
 }
 
@@ -309,52 +257,8 @@ func cloneSnapshot(snapshot FakeSnapshot) FakeSnapshot {
 		State:            snapshot.State,
 		Summary:          snapshot.Summary,
 		OutputText:       snapshot.OutputText,
-		StructuredOutput: cloneJSON(snapshot.StructuredOutput),
-		ArtifactRefs:     cloneArtifactRefs(snapshot.ArtifactRefs),
-		Logs:             cloneLogs(snapshot.Logs),
+		StructuredOutput: CloneJSON(snapshot.StructuredOutput),
+		ArtifactRefs:     CloneArtifactRefs(snapshot.ArtifactRefs),
+		Logs:             CloneLogs(snapshot.Logs),
 	}
-}
-
-func cloneJSON(value json.RawMessage) json.RawMessage {
-	if value == nil {
-		return nil
-	}
-
-	cloned := make(json.RawMessage, len(value))
-	copy(cloned, value)
-
-	return cloned
-}
-
-func cloneArtifactRefs(artifacts []ArtifactRef) []ArtifactRef {
-	if artifacts == nil {
-		return nil
-	}
-
-	cloned := make([]ArtifactRef, 0, len(artifacts))
-	cloned = append(cloned, artifacts...)
-
-	return cloned
-}
-
-func cloneLogs(logs []LogEntry) []LogEntry {
-	if logs == nil {
-		return nil
-	}
-
-	cloned := make([]LogEntry, 0, len(logs))
-
-	for _, entry := range logs {
-		clonedEntry := LogEntry{Level: entry.Level, Message: entry.Message}
-		if entry.Fields != nil {
-			clonedEntry.Fields = make(map[string]string, len(entry.Fields))
-			for key, value := range entry.Fields {
-				clonedEntry.Fields[key] = value
-			}
-		}
-
-		cloned = append(cloned, clonedEntry)
-	}
-
-	return cloned
 }

@@ -7,7 +7,10 @@ import (
 	"path/filepath"
 )
 
-var errCheckpointNotFound = errors.New("checkpoint not found")
+// ErrCheckpointNotFound reports that neither the checkpoint file nor its
+// recovery temp file exists. Exported so callers (the runtime engine) can
+// distinguish the benign fresh-run case from real checkpoint corruption.
+var ErrCheckpointNotFound = errors.New("checkpoint not found")
 
 type CheckpointLoadResult struct {
 	Checkpoint *Checkpoint
@@ -25,19 +28,12 @@ func (s *Store) SaveCheckpoint(checkpoint *Checkpoint) error {
 	return writeAtomicJSON(s.layout.CheckpointPath, sanitized, ErrorCodeCheckpoint)
 }
 
+// LoadCheckpoint reads the primary checkpoint file, falling back to the
+// crash-recovery temp file when the primary is missing or corrupt.
 func (s *Store) LoadCheckpoint() (*CheckpointLoadResult, error) {
 	checkpoint, err := readCheckpointFile(s.layout.CheckpointPath)
 	if err == nil {
 		return &CheckpointLoadResult{Checkpoint: checkpoint}, nil
-	}
-
-	if !errors.Is(err, errCheckpointNotFound) {
-		fallback, fallbackErr := s.tryRecoverCheckpoint(err)
-		if fallbackErr == nil {
-			return fallback, nil
-		}
-
-		return nil, fallbackErr
 	}
 
 	return s.tryRecoverCheckpoint(err)
@@ -74,6 +70,13 @@ func (s *Store) LoadArtifacts() ([]ArtifactRecord, error) {
 	return artifacts, nil
 }
 
+// tryRecoverCheckpoint promotes a complete temp checkpoint (left behind by a
+// crash between write and rename) to the primary path.
+//
+// Error priority when the temp file does not help: a corrupt PRIMARY file
+// outranks any temp-file error because it names the real problem the operator
+// must fix; only when the primary was merely absent does the temp error (or
+// the not-found sentinel) surface instead.
 func (s *Store) tryRecoverCheckpoint(primaryErr error) (*CheckpointLoadResult, error) {
 	tempCheckpoint, tempErr := readCheckpointFile(s.layout.CheckpointTempPath)
 	if tempErr == nil {
@@ -88,12 +91,12 @@ func (s *Store) tryRecoverCheckpoint(primaryErr error) (*CheckpointLoadResult, e
 		return &CheckpointLoadResult{Checkpoint: tempCheckpoint, Recovered: true}, nil
 	}
 
-	if primaryErr != nil && !errors.Is(primaryErr, errCheckpointNotFound) {
+	if primaryErr != nil && !errors.Is(primaryErr, ErrCheckpointNotFound) {
 		return nil, primaryErr
 	}
 
-	if errors.Is(tempErr, errCheckpointNotFound) {
-		return nil, wrapError(ErrorCodeCheckpoint, "load checkpoint", errCheckpointNotFound)
+	if errors.Is(tempErr, ErrCheckpointNotFound) {
+		return nil, wrapError(ErrorCodeCheckpoint, "load checkpoint", ErrCheckpointNotFound)
 	}
 
 	return nil, tempErr
@@ -103,7 +106,7 @@ func readCheckpointFile(path string) (*Checkpoint, error) {
 	data, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, errCheckpointNotFound
+			return nil, ErrCheckpointNotFound
 		}
 
 		return nil, wrapError(ErrorCodeCheckpoint, "read checkpoint", err)

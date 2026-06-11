@@ -15,7 +15,29 @@ type Store struct {
 	layout       Layout
 	eventMu      sync.Mutex
 	lastSequence int64
+	// sequenceUnreliable poisons the store once a failed append left the
+	// on-disk log in a state that could not even be read back: any further
+	// append could create a sequence gap or duplicate, so they fail fast
+	// instead. Recovery is reopening the store, which re-primes the counter
+	// from the (repaired) file.
+	sequenceUnreliable bool
 }
+
+// Run-layout entry names. Exported as the single vocabulary for the on-disk
+// layout so other layers (app, tooling) never re-spell these literals.
+const (
+	WorkflowFileName    = "workflow.json"
+	EventsFileName      = "events.jsonl"
+	CheckpointFileName  = "checkpoint.json"
+	ArtifactsFileName   = "artifacts.json"
+	ProviderLogsDirName = "provider-logs"
+	LocksDirName        = "locks"
+)
+
+// tempFileSuffix marks the scratch file used by atomic write-then-rename;
+// Layout.CheckpointTempPath and writeAtomicJSON must agree on it so crash
+// recovery can find the orphaned temp file.
+const tempFileSuffix = ".tmp"
 
 func LayoutForRun(baseDir, runID string) Layout {
 	baseDir = strings.TrimSpace(baseDir)
@@ -30,46 +52,38 @@ func LayoutForRun(baseDir, runID string) Layout {
 		BaseDir:            baseDir,
 		RunID:              runID,
 		RunDir:             runDir,
-		WorkflowPath:       filepath.Join(runDir, "workflow.json"),
-		EventsPath:         filepath.Join(runDir, "events.jsonl"),
-		CheckpointPath:     filepath.Join(runDir, "checkpoint.json"),
-		CheckpointTempPath: filepath.Join(runDir, "checkpoint.json.tmp"),
-		ArtifactsPath:      filepath.Join(runDir, "artifacts.json"),
-		LocksDir:           filepath.Join(runDir, "locks"),
+		WorkflowPath:       filepath.Join(runDir, WorkflowFileName),
+		EventsPath:         filepath.Join(runDir, EventsFileName),
+		CheckpointPath:     filepath.Join(runDir, CheckpointFileName),
+		CheckpointTempPath: filepath.Join(runDir, CheckpointFileName+tempFileSuffix),
+		ArtifactsPath:      filepath.Join(runDir, ArtifactsFileName),
+		LocksDir:           filepath.Join(runDir, LocksDirName),
 	}
 }
 
+// Open opens (creating if necessary) the run layout for runID under baseDir
+// and primes the sequence counter from the persisted event log.
 func Open(baseDir, runID string) (*Store, error) {
-	if strings.TrimSpace(runID) == "" {
-		return nil, newError(ErrorCodePath, "run id is required")
-	}
-
-	layout := LayoutForRun(baseDir, runID)
-	if err := ensureLayout(layout); err != nil {
-		return nil, err
-	}
-
-	store := &Store{layout: layout}
-
-	events, err := store.ReadEvents()
-	if err != nil {
-		return nil, err
-	}
-
-	if len(events) > 0 {
-		store.lastSequence = events[len(events)-1].Sequence
-	}
-
-	return store, nil
+	return openWithLayoutCheck(baseDir, runID, ensureLayout)
 }
 
+// OpenExisting opens the run layout for runID but fails when any expected
+// layout entry is missing, so commands that resume or inspect a run never
+// silently create an empty one.
 func OpenExisting(baseDir, runID string) (*Store, error) {
+	return openWithLayoutCheck(baseDir, runID, validateExistingLayout)
+}
+
+// openWithLayoutCheck is the shared open path: validate the run id, let
+// checkLayout either create or verify the on-disk layout, then prime
+// lastSequence from the persisted events (the file is the source of truth).
+func openWithLayoutCheck(baseDir, runID string, checkLayout func(Layout) error) (*Store, error) {
 	if strings.TrimSpace(runID) == "" {
 		return nil, newError(ErrorCodePath, "run id is required")
 	}
 
 	layout := LayoutForRun(baseDir, runID)
-	if err := validateExistingLayout(layout); err != nil {
+	if err := checkLayout(layout); err != nil {
 		return nil, err
 	}
 
@@ -184,7 +198,7 @@ func writeAtomicJSON(path string, value any, code ErrorCode) (err error) {
 	data = append(data, '\n')
 	dir := filepath.Dir(path)
 	base := filepath.Base(path)
-	tempPath := filepath.Join(dir, base+".tmp")
+	tempPath := filepath.Join(dir, base+tempFileSuffix)
 
 	file, err := os.OpenFile(tempPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, persistedFileMode)
 	if err != nil {
@@ -192,6 +206,7 @@ func writeAtomicJSON(path string, value any, code ErrorCode) (err error) {
 	}
 
 	closed := false
+
 	defer func() {
 		if closed {
 			return

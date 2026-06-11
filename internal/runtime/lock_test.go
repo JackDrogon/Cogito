@@ -22,7 +22,7 @@ func TestRepoLockSingleRunPolicy(t *testing.T) {
 		},
 	})
 
-	lock1, err := manager1.Acquire(AcquireOptions{
+	lock1, err := manager1.Acquire(t.Context(), AcquireOptions{
 		RunID:         "run-1",
 		RepoPath:      fixture.repoDir,
 		RunsRoot:      fixture.runsRoot,
@@ -44,7 +44,7 @@ func TestRepoLockSingleRunPolicy(t *testing.T) {
 		},
 	})
 
-	_, err = manager2.Acquire(AcquireOptions{
+	_, err = manager2.Acquire(t.Context(), AcquireOptions{
 		RunID:         "run-2",
 		RepoPath:      fixture.repoDir,
 		RunsRoot:      fixture.runsRoot,
@@ -86,7 +86,7 @@ func TestStaleLockRecovery(t *testing.T) {
 		ProcessRunning: func(pid int) bool {
 			return pid == 111
 		},
-	}).Acquire(AcquireOptions{
+	}).Acquire(t.Context(), AcquireOptions{
 		RunID:         "run-stale",
 		RepoPath:      fixture.repoDir,
 		RunsRoot:      fixture.runsRoot,
@@ -105,7 +105,7 @@ func TestStaleLockRecovery(t *testing.T) {
 		},
 	})
 
-	lock2, err := manager2.Acquire(AcquireOptions{
+	lock2, err := manager2.Acquire(t.Context(), AcquireOptions{
 		RunID:         "run-recovered",
 		RepoPath:      fixture.repoDir,
 		RunsRoot:      fixture.runsRoot,
@@ -149,7 +149,7 @@ func TestDirtyWorktreeRejected(t *testing.T) {
 		},
 	})
 
-	_, err := manager.Acquire(AcquireOptions{
+	_, err := manager.Acquire(t.Context(), AcquireOptions{
 		RunID:         "run-dirty",
 		RepoPath:      fixture.repoDir,
 		RunsRoot:      fixture.runsRoot,
@@ -170,7 +170,7 @@ func TestDirtyWorktreeRejected(t *testing.T) {
 
 	t.Log("dirty worktree")
 
-	lock, err := manager.Acquire(AcquireOptions{
+	lock, err := manager.Acquire(t.Context(), AcquireOptions{
 		RunID:         "run-dirty-override",
 		RepoPath:      fixture.repoDir,
 		RunsRoot:      fixture.runsRoot,
@@ -205,7 +205,7 @@ func TestAcquireNonGitDirectorySucceeds(t *testing.T) {
 		},
 	})
 
-	lock, err := manager.Acquire(AcquireOptions{
+	lock, err := manager.Acquire(t.Context(), AcquireOptions{
 		RunID:         "run-non-git",
 		RepoPath:      plainDir,
 		RunsRoot:      filepath.Join(baseDir, "ref", "tmp", "runs"),
@@ -241,7 +241,7 @@ func TestAcquireNonexistentRepoPathFails(t *testing.T) {
 		},
 	})
 
-	_, err := manager.Acquire(AcquireOptions{
+	_, err := manager.Acquire(t.Context(), AcquireOptions{
 		RunID:         "run-missing-repo",
 		RepoPath:      filepath.Join(baseDir, "does-not-exist"),
 		RunsRoot:      filepath.Join(baseDir, "ref", "tmp", "runs"),

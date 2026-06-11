@@ -68,7 +68,7 @@ func recoveryStep(t *testing.T, engine *Engine) workflow.CompiledStep {
 func TestRecoveryPromptOverrideNonRepo(t *testing.T) {
 	engine := newRecoveryEngine(t, t.TempDir())
 
-	got := engine.recoveryPromptOverride(recoveryStep(t, engine), StepSnapshot{})
+	got := engine.recoveryPromptOverride(t.Context(), recoveryStep(t, engine), StepSnapshot{})
 	if got != "" {
 		t.Fatalf("recoveryPromptOverride() = %q, want empty for non-repo", got)
 	}
@@ -80,7 +80,7 @@ func TestRecoveryPromptOverrideCleanRepo(t *testing.T) {
 	root, _ := initGitRepo(t)
 	engine := newRecoveryEngine(t, root)
 
-	got := engine.recoveryPromptOverride(recoveryStep(t, engine), StepSnapshot{})
+	got := engine.recoveryPromptOverride(t.Context(), recoveryStep(t, engine), StepSnapshot{})
 	if got != "" {
 		t.Fatalf("recoveryPromptOverride() = %q, want empty for clean repo", got)
 	}
@@ -96,7 +96,7 @@ func TestRecoveryPromptOverrideDirtyRepo(t *testing.T) {
 
 	engine := newRecoveryEngine(t, root)
 
-	got := engine.recoveryPromptOverride(recoveryStep(t, engine), StepSnapshot{})
+	got := engine.recoveryPromptOverride(t.Context(), recoveryStep(t, engine), StepSnapshot{})
 	if !strings.Contains(got, dirtyWorktreeMarker) {
 		t.Fatalf("recoveryPromptOverride() = %q, want dirty-worktree recovery prompt", got)
 	}
@@ -115,7 +115,7 @@ func TestRecoveryPromptOverrideMissingCommits(t *testing.T) {
 		t.Fatalf("Marshal() error = %v", err)
 	}
 
-	got := engine.recoveryPromptOverride(recoveryStep(t, engine), StepSnapshot{StructuredOutput: structured})
+	got := engine.recoveryPromptOverride(t.Context(), recoveryStep(t, engine), StepSnapshot{StructuredOutput: structured})
 	if !strings.Contains(got, commitRecoveryMarker) {
 		t.Fatalf("recoveryPromptOverride() = %q, want commit-recovery prompt", got)
 	}
@@ -135,7 +135,7 @@ func TestRecoveryPromptOverrideValidCommitsClean(t *testing.T) {
 		t.Fatalf("Marshal() error = %v", err)
 	}
 
-	got := engine.recoveryPromptOverride(recoveryStep(t, engine), StepSnapshot{StructuredOutput: structured})
+	got := engine.recoveryPromptOverride(t.Context(), recoveryStep(t, engine), StepSnapshot{StructuredOutput: structured})
 	if got != "" {
 		t.Fatalf("recoveryPromptOverride() = %q, want empty when reported commits resolve", got)
 	}

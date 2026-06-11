@@ -6,22 +6,37 @@ import (
 	"github.com/JackDrogon/Cogito/internal/workflow"
 )
 
+// StepDriverFactory constructs a stepDriver for a given compiled step.
+// Implementations receive the Engine so they can access shared dependencies
+// such as the adapter lookup and command runner.
 type StepDriverFactory interface {
 	Build(engine *Engine, step workflow.CompiledStep) (stepDriver, error)
 }
 
+// StepDriverFactoryFunc is a function adapter that implements StepDriverFactory,
+// allowing plain functions to be used wherever a StepDriverFactory is expected.
 type StepDriverFactoryFunc func(engine *Engine, step workflow.CompiledStep) (stepDriver, error)
 
 func (f StepDriverFactoryFunc) Build(engine *Engine, step workflow.CompiledStep) (stepDriver, error) {
 	return f(engine, step)
 }
 
+// builtinStepKindCount sizes the factory map for the step kinds registered by
+// NewStepDriverRegistry (agent, command, approval, verify, commit_check).
+const builtinStepKindCount = 5
+
+// StepDriverRegistry maps workflow step kinds to their StepDriverFactory
+// implementations. The engine calls Build to obtain a driver for each step
+// before execution begins.
 type StepDriverRegistry struct {
 	factories map[workflow.StepKind]StepDriverFactory
 }
 
+// NewStepDriverRegistry constructs a StepDriverRegistry pre-populated with
+// factories for all built-in step kinds: agent, command, approval, verify,
+// and commit_check.
 func NewStepDriverRegistry() *StepDriverRegistry {
-	registry := &StepDriverRegistry{factories: make(map[workflow.StepKind]StepDriverFactory, 5)}
+	registry := &StepDriverRegistry{factories: make(map[workflow.StepKind]StepDriverFactory, builtinStepKindCount)}
 
 	registry.Register(
 		workflow.StepKindAgent,
@@ -53,7 +68,7 @@ func NewStepDriverRegistry() *StepDriverRegistry {
 	registry.Register(
 		workflow.StepKindApproval,
 		StepDriverFactoryFunc(func(engine *Engine, _ workflow.CompiledStep) (stepDriver, error) {
-			return approvalDriver{runID: engine.runID, ids: engine.ids}, nil
+			return approvalDriver{runID: engine.runID, ids: engine.idGen}, nil
 		}),
 	)
 
@@ -74,6 +89,8 @@ func NewStepDriverRegistry() *StepDriverRegistry {
 	return registry
 }
 
+// Register associates a StepDriverFactory with a step kind. A nil receiver is
+// a no-op, allowing safe use before the registry is fully initialized.
 func (r *StepDriverRegistry) Register(kind workflow.StepKind, factory StepDriverFactory) {
 	if r == nil {
 		return
@@ -82,6 +99,9 @@ func (r *StepDriverRegistry) Register(kind workflow.StepKind, factory StepDriver
 	r.factories[kind] = factory
 }
 
+// Build looks up the factory for step.Kind and delegates to it. Returns an
+// ErrorCodeConfig error when the registry is nil, the kind is unregistered,
+// or the registered factory is nil.
 func (r *StepDriverRegistry) Build(engine *Engine, step workflow.CompiledStep) (stepDriver, error) {
 	if r == nil {
 		return nil, newError(ErrorCodeConfig, "step driver registry is required")

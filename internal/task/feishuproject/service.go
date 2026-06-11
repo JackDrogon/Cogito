@@ -48,17 +48,17 @@ func (s *Service) Pull(ctx context.Context) (PullResult, error) {
 		return PullResult{}, err
 	}
 
-	typeCtx, err := s.resolveTypeContext(ctx)
+	fieldKeys, err := s.resolveTypeContext(ctx)
 	if err != nil {
 		return PullResult{}, err
 	}
 
-	items, err := s.fetchWorkItems(ctx, typeCtx)
+	items, err := s.fetchWorkItems(ctx, fieldKeys)
 	if err != nil {
 		return PullResult{}, err
 	}
 
-	stories := mapStories(items, typeCtx, s.cfg.ProjectKey)
+	stories := mapStories(items, fieldKeys, s.cfg.ProjectKey)
 	applyRepoPaths(stories, s.cfg.Repos)
 	workflowErrs := s.attachWorkflows(ctx, stories)
 
@@ -93,6 +93,7 @@ func (s *Service) Persist(result PullResult) error {
 	if err := WriteSnapshot(s.cfg.Poll.OutputFile, result.Snapshot); err != nil {
 		return err
 	}
+
 	if err := SaveState(s.cfg.Poll.StateFile, result.State); err != nil {
 		return err
 	}
@@ -132,9 +133,11 @@ func (s *Service) tick(ctx context.Context, observer WatchObserver) error {
 	if err != nil {
 		return err
 	}
+
 	if err := s.Persist(result); err != nil {
 		return err
 	}
+
 	observer.OnTick(result)
 
 	return nil
@@ -184,7 +187,7 @@ func WriteSummary(out io.Writer, result PullResult) {
 	)
 }
 
-func (s *Service) resolveTypeContext(ctx context.Context) (typeContext, error) {
+func (s *Service) resolveTypeContext(ctx context.Context) (workItemFieldKeys, error) {
 	req := workitem.NewQueryProjectFieldsReqBuilder().
 		ProjectKey(s.cfg.ProjectKey).
 		WorkItemTypeKey(s.cfg.WorkItemTypeKey).
@@ -192,10 +195,11 @@ func (s *Service) resolveTypeContext(ctx context.Context) (typeContext, error) {
 
 	resp, err := s.client.WorkItem.QueryProjectFields(ctx, req, requestOptions(s.cfg)...)
 	if err != nil {
-		return typeContext{}, fmt.Errorf("feishuproject: query project fields: %w", err)
+		return workItemFieldKeys{}, fmt.Errorf("feishuproject: query project fields: %w", err)
 	}
+
 	if !resp.Success() {
-		return typeContext{}, fmt.Errorf(
+		return workItemFieldKeys{}, fmt.Errorf(
 			"feishuproject: query project fields failed: code=%d request_id=%s msg=%s",
 			resp.Code(), resp.RequestId(), resp.ErrMsg,
 		)
@@ -204,7 +208,7 @@ func (s *Service) resolveTypeContext(ctx context.Context) (typeContext, error) {
 	return detectTypeContext(s.cfg.WorkItemTypeKey, resp.Data), nil
 }
 
-func (s *Service) fetchWorkItems(ctx context.Context, typeCtx typeContext) ([]workitem.WorkItemInfo, error) {
+func (s *Service) fetchWorkItems(ctx context.Context, fieldKeys workItemFieldKeys) ([]workitem.WorkItemInfo, error) {
 	pageNum := int64(1)
 	needUserDetail := true
 	needMultiText := true
@@ -213,7 +217,7 @@ func (s *Service) fetchWorkItems(ctx context.Context, typeCtx typeContext) ([]wo
 	for {
 		req := workitem.NewFilterReqBuilder().
 			ProjectKey(s.cfg.ProjectKey).
-			WorkItemTypeKeys([]string{typeCtx.TypeKey}).
+			WorkItemTypeKeys([]string{fieldKeys.TypeKey}).
 			PageNum(pageNum).
 			PageSize(s.cfg.PageSize).
 			Expand(&workitem.Expand{
@@ -226,6 +230,7 @@ func (s *Service) fetchWorkItems(ctx context.Context, typeCtx typeContext) ([]wo
 		if err != nil {
 			return nil, fmt.Errorf("feishuproject: filter work items page %d: %w", pageNum, err)
 		}
+
 		if !resp.Success() {
 			return nil, fmt.Errorf(
 				"feishuproject: filter work items failed: code=%d request_id=%s msg=%s",
@@ -234,31 +239,46 @@ func (s *Service) fetchWorkItems(ctx context.Context, typeCtx typeContext) ([]wo
 		}
 
 		items = append(items, resp.Data...)
-		if !morePagesAvailable(resp, len(items), len(resp.Data), s.cfg.PageSize) {
+		if !morePagesAvailable(resp, pageProgress{
+			pageItemCount: len(resp.Data),
+			accumulated:   len(items),
+			pageSize:      s.cfg.PageSize,
+		}) {
 			return items, nil
 		}
+
 		pageNum++
 	}
+}
+
+// pageProgress captures one fetch round of the work-item pagination loop:
+// how many items the current page returned, how many have been accumulated in
+// total, and the configured page size.
+type pageProgress struct {
+	pageItemCount int
+	accumulated   int
+	pageSize      int64
 }
 
 // morePagesAvailable centralises the pagination-stop logic so the loop in
 // fetchWorkItems stays readable. The SDK may or may not populate Pagination
 // depending on the project, so both paths are handled.
-func morePagesAvailable(resp *workitem.FilterResp, accumulated, page int, pageSize int64) bool {
-	if page == 0 {
+func morePagesAvailable(resp *workitem.FilterResp, progress pageProgress) bool {
+	if progress.pageItemCount == 0 {
 		return false
 	}
+
 	if resp.Pagination == nil || resp.Pagination.Total == nil {
-		return int64(page) >= pageSize
+		return int64(progress.pageItemCount) >= progress.pageSize
 	}
 
-	return int64(accumulated) < *resp.Pagination.Total
+	return int64(progress.accumulated) < *resp.Pagination.Total
 }
 
-func mapStories(items []workitem.WorkItemInfo, typeCtx typeContext, projectKey string) []Story {
+func mapStories(items []workitem.WorkItemInfo, fieldKeys workItemFieldKeys, projectKey string) []Story {
 	stories := make([]Story, 0, len(items))
-	for _, item := range items {
-		stories = append(stories, mapStory(item, typeCtx, projectKey))
+	for i := range items {
+		stories = append(stories, mapStory(items[i], fieldKeys, projectKey))
 	}
 
 	return stories
@@ -272,36 +292,39 @@ func applyRepoPaths(stories []Story, repos map[string]string) {
 	if len(repos) == 0 {
 		return
 	}
+
 	for index := range stories {
 		path, ok := repos[stories[index].Repo]
 		if !ok {
 			continue
 		}
+
 		stories[index].RepoPath = path
 	}
 }
 
-func mapStory(item workitem.WorkItemInfo, typeCtx typeContext, projectKey string) Story {
+func mapStory(item workitem.WorkItemInfo, fieldKeys workItemFieldKeys, projectKey string) Story {
 	story := Story{
 		ID:              derefInt64(item.ID),
 		Name:            derefString(item.Name),
-		WorkItemTypeKey: firstNonEmpty(derefString(item.WorkItemTypeKey), typeCtx.TypeKey),
+		WorkItemTypeKey: firstNonEmpty(derefString(item.WorkItemTypeKey), fieldKeys.TypeKey),
 		ProjectKey:      firstNonEmpty(derefString(item.ProjectKey), projectKey),
 		Status:          extractStatus(item),
 		Priority:        extractPriority(item),
-		Owners:          extractOwnerNames(item, typeCtx.OwnerFieldKey),
+		Owners:          extractOwnerNames(item, fieldKeys.OwnerFieldKey),
 		Creator:         extractCreatorName(item),
 		BusinessLineID:  extractBusinessID(item),
-		RequirementType: extractFirstString(item, typeCtx.RequirementTypeKey),
-		Repo:            extractFirstString(item, typeCtx.RepoFieldKey),
+		RequirementType: extractFirstString(item, fieldKeys.RequirementTypeKey),
+		Repo:            extractFirstString(item, fieldKeys.RepoFieldKey),
 		Description:     extractDescription(item),
 		CreatedAt:       derefInt64(item.CreatedAt),
 		UpdatedAt:       derefInt64(item.UpdatedAt),
 	}
-	if effort, ok := extractNumber(item, typeCtx.PlannedEffortKey); ok {
+	if effort, ok := extractNumber(item, fieldKeys.PlannedEffortKey); ok {
 		story.PlannedEffort = &effort
 	}
-	if point, ok := extractNumber(item, typeCtx.EstimatePointKey); ok {
+
+	if point, ok := extractNumber(item, fieldKeys.EstimatePointKey); ok {
 		story.StoryPoint = &point
 	}
 

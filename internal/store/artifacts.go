@@ -5,10 +5,22 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+)
+
+// Artifact path validation failures. Sentinel errors (rather than ad hoc
+// strings) keep them matchable with errors.Is while still flowing through the
+// store.Error wrapper that sanitizeArtifact applies.
+var (
+	errArtifactPathRequired = errors.New("artifact path is required")
+	errArtifactPathAbsolute = errors.New("artifact path must be relative")
+	errArtifactPathEscapes  = errors.New("path escapes run directory")
+	errArtifactMissing      = errors.New("artifact does not exist")
+	errArtifactIsDirectory  = errors.New("artifact path must reference a file")
 )
 
 var secretSummaryPatterns = []*regexp.Regexp{
@@ -72,7 +84,7 @@ func sanitizeCheckpoint(checkpoint *Checkpoint) *Checkpoint {
 
 	clone.Steps = make(map[string]StepCheckpoint, len(checkpoint.Steps))
 
-	for stepID, step := range checkpoint.Steps {
+	for stepID, step := range checkpoint.Steps { //nolint:gocritic // map values cannot be addressed; copy is inherent
 		step.Summary = redactSummary(step.Summary)
 		clone.Steps[stepID] = step
 	}
@@ -85,16 +97,16 @@ func sanitizeArtifactPath(runDir, artifactPath string) (*sanitizedArtifactLocati
 
 	artifactPath = strings.TrimSpace(artifactPath)
 	if artifactPath == "" {
-		return nil, artifactPathError("artifact path is required")
+		return nil, errArtifactPathRequired
 	}
 
 	if filepath.IsAbs(artifactPath) {
-		return nil, artifactPathError("artifact path must be relative")
+		return nil, errArtifactPathAbsolute
 	}
 
 	clean := filepath.Clean(artifactPath)
 	if clean == "." {
-		return nil, artifactPathError("artifact path is required")
+		return nil, errArtifactPathRequired
 	}
 
 	fullPath := filepath.Join(runDir, clean)
@@ -105,34 +117,42 @@ func sanitizeArtifactPath(runDir, artifactPath string) (*sanitizedArtifactLocati
 	}
 
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return nil, artifactPathError("path escapes run directory")
+		return nil, errArtifactPathEscapes
 	}
 
 	info, err := os.Stat(fullPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, artifactPathError("artifact does not exist")
+			return nil, errArtifactMissing
 		}
 
-		return nil, err
+		return nil, fmt.Errorf("stat artifact %q: %w", clean, err)
 	}
 
 	if info.IsDir() {
-		return nil, artifactPathError("artifact path must reference a file")
+		return nil, errArtifactIsDirectory
 	}
 
 	return &sanitizedArtifactLocation{path: filepath.ToSlash(rel), fullPath: fullPath}, nil
 }
 
+// digestFile streams the file through SHA-256 instead of slurping it into
+// memory; provider logs can be large.
 func digestFile(path string) (string, error) {
-	data, err := os.ReadFile(filepath.Clean(path))
+	file, err := os.Open(filepath.Clean(path))
 	if err != nil {
 		return "", err
 	}
 
-	sum := sha256.Sum256(data)
+	// Read-only close: nothing to flush, error carries no signal.
+	defer func() { _ = file.Close() }()
 
-	return hex.EncodeToString(sum[:]), nil
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", err
+	}
+
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func redactSummary(summary string) string {

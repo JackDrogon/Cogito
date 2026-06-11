@@ -82,6 +82,7 @@ func bindVerifyStep(_ map[string]string, raw rawStep, step *StepSpec) error {
 	}
 
 	step.Verify = &VerifyStepSpec{Commands: commands, From: from}
+
 	return nil
 }
 
@@ -97,16 +98,19 @@ func bindCommitCheckStep(values map[string]string, raw rawStep, step *StepSpec) 
 	if raw.RequireSome != nil {
 		spec.RequireSome = *raw.RequireSome
 	}
+
 	if raw.AllowDirty != nil {
 		spec.AllowDirty = *raw.AllowDirty
 	}
 
 	step.CommitCheck = spec
+
 	return nil
 }
 
 func trimNonEmpty(values []string) []string {
 	trimmed := make([]string, 0, len(values))
+
 	for _, value := range values {
 		if v := strings.TrimSpace(value); v != "" {
 			trimmed = append(trimmed, v)

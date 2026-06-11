@@ -184,9 +184,11 @@ Built-in adapters are registered for:
 - `claude`
 - `opencode`
 
-These adapters currently wrap provider CLIs and expose machine-readable logs. The
-SPI also models interrupt/resume capabilities, but provider-native support for
-those flows is not fully implemented in the built-in adapters yet.
+These adapters wrap provider CLIs and expose machine-readable logs. All three
+built-in adapters advertise interrupt and resume capabilities: interrupt sends
+SIGTERM/SIGKILL to the provider process group, and resume re-invokes the
+provider CLI with its native session-continuation flag (`--resume` for claude,
+`resume` for codex, `--session` for opencode).
 
 ## Documentation
 

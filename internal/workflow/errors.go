@@ -10,6 +10,9 @@ const (
 	ErrorCodeSchema   ErrorCode = "schema"
 	ErrorCodeSemantic ErrorCode = "semantic"
 	ErrorCodeVersion  ErrorCode = "version"
+	// ErrorCodePersist covers resolved-workflow file IO (save/load), as
+	// opposed to schema or parse failures of the content itself.
+	ErrorCodePersist ErrorCode = "persist"
 )
 
 // Error provides stable error codes and messages for workflow validation.

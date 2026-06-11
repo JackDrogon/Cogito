@@ -24,32 +24,32 @@ func (workflowValidateCommand) Run(ctx context.Context, args []string, stdout io
 		return err
 	}
 
-	if parsed == nil {
-		return nil
-	}
-
 	remainingArgs := parsed.remainingArgs
 	if len(remainingArgs) != 1 {
 		return errors.New("workflow.validate: expects exactly 1 file argument")
 	}
 
-	if err := appsvc.ValidateWorkflow(ctx, ValidateWorkflowInput{WorkflowPath: remainingArgs[0]}); err != nil {
+	if err := appService.ValidateWorkflow(ctx, ValidateWorkflowInput{WorkflowPath: remainingArgs[0]}); err != nil {
 		return err
 	}
 
 	return presenter.PresentWorkflowValid(stdout)
 }
 
+// runCommandName is the shared subcommand token for `cogito run` and
+// `cogito agents run`.
+const runCommandName = "run"
+
 type workflowRunCommand struct{}
 
-func (workflowRunCommand) Name() string    { return "run" }
+func (workflowRunCommand) Name() string    { return runCommandName }
 func (workflowRunCommand) Summary() string { return "Execute a workflow" }
 func (workflowRunCommand) Run(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) > 0 && isSubcommandToken(args[0]) {
 		return runWorkflowSubcommand(ctx, args[0], args[1:], stdout)
 	}
 
-	parsed, err := parseSharedFlags("run", args, stdout)
+	parsed, err := parseSharedFlags(runCommandName, args, stdout)
 	if isHelpRequested(err) {
 		return nil
 	}
@@ -58,28 +58,15 @@ func (workflowRunCommand) Run(ctx context.Context, args []string, stdout io.Writ
 		return err
 	}
 
-	if parsed == nil {
-		return nil
-	}
-
 	flags := parsed.flags
 	remainingArgs := parsed.remainingArgs
 
-	workflowPath, err := requireExactlyOneArg("run", "file", remainingArgs)
-	if err != nil || workflowPath == "" {
-		return err
-	}
-
-	result, err := appsvc.RunWorkflow(ctx, RunWorkflowInput{WorkflowPath: workflowPath, Flags: flags})
-	if verboseErr := presentVerboseRun(stdout, flags, result, err); verboseErr != nil {
-		return verboseErr
-	}
-
+	workflowPath, err := requireExactlyOneArg(runCommandName, "file", remainingArgs)
 	if err != nil {
 		return err
 	}
 
-	return presenter.PresentRunWorkflow(stdout, result)
+	return executeRunWorkflow(ctx, runWorkflowAction{workflowPath: workflowPath, flags: flags, stdout: stdout})
 }
 
 type statusCommand struct{}
@@ -96,7 +83,7 @@ func (statusCommand) Run(ctx context.Context, args []string, stdout io.Writer) e
 		return nil
 	}
 
-	result, err := appsvc.StatusRun(ctx, StatusRunInput{StateDir: request.StateDir})
+	result, err := appService.StatusRun(ctx, StatusRunInput{StateDir: request.StateDir})
 	if err != nil {
 		return err
 	}
@@ -118,7 +105,7 @@ func (resumeCommand) Run(ctx context.Context, args []string, stdout io.Writer) e
 		return err
 	}
 
-	result, err := appsvc.ResumeRun(ctx, ResumeRunInput{Flags: flags})
+	result, err := appService.ResumeRun(ctx, ResumeRunInput{Flags: flags})
 	if err != nil {
 		return err
 	}
@@ -144,7 +131,7 @@ func (replayCommand) Run(ctx context.Context, args []string, stdout io.Writer) e
 		return nil
 	}
 
-	result, err := appsvc.ReplayRun(ctx, ReplayRunInput{EventsPath: request.EventsPath})
+	result, err := appService.ReplayRun(ctx, ReplayRunInput{EventsPath: request.EventsPath})
 	if err != nil {
 		return err
 	}
@@ -166,7 +153,7 @@ func (cancelCommand) Run(ctx context.Context, args []string, stdout io.Writer) e
 		return err
 	}
 
-	result, err := appsvc.CancelRun(ctx, CancelRunInput{StateDir: flags.stateDir})
+	result, err := appService.CancelRun(ctx, CancelRunInput{StateDir: flags.stateDir})
 	if err != nil {
 		return err
 	}
@@ -188,7 +175,7 @@ func (approveCommand) Run(ctx context.Context, args []string, stdout io.Writer) 
 		return err
 	}
 
-	result, err := appsvc.ApproveRun(ctx, ApproveRunInput{Flags: flags})
+	result, err := appService.ApproveRun(ctx, ApproveRunInput{Flags: flags})
 	if err != nil {
 		return err
 	}
@@ -202,7 +189,7 @@ func parseSharedFlagsWithoutArgs(commandName string, args []string, stdout io.Wr
 		return nil, errHelpRequested
 	}
 
-	if err != nil || parsed == nil {
+	if err != nil {
 		return nil, err
 	}
 
@@ -217,10 +204,6 @@ func parseSharedFlagsWithoutArgs(commandName string, args []string, stdout io.Wr
 }
 
 func requireExactlyOneArg(commandName, argLabel string, args []string) (string, error) {
-	if args == nil {
-		return "", nil
-	}
-
 	if len(args) != 1 {
 		return "", fmt.Errorf("%s: expects exactly 1 %s argument", commandName, argLabel)
 	}
@@ -255,7 +238,7 @@ func parseReplayRequest(args []string, stdout io.Writer) (*replayInputRequest, e
 		return nil, errHelpRequested
 	}
 
-	if err != nil || parsed == nil {
+	if err != nil {
 		return nil, err
 	}
 
@@ -270,17 +253,13 @@ func parseReplayRequest(args []string, stdout io.Writer) (*replayInputRequest, e
 }
 
 func runWorkflowSubcommand(ctx context.Context, workflowPath string, args []string, stdout io.Writer) error {
-	parsed, err := parseSharedFlags("run", args, stdout)
+	parsed, err := parseSharedFlags(runCommandName, args, stdout)
 	if isHelpRequested(err) {
 		return nil
 	}
 
 	if err != nil {
 		return err
-	}
-
-	if parsed == nil {
-		return nil
 	}
 
 	flags := parsed.flags
@@ -290,8 +269,23 @@ func runWorkflowSubcommand(ctx context.Context, workflowPath string, args []stri
 		return fmt.Errorf("run does not accept extra positional arguments: %v", remainingArgs)
 	}
 
-	result, err := appsvc.RunWorkflow(ctx, RunWorkflowInput{WorkflowPath: workflowPath, Flags: flags})
-	if verboseErr := presentVerboseRun(stdout, flags, result, err); verboseErr != nil {
+	return executeRunWorkflow(ctx, runWorkflowAction{workflowPath: workflowPath, flags: flags, stdout: stdout})
+}
+
+// runWorkflowAction bundles the resolved inputs of a `cogito run` invocation;
+// both argument shapes (positional-first and flags-only) funnel into
+// executeRunWorkflow with it.
+type runWorkflowAction struct {
+	workflowPath string
+	flags        *sharedFlags
+	stdout       io.Writer
+}
+
+// executeRunWorkflow is the shared tail of every `cogito run` spelling:
+// execute, replay verbose events when asked, then present the outcome.
+func executeRunWorkflow(ctx context.Context, action runWorkflowAction) error {
+	result, err := appService.RunWorkflow(ctx, RunWorkflowInput{WorkflowPath: action.workflowPath, Flags: action.flags})
+	if verboseErr := presentVerboseRun(action.stdout, action.flags, result, err); verboseErr != nil {
 		return verboseErr
 	}
 
@@ -299,7 +293,7 @@ func runWorkflowSubcommand(ctx context.Context, workflowPath string, args []stri
 		return err
 	}
 
-	return presenter.PresentRunWorkflow(stdout, result)
+	return presenter.PresentRunWorkflow(action.stdout, result)
 }
 
 func presentVerboseRun(stdout io.Writer, flags *sharedFlags, result RunWorkflowOutput, runErr error) error {
@@ -307,26 +301,28 @@ func presentVerboseRun(stdout io.Writer, flags *sharedFlags, result RunWorkflowO
 		return nil
 	}
 
-	if runErr != nil && flags.stateDir != "" {
+	// On failure the result may not carry a state dir, so fall back to the
+	// user-provided one; without it there is no event log to replay.
+	if runErr != nil {
+		if flags.stateDir == "" {
+			return nil
+		}
+
 		return printVerboseEvents(stdout, flags.stateDir)
 	}
 
-	if runErr == nil {
-		return printVerboseEvents(stdout, result.StateDir)
-	}
-
-	return nil
+	return printVerboseEvents(stdout, result.StateDir)
 }
 
 func printVerboseEvents(stdout io.Writer, stateDir string) error {
-	events, err := store.ReadEventsFile(filepath.Join(stateDir, "events.jsonl"))
+	events, err := store.ReadEventsFile(filepath.Join(stateDir, store.EventsFileName))
 	if err != nil {
 		return err
 	}
 
 	logger := newVerboseLogger(true, stdout)
-	for _, event := range events {
-		logger.logEvent(event)
+	for i := range events {
+		logger.logEvent(events[i])
 	}
 
 	return nil

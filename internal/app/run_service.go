@@ -17,7 +17,7 @@ type existingRunSession struct {
 	engine   *runtime.Engine
 }
 
-type runEngineResult struct {
+type engineBuildResult struct {
 	engine *runtime.Engine
 	wiring runtimeWiring
 }
@@ -30,7 +30,7 @@ type newRunEngineInput struct {
 	ApprovalPolicy runtime.ApprovalPolicy
 }
 
-func (runService) newRunEngine(input newRunEngineInput) (*runEngineResult, error) {
+func (runService) newRunEngine(input newRunEngineInput) (*engineBuildResult, error) {
 	if input.RunStore == nil {
 		return nil, errors.New("runService.newRunEngine: run store is required")
 	}
@@ -56,7 +56,7 @@ func (runService) newRunEngine(input newRunEngineInput) (*runEngineResult, error
 		return nil, err
 	}
 
-	return &runEngineResult{engine: engine, wiring: wiring}, nil
+	return &engineBuildResult{engine: engine, wiring: wiring}, nil
 }
 
 func (s runService) openExistingRunSession(stateDir string, flags *sharedFlags) (existingRunSession, error) {

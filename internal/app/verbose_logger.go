@@ -57,6 +57,7 @@ func (v *verboseLogger) logEvent(event store.Event) {
 		store.EventRunPaused,
 		store.EventRunCanceled,
 		store.EventStepRetried,
+		store.EventStepInterrupted,
 		store.EventApprovalRequested,
 		store.EventApprovalDenied,
 		store.EventApprovalTimedOut,

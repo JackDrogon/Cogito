@@ -87,7 +87,7 @@ func stepLogDir(root, stepID string) string {
 		return ""
 	}
 
-	return filepath.Join(root, "provider-logs", stepID)
+	return filepath.Join(root, providerLogsDir, stepID)
 }
 
 func builtinAdapterResolver() adapterResolver {

@@ -2,6 +2,7 @@ package prompt
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -18,12 +19,9 @@ func TestParseResultBytesTakesLastMarker(t *testing.T) {
 		"trailing line",
 	}, "\n")
 
-	got, found, err := ParseResultBytes([]byte(log))
+	got, err := ParseResultBytes([]byte(log))
 	if err != nil {
 		t.Fatalf("ParseResultBytes error = %v", err)
-	}
-	if !found {
-		t.Fatal("ParseResultBytes found = false, want true")
 	}
 
 	want := AgentResult{
@@ -41,17 +39,14 @@ func TestParseResultBytesTakesLastMarker(t *testing.T) {
 
 // TestStructuredOutputFromText is v3.2 N1: the helper extracts and re-marshals
 // the AgentResult from normalized assistant text, distinguishing "no marker"
-// (nil/false/nil) from "corrupt marker" (nil/false/err).
+// (ErrNoAgentResult) from "corrupt marker" (decode error).
 func TestStructuredOutputFromText(t *testing.T) {
 	t.Run("marker found", func(t *testing.T) {
 		text := "Work complete.\n" + ResultPrefix + ` {"commits":["abc1234"],"summary":"done"}`
 
-		raw, found, err := StructuredOutputFromText(text)
+		raw, err := StructuredOutputFromText(text)
 		if err != nil {
 			t.Fatalf("StructuredOutputFromText error = %v", err)
-		}
-		if !found {
-			t.Fatal("StructuredOutputFromText found = false, want true")
 		}
 
 		var got AgentResult
@@ -64,30 +59,30 @@ func TestStructuredOutputFromText(t *testing.T) {
 	})
 
 	t.Run("no marker", func(t *testing.T) {
-		raw, found, err := StructuredOutputFromText("just normalized prose, no marker")
-		if err != nil || found || raw != nil {
-			t.Fatalf("StructuredOutputFromText = (%s, %v, %v), want (nil, false, nil)", string(raw), found, err)
+		raw, err := StructuredOutputFromText("just normalized prose, no marker")
+		if !errors.Is(err, ErrNoAgentResult) || raw != nil {
+			t.Fatalf("StructuredOutputFromText = (%s, %v), want (nil, ErrNoAgentResult)", string(raw), err)
 		}
 	})
 
 	t.Run("corrupt marker", func(t *testing.T) {
-		raw, found, err := StructuredOutputFromText(ResultPrefix + `{not json`)
+		raw, err := StructuredOutputFromText(ResultPrefix + `{not json`)
 		if err == nil {
 			t.Fatal("StructuredOutputFromText error = nil, want decode error")
 		}
-		if found || raw != nil {
-			t.Fatalf("StructuredOutputFromText = (%s, %v), want (nil, false) on corrupt marker", string(raw), found)
+		if errors.Is(err, ErrNoAgentResult) {
+			t.Fatalf("StructuredOutputFromText error = %v, want a decode error, not ErrNoAgentResult", err)
+		}
+		if raw != nil {
+			t.Fatalf("StructuredOutputFromText = %s, want nil on corrupt marker", string(raw))
 		}
 	})
 }
 
 func TestParseResultBytesMissingMarker(t *testing.T) {
-	got, found, err := ParseResultBytes([]byte("no result line here\njust logs\n"))
-	if err != nil {
-		t.Fatalf("ParseResultBytes error = %v", err)
-	}
-	if found {
-		t.Fatal("ParseResultBytes found = true, want false on missing marker")
+	got, err := ParseResultBytes([]byte("no result line here\njust logs\n"))
+	if !errors.Is(err, ErrNoAgentResult) {
+		t.Fatalf("ParseResultBytes error = %v, want ErrNoAgentResult on missing marker", err)
 	}
 
 	if !reflect.DeepEqual(got, AgentResult{}) {
@@ -96,17 +91,17 @@ func TestParseResultBytesMissingMarker(t *testing.T) {
 }
 
 // TestParseResultBytesInvalidJSONErrors verifies a present-but-corrupt payload
-// surfaces an error and found=false rather than being swallowed as an empty
-// result (Oracle finding #4).
+// surfaces a decode error (distinct from ErrNoAgentResult) rather than being
+// swallowed as an empty result (Oracle finding #4).
 func TestParseResultBytesInvalidJSONErrors(t *testing.T) {
 	log := ResultPrefix + `{not valid json`
 
-	got, found, err := ParseResultBytes([]byte(log))
+	got, err := ParseResultBytes([]byte(log))
 	if err == nil {
 		t.Fatal("ParseResultBytes error = nil, want decode error on invalid JSON")
 	}
-	if found {
-		t.Fatal("ParseResultBytes found = true, want false on invalid JSON")
+	if errors.Is(err, ErrNoAgentResult) {
+		t.Fatalf("ParseResultBytes error = %v, want a decode error, not ErrNoAgentResult", err)
 	}
 
 	if !reflect.DeepEqual(got, AgentResult{}) {
@@ -117,12 +112,9 @@ func TestParseResultBytesInvalidJSONErrors(t *testing.T) {
 func TestParseResultBytesEmptyArrays(t *testing.T) {
 	log := ResultPrefix + `{"completed":[],"blocked":[],"deferred":[],"toolchain_bugs":[],"commits":[],"verification":[],"summary":""}`
 
-	got, found, err := ParseResultBytes([]byte(log))
+	got, err := ParseResultBytes([]byte(log))
 	if err != nil {
 		t.Fatalf("ParseResultBytes error = %v", err)
-	}
-	if !found {
-		t.Fatal("ParseResultBytes found = false, want true")
 	}
 
 	want := AgentResult{
@@ -148,12 +140,9 @@ func TestParseResultReadsFile(t *testing.T) {
 		t.Fatalf("write log: %v", err)
 	}
 
-	got, found, err := ParseResult(logPath)
+	got, err := ParseResult(logPath)
 	if err != nil {
 		t.Fatalf("ParseResult error = %v", err)
-	}
-	if !found {
-		t.Fatal("ParseResult found = false, want true")
 	}
 
 	want := AgentResult{Commits: []string{"deadbeef"}, Summary: "ok"}
@@ -163,12 +152,9 @@ func TestParseResultReadsFile(t *testing.T) {
 }
 
 func TestParseResultMissingFileIsNotFound(t *testing.T) {
-	got, found, err := ParseResult(filepath.Join(t.TempDir(), "does-not-exist.log"))
-	if err != nil {
-		t.Fatalf("ParseResult error = %v, want nil for missing file", err)
-	}
-	if found {
-		t.Fatal("ParseResult found = true, want false for missing file")
+	got, err := ParseResult(filepath.Join(t.TempDir(), "does-not-exist.log"))
+	if !errors.Is(err, ErrNoAgentResult) {
+		t.Fatalf("ParseResult error = %v, want ErrNoAgentResult for missing file", err)
 	}
 
 	if !reflect.DeepEqual(got, AgentResult{}) {
@@ -177,12 +163,9 @@ func TestParseResultMissingFileIsNotFound(t *testing.T) {
 }
 
 func TestParseResultEmptyPathIsNotFound(t *testing.T) {
-	got, found, err := ParseResult("")
-	if err != nil {
-		t.Fatalf("ParseResult error = %v", err)
-	}
-	if found {
-		t.Fatal("ParseResult found = true, want false for empty path")
+	got, err := ParseResult("")
+	if !errors.Is(err, ErrNoAgentResult) {
+		t.Fatalf("ParseResult error = %v, want ErrNoAgentResult for empty path", err)
 	}
 
 	if !reflect.DeepEqual(got, AgentResult{}) {
@@ -195,7 +178,13 @@ func TestParseResultEmptyPathIsNotFound(t *testing.T) {
 // as "no result" (Oracle finding #4).
 func TestParseResultUnreadableFileErrors(t *testing.T) {
 	dir := t.TempDir()
-	if _, _, err := ParseResult(dir); err == nil {
+
+	_, err := ParseResult(dir)
+	if err == nil {
 		t.Fatal("ParseResult error = nil, want read error for directory path")
+	}
+
+	if errors.Is(err, ErrNoAgentResult) {
+		t.Fatalf("ParseResult error = %v, want a real I/O error, not ErrNoAgentResult", err)
 	}
 }

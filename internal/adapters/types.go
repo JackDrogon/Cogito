@@ -3,6 +3,7 @@ package adapters
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"strings"
 )
 
@@ -160,7 +161,49 @@ type StepResult struct {
 	Logs             []LogEntry      `json:"logs,omitempty"`
 }
 
-func validateStartRequest(request StartRequest) error {
+// NormalizeResult converts an Execution into a StepResult after checking the
+// requested optional capabilities.
+func NormalizeResult(request NormalizeRequest, capabilities CapabilityMatrix) (*StepResult, error) {
+	if request.Execution == nil {
+		return nil, newError(ErrorCodeResult, "execution is required")
+	}
+
+	if !request.Execution.State.Normalizable() {
+		return nil, newError(ErrorCodeResult, "execution state cannot be normalized")
+	}
+
+	if request.RequireStructuredOutput {
+		if err := capabilities.Require(CapabilityStructuredOutput); err != nil {
+			return nil, err
+		}
+	}
+
+	if request.RequireArtifactRefs {
+		if err := capabilities.Require(CapabilityArtifactRefs); err != nil {
+			return nil, err
+		}
+	}
+
+	if request.RequireMachineReadableLogs {
+		if err := capabilities.Require(CapabilityMachineReadableLogs); err != nil {
+			return nil, err
+		}
+	}
+
+	return &StepResult{
+		Handle:           request.Execution.Handle,
+		Status:           request.Execution.State,
+		Summary:          request.Execution.Summary,
+		OutputText:       request.Execution.OutputText,
+		StructuredOutput: CloneJSON(request.Execution.StructuredOutput),
+		ArtifactRefs:     CloneArtifactRefs(request.Execution.ArtifactRefs),
+		Logs:             CloneLogs(request.Execution.Logs),
+	}, nil
+}
+
+// ValidateStartRequest checks that a StartRequest carries the run/step/attempt
+// identifiers every adapter needs before launching a provider invocation.
+func ValidateStartRequest(request StartRequest) error {
 	if strings.TrimSpace(request.RunID) == "" {
 		return newError(ErrorCodeRequest, "run id is required")
 	}
@@ -176,7 +219,9 @@ func validateStartRequest(request StartRequest) error {
 	return nil
 }
 
-func validateHandle(handle ExecutionHandle) error {
+// ValidateHandle checks that an ExecutionHandle is fully populated, including
+// the provider session id used to look up a live or resumable session.
+func ValidateHandle(handle ExecutionHandle) error {
 	if strings.TrimSpace(handle.RunID) == "" {
 		return newError(ErrorCodeRequest, "run id is required")
 	}
@@ -194,4 +239,67 @@ func validateHandle(handle ExecutionHandle) error {
 	}
 
 	return nil
+}
+
+// CloneExecution returns a deep copy of an Execution so callers can hand out a
+// terminal result without exposing the adapter's cached copy to mutation.
+func CloneExecution(execution *Execution) *Execution {
+	if execution == nil {
+		return nil
+	}
+
+	return &Execution{
+		Handle:           execution.Handle,
+		State:            execution.State,
+		Summary:          execution.Summary,
+		OutputText:       execution.OutputText,
+		StructuredOutput: CloneJSON(execution.StructuredOutput),
+		ArtifactRefs:     CloneArtifactRefs(execution.ArtifactRefs),
+		Logs:             CloneLogs(execution.Logs),
+	}
+}
+
+// CloneJSON deep-copies a json.RawMessage, preserving nil.
+func CloneJSON(value json.RawMessage) json.RawMessage {
+	if value == nil {
+		return nil
+	}
+
+	cloned := make(json.RawMessage, len(value))
+	copy(cloned, value)
+
+	return cloned
+}
+
+// CloneArtifactRefs deep-copies an ArtifactRef slice, preserving nil.
+func CloneArtifactRefs(artifacts []ArtifactRef) []ArtifactRef {
+	if artifacts == nil {
+		return nil
+	}
+
+	cloned := make([]ArtifactRef, 0, len(artifacts))
+	cloned = append(cloned, artifacts...)
+
+	return cloned
+}
+
+// CloneLogs deep-copies a LogEntry slice including each entry's Fields map.
+func CloneLogs(logs []LogEntry) []LogEntry {
+	if logs == nil {
+		return nil
+	}
+
+	cloned := make([]LogEntry, 0, len(logs))
+
+	for _, entry := range logs {
+		clonedEntry := LogEntry{Level: entry.Level, Message: entry.Message}
+		if entry.Fields != nil {
+			clonedEntry.Fields = make(map[string]string, len(entry.Fields))
+			maps.Copy(clonedEntry.Fields, entry.Fields)
+		}
+
+		cloned = append(cloned, clonedEntry)
+	}
+
+	return cloned
 }

@@ -25,23 +25,23 @@ func (f approvalDecisionHandlerFunc) Handle(ctx context.Context, request approva
 	return f(ctx, request)
 }
 
+// lookupApprovalDecisionHandler dispatches by decision via a switch rather
+// than a package-level map: the granted path eventually re-enters this lookup
+// (continue -> poll -> approval), and a map initializer would form an
+// initialization cycle with its own handler functions.
 func lookupApprovalDecisionHandler(decision ApprovalDecision) (approvalDecisionHandler, error) {
-	handlers := map[ApprovalDecision]approvalDecisionHandler{
-		ApprovalDecisionApprove: approvalDecisionHandlerFunc(handleApprovalGranted),
-		ApprovalDecisionDeny:    approvalDecisionHandlerFunc(handleApprovalDenied),
-		ApprovalDecisionTimeout: approvalDecisionHandlerFunc(handleApprovalTimedOut),
-	}
-
-	handler, ok := handlers[decision]
-	if !ok {
+	switch decision {
+	case ApprovalDecisionApprove:
+		return approvalDecisionHandlerFunc(handleApprovalGranted), nil
+	case ApprovalDecisionDeny:
+		return approvalDecisionHandlerFunc(handleApprovalDenied), nil
+	case ApprovalDecisionTimeout:
+		return approvalDecisionHandlerFunc(handleApprovalTimedOut), nil
+	case ApprovalDecisionWait:
+		return nil, newError(ErrorCodeExecution, fmt.Sprintf("unsupported approval decision %q", decision))
+	default:
 		return nil, newError(ErrorCodeExecution, fmt.Sprintf("unsupported approval decision %q", decision))
 	}
-
-	if handler == nil {
-		return nil, newError(ErrorCodeExecution, fmt.Sprintf("approval decision handler is required for %q", decision))
-	}
-
-	return handler, nil
 }
 
 func resolveApprovalSummary(decision ApprovalDecision, step workflow.CompiledStep, message string) string {
@@ -81,31 +81,19 @@ func handleApprovalGranted(ctx context.Context, request approvalDecisionRequest)
 }
 
 func handleApprovalDenied(_ context.Context, request approvalDecisionRequest) error {
-	if err := request.Engine.persistApprovalResolution(ApprovalResolutionParams{
-		EventType: store.EventApprovalDenied,
-		Pending:   request.Pending,
-		From:      StepStateWaitingApproval,
-		To:        StepStateFailed,
-		Summary:   request.Summary,
-	}); err != nil {
-		return err
-	}
-
-	if err := request.Engine.persistRunTransition(RunTransitionParams{
-		EventType: store.EventRunFailed,
-		From:      RunStateWaitingApproval,
-		To:        RunStateFailed,
-		Message:   request.Summary,
-	}); err != nil {
-		return err
-	}
-
-	return newError(ErrorCodeExecution, request.Summary)
+	return failApprovalTerminally(store.EventApprovalDenied, request)
 }
 
 func handleApprovalTimedOut(_ context.Context, request approvalDecisionRequest) error {
+	return failApprovalTerminally(store.EventApprovalTimedOut, request)
+}
+
+// failApprovalTerminally is the shared terminal path for deny and timeout:
+// the step fails, the run fails, and the decision summary surfaces as the
+// command error. Only the resolution event type differs.
+func failApprovalTerminally(eventType store.EventType, request approvalDecisionRequest) error {
 	if err := request.Engine.persistApprovalResolution(ApprovalResolutionParams{
-		EventType: store.EventApprovalTimedOut,
+		EventType: eventType,
 		Pending:   request.Pending,
 		From:      StepStateWaitingApproval,
 		To:        StepStateFailed,

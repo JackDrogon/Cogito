@@ -70,8 +70,10 @@ func BuildSpec(opts SpecOptions) (*workflow.Spec, error) {
 	if agentName == "" {
 		agentName = DefaultAgentName
 	}
+
 	if !IsValidAgentName(agentName) {
-		return nil, fmt.Errorf("agentflow.BuildSpec: invalid agent %q; must be one of codex, claude, opencode", agentName)
+		return nil, fmt.Errorf(
+			"agentflow.BuildSpec: invalid agent %q; must be one of codex, claude, opencode", agentName)
 	}
 
 	repoPath := strings.TrimSpace(opts.RepoPath)
@@ -83,7 +85,7 @@ func BuildSpec(opts SpecOptions) (*workflow.Spec, error) {
 		return nil, errors.New("agentflow.BuildSpec: at least one task is required")
 	}
 
-	mainPrompt := prompt.BuildMain(prompt.PromptInput{
+	mainPrompt := prompt.BuildMain(prompt.Input{
 		Root:  repoPath,
 		Tasks: opts.Tasks,
 	})
@@ -95,6 +97,7 @@ func BuildSpec(opts SpecOptions) (*workflow.Spec, error) {
 	}}
 
 	lastStepID := AgentStepID
+
 	if opts.WithVerify {
 		steps = append(steps, workflow.StepSpec{
 			ID:     VerifyStepID,

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -16,7 +17,7 @@ import (
 
 const (
 	verifyStderrSnippetLimit = 200
-	// verifyCommandTimeout caps how long a single verification command may run
+	// VerifyCommandTimeout caps how long a single verification command may run
 	// before it is killed. Without it a hung command stalls the whole run until
 	// external ctx cancellation. Mirrors the runner's SIGTERM/SIGKILL story but
 	// for the synchronous verify gate.
@@ -43,7 +44,9 @@ func (d verifyDriver) Start(ctx context.Context, request stepStartRequest) (*ada
 	commands := spec.Commands
 	if len(commands) == 0 {
 		if strings.TrimSpace(spec.From) == "" {
-			return nil, newError(ErrorCodeConfig, fmt.Sprintf("verify step %q has neither commands nor from", request.Step.ID))
+			message := fmt.Sprintf("verify step %q has neither commands nor from", request.Step.ID)
+
+			return nil, newError(ErrorCodeConfig, message)
 		}
 
 		result, err := readAgentResult(d.engine, spec.From)
@@ -73,7 +76,9 @@ func (d verifyDriver) Start(ctx context.Context, request stepStartRequest) (*ada
 		return terminalExecution(handle, adapters.ExecutionStateFailed, failure), nil
 	}
 
-	return terminalExecution(handle, adapters.ExecutionStateSucceeded, fmt.Sprintf("verify passed: %d command(s)", countNonEmpty(commands))), nil
+	summary := fmt.Sprintf("verify passed: %d command(s)", countNonEmpty(commands))
+
+	return terminalExecution(handle, adapters.ExecutionStateSucceeded, summary), nil
 }
 
 // runVerifyCommands replays each command with `bash -lc` in workingDir, stopping
@@ -106,7 +111,9 @@ func runVerifyCommand(ctx context.Context, workingDir, command string) string {
 
 	var stderr bytes.Buffer
 
-	cmd := exec.Command("bash", "-lc", command)
+	// Intentionally NOT exec.CommandContext: ctx kill would only signal the
+	// shell, while killProcessGroup below takes down the whole -pgid tree.
+	cmd := exec.Command("bash", "-lc", command) //nolint:noctx // group kill handled via cmdCtx.Done + killProcessGroup
 	cmd.Dir = workingDir
 	cmd.Stderr = &stderr
 	// Setpgid isolates the command (and its children) in a dedicated process
@@ -118,12 +125,16 @@ func runVerifyCommand(ctx context.Context, workingDir, command string) string {
 	}
 
 	waitErr := make(chan error, 1)
+
 	go func() { waitErr <- cmd.Wait() }()
 
 	select {
 	case <-cmdCtx.Done():
 		killProcessGroup(cmd.Process)
-		<-waitErr // reap the killed process
+		// Reap the killed process. SIGKILL cannot be caught, so Wait returns
+		// promptly in practice; the only theoretical hang is a child stuck in
+		// uninterruptible (D-state) IO, which no signal can resolve anyway.
+		<-waitErr
 
 		return fmt.Sprintf("verify failed: %s: %s", command, verifyCancelReason(cmdCtx, stderr.String()))
 	case err := <-waitErr:
@@ -143,12 +154,16 @@ func killProcessGroup(process *os.Process) {
 	}
 
 	if pgid, err := syscall.Getpgid(process.Pid); err == nil {
-		_ = syscall.Kill(-pgid, syscall.SIGKILL)
+		if killErr := syscall.Kill(-pgid, syscall.SIGKILL); killErr != nil && !errors.Is(killErr, syscall.ESRCH) {
+			slog.Warn("verify: SIGKILL of process group failed", "pgid", pgid, "err", killErr)
+		}
 
 		return
 	}
 
-	_ = process.Kill()
+	if err := process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		slog.Warn("verify: process kill failed", "pid", process.Pid, "err", err)
+	}
 }
 
 // verifyCancelReason explains why a command was killed: a deadline overrun
@@ -186,6 +201,7 @@ func stderrSnippet(stderr string, runErr error) string {
 
 func countNonEmpty(values []string) int {
 	count := 0
+
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {
 			count++

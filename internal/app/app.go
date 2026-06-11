@@ -6,6 +6,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -116,7 +118,23 @@ func parseSharedFlags(commandName string, args []string, stdout io.Writer) (*par
 		flags.stateDir = defaultStateDir(flags.repo)
 	}
 
+	configureLogging(flags.verbose)
+
 	return &parsedSharedFlagsResult{flags: &flags, remainingArgs: fs.Args()}, nil
+}
+
+// configureLogging routes the process-wide slog output to stderr and gates
+// its level on the shared -v flag: warnings and errors always surface, while
+// informational diagnostics (stale-lock reclaim, checkpoint fallback detail)
+// appear only in verbose mode. Called after each command's flag parse because
+// the registry has no earlier hook that knows the verbosity.
+func configureLogging(verbose bool) {
+	level := slog.LevelWarn
+	if verbose {
+		level = slog.LevelDebug
+	}
+
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 }
 
 // registerSharedFlags binds the common execution flags onto fs. It is the

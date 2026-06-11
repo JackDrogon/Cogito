@@ -116,8 +116,8 @@ func compileSpec(raw rawWorkflow) (*Spec, error) {
 		Steps: make([]StepSpec, 0, len(raw.Steps)),
 	}
 
-	for index, step := range raw.Steps {
-		compiledStep, err := compileStep(step, index)
+	for index := range raw.Steps {
+		compiledStep, err := compileStep(raw.Steps[index], index)
 		if err != nil {
 			return nil, err
 		}
