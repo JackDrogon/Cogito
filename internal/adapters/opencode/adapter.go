@@ -34,8 +34,9 @@ func init() {
 		},
 		NewWithOptions: func(options shared.AdapterOptions) shared.Adapter {
 			return New(Config{
-				Model:  options.Model,
-				LogDir: options.LogDir,
+				Model:    options.Model,
+				LogDir:   options.LogDir,
+				LiveSink: options.LiveSink,
 			})
 		},
 	}); err != nil {
@@ -57,6 +58,9 @@ type Config struct {
 	Model string
 	// LogDir is the directory for streamed process logs; empty skips logging.
 	LogDir string
+	// LiveSink optionally receives the process output stream in real time;
+	// nil disables live streaming. Must be safe for concurrent writes.
+	LiveSink io.Writer
 }
 
 type Adapter struct {
@@ -65,6 +69,7 @@ type Adapter struct {
 	starter  Starter
 	model    string
 	logDir   string
+	liveSink io.Writer
 
 	mu       sync.Mutex
 	sessions map[string]*agentSession
@@ -131,6 +136,7 @@ func New(config Config) *Adapter {
 		starter:  starter,
 		model:    strings.TrimSpace(config.Model),
 		logDir:   strings.TrimSpace(config.LogDir),
+		liveSink: config.LiveSink,
 		sessions: map[string]*agentSession{},
 	}
 }
@@ -172,6 +178,7 @@ func (a *Adapter) Start(ctx context.Context, request shared.StartRequest) (*shar
 		Prompt:        agentPrompt(request),
 		PromptOnStdin: false,
 		LogPath:       a.logPath(request),
+		ExtraSink:     a.liveSink,
 	})
 	if startErr != nil {
 		return nil, adapterError(shared.ErrorCodeExecution, "start opencode session", startErr)
@@ -317,6 +324,7 @@ func (a *Adapter) Resume(ctx context.Context, request shared.ResumeRequest) (*sh
 		Prompt:        agentPrompt(resumeStart),
 		PromptOnStdin: false,
 		LogPath:       a.logPath(resumeStart),
+		ExtraSink:     a.liveSink,
 	})
 	if startErr != nil {
 		return nil, adapterError(shared.ErrorCodeExecution, "resume opencode session", startErr)

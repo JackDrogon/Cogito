@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"io"
 	"path/filepath"
 	"strings"
 
@@ -45,11 +46,13 @@ func (c adapterResolverChain) Resolve(provider string, options adapters.AdapterO
 
 // adapterOptionDefaults holds the run-scoped inputs used to build per-step
 // adapter options. Sandbox/Model are run-wide; LogDirRoot is the run directory
-// under which each step gets its own provider-logs subdirectory.
+// under which each step gets its own provider-logs subdirectory; LiveSink is
+// the optional console stream for verbose live output.
 type adapterOptionDefaults struct {
 	Sandbox    string
 	Model      string
 	LogDirRoot string
+	LiveSink   io.Writer
 }
 
 func newAdapterLookup(resolver adapterResolver, defaults adapterOptionDefaults) runtime.AdapterLookup {
@@ -61,9 +64,10 @@ func newAdapterLookup(resolver adapterResolver, defaults adapterOptionDefaults) 
 		provider := strings.TrimSpace(step.Agent.Agent)
 
 		options := adapters.AdapterOptions{
-			Sandbox: defaults.Sandbox,
-			Model:   defaults.Model,
-			LogDir:  stepLogDir(defaults.LogDirRoot, step.ID),
+			Sandbox:  defaults.Sandbox,
+			Model:    defaults.Model,
+			LogDir:   stepLogDir(defaults.LogDirRoot, step.ID),
+			LiveSink: defaults.LiveSink,
 		}
 
 		adapter, ok := resolver.Resolve(provider, options)

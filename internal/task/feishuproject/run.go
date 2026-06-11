@@ -36,7 +36,7 @@ type EphemeralOptions struct {
 //
 // The story description becomes the single inline task body; the shared
 // agentflow builder renders it through prompt.BuildMain so it carries the same
-// 21-clause execution contract used by every Cogito agent step.
+// shared execution contract used by every Cogito agent step.
 func BuildEphemeralSpec(opts EphemeralOptions) (*workflow.Spec, error) {
 	return agentflow.BuildSpec(agentflow.SpecOptions{
 		Name:      fmt.Sprintf("feishu-story-%d", opts.Story.ID),

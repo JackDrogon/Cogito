@@ -44,6 +44,7 @@ Most execution-oriented commands parse the same shared flags:
 | `--approval` | Approval mode: `auto`, `approve`, or `deny` | empty input resolves to `auto` |
 | `--provider-timeout` | Timeout passed to command execution / providers | `0` |
 | `--allow-dirty` | Skip dirty-worktree protection when acquiring repo lock | `false` |
+| `-v` | Verbose mode: streams provider (agent) stdout/stderr to the console live while steps run, and replays the run's durable events after it settles | `false` |
 
 `--state-dir` is automatically generated when omitted for commands that create a new run.
 

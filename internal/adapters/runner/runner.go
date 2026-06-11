@@ -76,6 +76,13 @@ type StartRequest struct {
 	// process runs. Parent directories are created with 0o700 if missing.
 	LogPath string
 
+	// ExtraSink, when non-nil, receives the same stdout+stderr byte stream as
+	// LogPath in real time (AgentLoop-style live output). The runner writes
+	// from two goroutines (stdout and stderr), so the writer must be safe for
+	// concurrent use; write errors are ignored so a broken sink never affects
+	// the run.
+	ExtraSink io.Writer
+
 	// WarningSink optionally receives runner-level warnings (currently the
 	// post-SIGKILL "process did not exit" notice) when there is no log file to
 	// write them to. When both the log file and this sink are nil the warning
@@ -201,6 +208,7 @@ func Start(parentCtx context.Context, req StartRequest) (*Session, error) {
 		Stderr:      stderr,
 		LogFile:     logFile,
 		LogPath:     req.LogPath,
+		ExtraSink:   req.ExtraSink,
 		Prompt:      req.Prompt,
 		Pattern:     settings.pattern,
 		ExitGrace:   settings.exitGrace,
@@ -331,6 +339,7 @@ type superviseParams struct {
 	Stderr      io.ReadCloser
 	LogFile     *os.File
 	LogPath     string
+	ExtraSink   io.Writer
 	Prompt      string
 	Pattern     *regexp.Regexp
 	ExitGrace   time.Duration
@@ -355,12 +364,25 @@ func supervise(params superviseParams) {
 
 	go func() {
 		defer ioWG.Done()
-		teeAndScan(params.Stdout, &stdoutBuf, params.LogFile, &logMu, params.Pattern, params.Session)
+		teeAndScan(params.Stdout, teeParams{
+			Buf:       &stdoutBuf,
+			LogFile:   params.LogFile,
+			LogMu:     &logMu,
+			ExtraSink: params.ExtraSink,
+			Pattern:   params.Pattern,
+			Session:   params.Session,
+		})
 	}()
 
 	go func() {
 		defer ioWG.Done()
-		teeAndScan(params.Stderr, &stderrBuf, params.LogFile, &logMu, nil, params.Session)
+		teeAndScan(params.Stderr, teeParams{
+			Buf:       &stderrBuf,
+			LogFile:   params.LogFile,
+			LogMu:     &logMu,
+			ExtraSink: params.ExtraSink,
+			Session:   params.Session,
+		})
 	}()
 
 	go func() {
@@ -431,17 +453,24 @@ func writePrompt(stdin io.WriteCloser, prompt string) {
 	_, _ = io.WriteString(stdin, prompt)
 }
 
-// teeAndScan reads src in 4KB chunks, appends to buf and logFile (under
-// logMu), and matches against pattern (when non-nil) to update
-// session.sessionID. Returns when src returns any error including io.EOF.
-func teeAndScan(
-	src io.Reader,
-	buf *bytes.Buffer,
-	logFile *os.File,
-	logMu *sync.Mutex,
-	pattern *regexp.Regexp,
-	session *Session,
-) {
+// teeParams groups the per-stream destinations for teeAndScan. Stdout and
+// stderr each get their own Buf but share LogFile/LogMu/ExtraSink; only the
+// stdout stream carries a Pattern for session-id scraping.
+type teeParams struct {
+	Buf       *bytes.Buffer
+	LogFile   *os.File
+	LogMu     *sync.Mutex
+	ExtraSink io.Writer
+	Pattern   *regexp.Regexp
+	Session   *Session
+}
+
+// teeAndScan reads src in 4KB chunks, appends to Buf, LogFile (under LogMu),
+// and ExtraSink (live output, errors ignored), and matches against Pattern
+// (when non-nil) to update Session.sessionID. Returns when src returns any
+// error including io.EOF.
+func teeAndScan(src io.Reader, params teeParams) {
+	buf, pattern, session := params.Buf, params.Pattern, params.Session
 	chunk := make([]byte, 4096)
 
 	var carry []byte
@@ -452,10 +481,14 @@ func teeAndScan(
 			data := chunk[:n]
 			buf.Write(data)
 
-			if logFile != nil {
-				logMu.Lock()
-				_, _ = logFile.Write(data)
-				logMu.Unlock()
+			if params.LogFile != nil {
+				params.LogMu.Lock()
+				_, _ = params.LogFile.Write(data)
+				params.LogMu.Unlock()
+			}
+
+			if params.ExtraSink != nil {
+				_, _ = params.ExtraSink.Write(data)
 			}
 
 			if pattern != nil && session.SessionID() == "" {

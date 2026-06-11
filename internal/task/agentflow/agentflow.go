@@ -64,7 +64,7 @@ type SpecOptions struct {
 // workflow.CompileWorkflow.
 //
 // The agent prompt is rendered with prompt.BuildMain so it carries the same
-// 21-clause execution contract used by every Cogito agent step.
+// shared execution contract used by every Cogito agent step.
 func BuildSpec(opts SpecOptions) (*workflow.Spec, error) {
 	agentName := strings.TrimSpace(opts.AgentName)
 	if agentName == "" {

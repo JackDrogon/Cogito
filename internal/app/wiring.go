@@ -2,9 +2,11 @@ package app
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/JackDrogon/Cogito/internal/adapters/claude"
@@ -45,6 +47,7 @@ func buildRuntimeWiring(runStore *store.Store, flags *sharedFlags) (runtimeWirin
 			Sandbox:    codexSandbox(),
 			Model:      "",
 			LogDirRoot: runStore.Layout().RunDir,
+			LiveSink:   liveOutputSink(flags),
 		}),
 		CommandRunner: newSupervisorCommandRunner(runStore, context.workingDir, providerTimeout(flags)),
 		RepoPath:      context.repoPath,
@@ -102,6 +105,37 @@ func resolveExecutionContext(runStore *store.Store, flags *sharedFlags) (*execut
 	}
 
 	return &executionContext{repoPath: workingDir, workingDir: workingDir}, nil
+}
+
+// liveOutputSink returns the console sink for streaming provider output in
+// real time, or nil when -v is off. It mirrors AgentLoop's transparent output
+// pump: raw provider bytes go to the terminal while the runner keeps writing
+// the durable provider-logs copy. The writer is mutex-locked because the
+// runner tees stdout and stderr from two goroutines.
+//
+// The sink targets os.Stdout directly rather than the command's stdout writer:
+// live streaming is a console-only concern, and wiring is shared by every
+// engine-executing command (run, resume, approve, feishu run, agents run).
+func liveOutputSink(flags *sharedFlags) io.Writer {
+	if flags == nil || !flags.verbose {
+		return nil
+	}
+
+	return &lockedWriter{target: os.Stdout}
+}
+
+// lockedWriter serializes concurrent writes from the runner's stdout/stderr
+// tee goroutines so interleaved chunks never split mid-write.
+type lockedWriter struct {
+	mu     sync.Mutex
+	target io.Writer
+}
+
+func (w *lockedWriter) Write(data []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	return w.target.Write(data)
 }
 
 func providerTimeout(flags *sharedFlags) time.Duration {

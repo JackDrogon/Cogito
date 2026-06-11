@@ -137,6 +137,9 @@ func runAgentsRun(ctx context.Context, flags agentsRunFlags, stdout io.Writer) e
 	sharedCopy.repo = repoPath
 
 	output, err := appsvc.RunCompiledWorkflow(ctx, RunCompiledWorkflowInput{Compiled: compiled, Flags: &sharedCopy})
+	if verboseErr := presentVerboseRun(stdout, &sharedCopy, output, err); verboseErr != nil {
+		return verboseErr
+	}
 	if err != nil {
 		return err
 	}

@@ -77,6 +77,41 @@ func TestBuildMainRendersAllPlaceholders(t *testing.T) {
 	}
 }
 
+// TestPromptsCarryInlineTaskSemantics guards the inline-task adaptation:
+// Cogito has no todo file, so no template may instruct the agent to read,
+// update, or checkbox-mark one — that wording previously sent agents on
+// filesystem expeditions hunting for a todo file that does not exist.
+func TestPromptsCarryInlineTaskSemantics(t *testing.T) {
+	input := PromptInput{Root: "/repo", Tasks: []TaskRef{{ID: "a", Text: "task a"}}}
+
+	prompts := map[string]string{
+		"main":            BuildMain(input),
+		"commit-recovery": BuildCommitRecovery(input, nil),
+		"dirty-worktree":  BuildDirtyWorktree(input),
+	}
+
+	for name, got := range prompts {
+		for _, forbidden := range []string{
+			"这次要处理的 todo 文件",
+			"todo 文件：\n/repo",
+			"`[~]`", "`[x]`", "`[ ]`",
+			"todo 勾选",
+		} {
+			if strings.Contains(got, forbidden) {
+				t.Errorf("%s prompt still contains todo-file choreography %q", name, forbidden)
+			}
+		}
+
+		if !strings.Contains(got, "本次运行没有 todo 文件") {
+			t.Errorf("%s prompt missing inline task-source declaration", name)
+		}
+
+		if !strings.Contains(got, ".cogito/") {
+			t.Errorf("%s prompt missing .cogito state-dir guard", name)
+		}
+	}
+}
+
 func assertGolden(t *testing.T, name, got string) {
 	t.Helper()
 

@@ -3,6 +3,7 @@ package adapters
 import (
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"sync"
@@ -24,6 +25,11 @@ type AdapterOptions struct {
 	// LogDir is the per-step directory that receives provider process logs.
 	// Empty disables log-file capture.
 	LogDir string
+
+	// LiveSink, when non-nil, receives the provider's stdout+stderr stream in
+	// real time (AgentLoop-style live output, e.g. for `-v`). The writer must
+	// be safe for concurrent use; nil disables live streaming.
+	LiveSink io.Writer
 }
 
 // OptionFactory builds an adapter from runtime-resolved options. Providers

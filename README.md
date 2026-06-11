@@ -172,7 +172,9 @@ Implemented commands:
 - `cogito replay <events.jsonl>`
 
 Shared execution flags include `--repo`, `--state-dir`, `--approval`,
-`--provider-timeout`, and `--allow-dirty`.
+`--provider-timeout`, and `--allow-dirty`. `-v` streams the agent provider's
+output to the console live (AgentLoop-style) and replays the run's events
+after it settles.
 
 ## Provider Support
 

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -162,6 +163,60 @@ func TestStartLogPathReceivesStreamedOutput(t *testing.T) {
 
 	if !bytes.Equal(contents, []byte(body)) {
 		t.Errorf("log file = %q, want %q", string(contents), body)
+	}
+}
+
+// syncBuffer is a concurrency-safe bytes.Buffer satisfying the ExtraSink
+// contract (the runner writes from two tee goroutines).
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(data []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.buf.Write(data)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.buf.String()
+}
+
+// TestStartExtraSinkReceivesLiveOutput verifies the AgentLoop-ported live
+// output path: ExtraSink must receive the same byte stream that lands in the
+// log file, including stderr.
+func TestStartExtraSinkReceivesLiveOutput(t *testing.T) {
+	t.Parallel()
+
+	const body = "live stdout\n"
+	sink := &syncBuffer{}
+
+	session, err := Start(context.Background(), StartRequest{
+		Binary:    "/bin/sh",
+		Args:      []string{"-c", "printf '%s' " + shellQuote(body) + "; printf 'live stderr\\n' >&2"},
+		ExtraSink: sink,
+	})
+	if err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+
+	result := awaitResult(t, session, 2*time.Second)
+
+	if result.Err != nil {
+		t.Fatalf("Result.Err = %v, want nil", result.Err)
+	}
+
+	got := sink.String()
+	if !strings.Contains(got, "live stdout") {
+		t.Errorf("ExtraSink = %q, want stdout content", got)
+	}
+	if !strings.Contains(got, "live stderr") {
+		t.Errorf("ExtraSink = %q, want stderr content", got)
 	}
 }
 
