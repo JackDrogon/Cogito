@@ -132,6 +132,12 @@ func (s applicationService) runCompiled(ctx context.Context, compiled *workflow.
 		return RunWorkflowOutput{}, err
 	}
 
+	// Self-ignore the .cogito state root before the lock's dirty-worktree
+	// check runs, so run state never shows up as untracked changes.
+	if err := ensureStateRootIgnored(stateRef); err != nil {
+		return RunWorkflowOutput{}, err
+	}
+
 	repoLock, err := acquireRepoLock(flags, stateRef.runID, stateRef.baseDir)
 	if err != nil {
 		return RunWorkflowOutput{}, err

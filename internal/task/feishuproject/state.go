@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"sort"
 	"time"
+
+	"github.com/JackDrogon/Cogito/internal/store"
 )
 
 // State is the on-disk record of the previously observed story set. The
@@ -48,6 +50,10 @@ func LoadState(path string) (State, error) {
 // SaveState writes the state atomically by renaming a sibling temp file.
 // Atomic replace keeps the file consistent if the process is killed mid-write.
 func SaveState(path string, state State) error {
+	if err := store.EnsureSelfIgnored(path); err != nil {
+		return fmt.Errorf("feishuproject: %w", err)
+	}
+
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("feishuproject: mkdir state dir: %w", err)
 	}

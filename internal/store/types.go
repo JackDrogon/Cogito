@@ -2,7 +2,13 @@ package store
 
 import "encoding/json"
 
-const DefaultRunsRoot = "ref/tmp/runs"
+// DefaultStateRoot is the directory Cogito creates inside the target
+// repository root to hold run state, so runs never pollute the rest of the
+// user's worktree. DefaultRunsRoot is where new runs land beneath it.
+const (
+	DefaultStateRoot = ".cogito"
+	DefaultRunsRoot  = DefaultStateRoot + "/runs"
+)
 
 const (
 	persistedFileMode = 0o600

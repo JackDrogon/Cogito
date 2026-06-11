@@ -163,7 +163,7 @@ func parseFeishuRunFlags(args []string, stdout io.Writer) (feishuRunFlags, error
 	}
 
 	if strings.TrimSpace(flags.shared.stateDir) == "" {
-		flags.shared.stateDir = defaultStateDir()
+		flags.shared.stateDir = defaultStateDir(flags.shared.repo)
 	}
 
 	return flags, nil

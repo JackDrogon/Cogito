@@ -143,7 +143,7 @@ had started.
 The CLI currently exposes one approval-resolution command:
 
 ```bash
-cogito approve --state-dir ./ref/tmp/runs/run-123
+cogito approve --state-dir ./.cogito/runs/run-123
 ```
 
 That command calls `engine.GrantApproval(ctx, "approved via CLI")` and then keeps

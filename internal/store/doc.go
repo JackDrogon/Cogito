@@ -10,7 +10,7 @@ recover execution state without introducing a daemon or external database.
 
 Every run is mapped onto a Layout rooted under DefaultRunsRoot.
 
-	ref/tmp/runs/<run-id>/
+	.cogito/runs/<run-id>/
 	    workflow.json      resolved workflow definition
 	    events.jsonl       append-only event history
 	    checkpoint.json    latest durable run snapshot

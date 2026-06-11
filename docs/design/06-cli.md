@@ -40,7 +40,7 @@ Most execution-oriented commands parse the same shared flags:
 | Flag | Meaning | Default |
 |------|---------|---------|
 | `--repo` | Repository root used for workflow execution context and repo locking | current directory |
-| `--state-dir` | Run state directory | `ref/tmp/runs/run-<timestamp>` |
+| `--state-dir` | Run state directory | `<repo>/.cogito/runs/run-<timestamp>` |
 | `--approval` | Approval mode: `auto`, `approve`, or `deny` | empty input resolves to `auto` |
 | `--provider-timeout` | Timeout passed to command execution / providers | `0` |
 | `--allow-dirty` | Skip dirty-worktree protection when acquiring repo lock | `false` |
@@ -69,7 +69,7 @@ the workflow path.
 Execute a workflow and create a run directory.
 
 ```bash
-cogito run ./workflow.yaml --state-dir ./ref/tmp/runs/run-123
+cogito run ./workflow.yaml --state-dir ./.cogito/runs/run-123
 ```
 
 Behavior:
@@ -91,7 +91,7 @@ event message as an error.
 Show the current state of an existing run.
 
 ```bash
-cogito status --state-dir ./ref/tmp/runs/run-123
+cogito status --state-dir ./.cogito/runs/run-123
 ```
 
 Behavior:
@@ -106,7 +106,7 @@ Behavior:
 Resume a paused run.
 
 ```bash
-cogito resume --state-dir ./ref/tmp/runs/run-123
+cogito resume --state-dir ./.cogito/runs/run-123
 ```
 
 Behavior:
@@ -122,7 +122,7 @@ This command resumes only runs in `paused` state. It does not resolve approvals.
 Approve a run currently waiting for approval.
 
 ```bash
-cogito approve --state-dir ./ref/tmp/runs/run-123
+cogito approve --state-dir ./.cogito/runs/run-123
 ```
 
 Behavior:
@@ -139,7 +139,7 @@ deny path internally.
 Cancel a run.
 
 ```bash
-cogito cancel --state-dir ./ref/tmp/runs/run-123
+cogito cancel --state-dir ./.cogito/runs/run-123
 ```
 
 Behavior:
@@ -166,7 +166,7 @@ event log, not through direct process signaling.
 Replay a run from an event log.
 
 ```bash
-cogito replay ./ref/tmp/runs/run-123/events.jsonl
+cogito replay ./.cogito/runs/run-123/events.jsonl
 ```
 
 Behavior:
@@ -282,6 +282,12 @@ For new runs, `--state-dir` is both:
 - the source of the new run ID (`filepath.Base(stateDir)`)
 
 This means the directory name is part of the durable run identity.
+
+When `--state-dir` is omitted, the default is `<repo>/.cogito/runs/run-<timestamp>`,
+anchored at `--repo` (or the current directory when `--repo` is omitted). Run
+state created under a `.cogito` root is kept invisible to git: Cogito writes a
+self-ignoring `.cogito/.gitignore` (`*`) before the dirty-worktree check, so
+repeated runs inside a git repository do not trip the dirty gate.
 
 ### Repo context semantics
 

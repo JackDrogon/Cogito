@@ -3,7 +3,8 @@
 ## System Shape
 
 Cogito is a CLI-first workflow runner that turns a static YAML workflow into a
-durable, event-sourced execution. By default, run state is stored under `ref/tmp/`,
+durable, event-sourced execution. By default, run state is stored under `.cogito/`
+at the target repository root,
 and the implementation is split into a small number of explicit packages with
 narrow responsibilities.
 
@@ -92,7 +93,7 @@ control to `internal/app`.
 
 `internal/store` manages the on-disk contract for a single run.
 
-- Canonicalizes run layout under `ref/tmp/runs/<run-id>`
+- Canonicalizes run layout under `.cogito/runs/<run-id>`
 - Appends JSON Lines events with monotonic sequence numbers
 - Writes checkpoints and artifact indexes atomically
 - Recovers from interrupted checkpoint writes via `.tmp` fallback
@@ -112,9 +113,9 @@ This keeps workflow scheduling independent from provider-specific process logic.
 ```text
 1. CLI parses command + flags
 2. Workflow YAML is loaded and compiled into a static DAG
-3. A run store is opened under ref/tmp/runs/<run-id>
+3. A run store is opened under .cogito/runs/<run-id>
 4. workflow.json is persisted for future resume/replay
-5. Repo lock is acquired under ref/tmp/locks/ and mirrored into the run directory
+5. Repo lock is acquired under .cogito/locks/ and mirrored into the run directory
 6. runtime.Engine initializes from checkpoint or event replay
 7. Engine emits RunCreated / RunStarted / StepQueued ... events
 8. Each event is appended to events.jsonl and folded into Snapshot
@@ -162,7 +163,8 @@ each `ExecuteNext` call. This makes replay and resume behavior predictable.
 ## Directory Layout
 
 ```text
-ref/tmp/
+<repo>/.cogito/
+├── .gitignore                    # auto-written "*" so run state never dirties the repo
 ├── locks/
 │   └── <repo>.lock.json          # repository-wide lock metadata
 └── runs/

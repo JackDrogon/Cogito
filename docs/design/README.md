@@ -22,27 +22,27 @@ diverged, the documents here were updated to describe the shipped behavior first
 cogito workflow validate path/to/workflow.yaml
 
 # Execute a workflow
-cogito run path/to/workflow.yaml --state-dir ./ref/tmp/runs/run-123
+cogito run path/to/workflow.yaml --state-dir ./.cogito/runs/run-123
 
 # Inspect current status
-cogito status --state-dir ./ref/tmp/runs/run-123
+cogito status --state-dir ./.cogito/runs/run-123
 
 # Resume a paused run
-cogito resume --state-dir ./ref/tmp/runs/run-123
+cogito resume --state-dir ./.cogito/runs/run-123
 
 # Approve a waiting run
-cogito approve --state-dir ./ref/tmp/runs/run-123
+cogito approve --state-dir ./.cogito/runs/run-123
 
 # Replay from an event log
-cogito replay ./ref/tmp/runs/run-123/events.jsonl
+cogito replay ./.cogito/runs/run-123/events.jsonl
 
 # Cancel a running run
-cogito cancel --state-dir ./ref/tmp/runs/run-123
+cogito cancel --state-dir ./.cogito/runs/run-123
 ```
 
 ## Design Principles
 
-1. **Local-first** - Run state is file-backed with `ref/tmp/` as the default layout and no daemon or database.
+1. **Local-first** - Run state is file-backed with `<repo>/.cogito/` as the default layout and no daemon or database.
 2. **Deterministic** - Workflow ordering is compiled once and replayed from durable events.
 3. **Code-aligned contracts** - Documentation describes the current implementation, not aspirational APIs.
 4. **Auditable** - Every meaningful runtime transition is appended to `events.jsonl` before checkpoint persistence.

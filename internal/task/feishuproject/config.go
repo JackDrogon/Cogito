@@ -7,14 +7,16 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/JackDrogon/Cogito/internal/store"
 )
 
 const (
 	defaultWorkItemTypeKey = "story"
 	defaultPageSize        = 100
 	defaultPollInterval    = time.Minute
-	defaultStateFile       = "ref/tmp/feishu/state.json"
-	defaultOutputFile      = "ref/tmp/feishu/stories.json"
+	defaultStateFile       = store.DefaultStateRoot + "/feishu/state.json"
+	defaultOutputFile      = store.DefaultStateRoot + "/feishu/stories.json"
 )
 
 // Config is the resolved [meegle] configuration used by Service. Repos comes

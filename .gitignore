@@ -33,6 +33,7 @@ vendor/
 .DS_Store
 Thumbs.db
 ref/
+.cogito/
 .envrc
 
 # Local Cogito config (contains plugin secrets and user keys)

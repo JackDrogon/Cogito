@@ -7,7 +7,8 @@ A CLI-first multi-agent workflow orchestrator for deterministic, auditable AI co
 Cogito executes static YAML workflows across local command steps and provider-backed
 agent steps. The current implementation is local-first and file-backed: by
 default, runs persist their workflow, event log, checkpoint, artifacts, and lock
-metadata under `ref/tmp/`, while `--state-dir` can relocate a run when needed.
+metadata under `.cogito/` at the target repository root, while `--state-dir`
+can relocate a run when needed.
 
 -**Key Features:**
 -- 🔄 **Deterministic Execution** - Reproducible runs from event logs
@@ -51,7 +52,7 @@ cogito workflow validate workflow.yaml
 ### Execute a workflow
 
 ```bash
-cogito run workflow.yaml --state-dir ./ref/tmp/runs/run-123
+cogito run workflow.yaml --state-dir ./.cogito/runs/run-123
 ```
 
 ### Run an ad hoc agent task
@@ -67,15 +68,15 @@ prompt and runs it against the current directory (or `--repo`). Use
 ### Inspect, resume, approve, cancel, and replay
 
 ```bash
-cogito status --state-dir ./ref/tmp/runs/run-123
-cogito resume --state-dir ./ref/tmp/runs/run-123
-cogito approve --state-dir ./ref/tmp/runs/run-123
-cogito cancel --state-dir ./ref/tmp/runs/run-123
-cogito replay ./ref/tmp/runs/run-123/events.jsonl
+cogito status --state-dir ./.cogito/runs/run-123
+cogito resume --state-dir ./.cogito/runs/run-123
+cogito approve --state-dir ./.cogito/runs/run-123
+cogito cancel --state-dir ./.cogito/runs/run-123
+cogito replay ./.cogito/runs/run-123/events.jsonl
 ```
 
 These examples use an explicit `--state-dir` so the run ID is stable and easy to
-inspect. When omitted, Cogito generates `ref/tmp/runs/run-<timestamp>`.
+inspect. When omitted, Cogito generates `.cogito/runs/run-<timestamp>`.
 
 ## Workflow Example
 
@@ -131,7 +132,7 @@ ready at once, but one queued step is executed at a time in topological order.
 
 ## Design Principles
 
-1. **Local-First** - run state is file-backed, with `ref/tmp/` as the default layout
+1. **Local-First** - run state is file-backed, with `<repo>/.cogito/` as the default layout
 2. **Deterministic** - ordering is reproducible from the compiled graph and event log
 3. **Provider-Agnostic** - runtime targets one adapter SPI instead of hard-coding providers
 4. **Auditable** - meaningful transitions are persisted before checkpoint updates
@@ -139,7 +140,8 @@ ready at once, but one queued step is executed at a time in topological order.
 ## Run Layout
 
 ```text
-ref/tmp/
+<repo>/.cogito/
+├── .gitignore            # auto-written "*" so run state never dirties the repo
 ├── locks/
 │   └── <repo>.lock.json
 └── runs/

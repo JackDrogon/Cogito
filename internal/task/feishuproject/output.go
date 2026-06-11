@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/JackDrogon/Cogito/internal/store"
 )
 
 // Snapshot is the full document persisted to OutputFile and printed to stdout.
@@ -24,6 +26,10 @@ type Snapshot struct {
 // WriteSnapshot serializes the snapshot to disk as pretty-printed JSON via
 // an atomic rename. Path may include directories that do not yet exist.
 func WriteSnapshot(path string, snapshot Snapshot) error {
+	if err := store.EnsureSelfIgnored(path); err != nil {
+		return fmt.Errorf("feishuproject: %w", err)
+	}
+
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("feishuproject: mkdir output dir: %w", err)
 	}

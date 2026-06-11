@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+
+	"github.com/JackDrogon/Cogito/internal/store"
 )
 
 type runStateRef struct {
@@ -33,6 +35,14 @@ func newRunStateRef(stateDir string) (runStateRef, error) {
 	}
 
 	return runStateRef{stateDir: stateDir, baseDir: baseDir, runID: runID}, nil
+}
+
+// ensureStateRootIgnored keeps a .cogito state root invisible to git before
+// any run state is created under it. The actual layout detection and
+// .gitignore handling live in store.EnsureSelfIgnored, shared with other
+// .cogito writers (for example the feishu state/output files).
+func ensureStateRootIgnored(stateRef runStateRef) error {
+	return store.EnsureSelfIgnored(stateRef.baseDir)
 }
 
 func newReplayRequest(eventsPath string) (replayRequest, error) {

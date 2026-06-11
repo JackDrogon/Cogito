@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	DefaultRepoLocksRoot = "ref/tmp/locks"
+	DefaultRepoLocksRoot = ".cogito/locks"
 
 	runtimeFileMode = 0o600
 	runtimeDirMode  = 0o700

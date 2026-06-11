@@ -1,7 +1,8 @@
 # Storage Model
 
 Cogito persists every run into a local directory tree. By default that layout
-lives under `ref/tmp/`, while the app layer can relocate a run via `--state-dir`.
+lives under `.cogito/` at the target repository root, while the app layer can
+relocate a run via `--state-dir`.
 The store package is intentionally file-backed and single-user oriented: it
 optimizes for auditable history, crash recovery, and easy inspection without
 requiring any daemon or database.
@@ -11,7 +12,7 @@ requiring any daemon or database.
 Each run is represented by `store.Layout` and defaults to:
 
 ```text
-ref/tmp/runs/<run-id>/
+.cogito/runs/<run-id>/
 ├── workflow.json          # resolved compiled workflow
 ├── events.jsonl           # append-only event log
 ├── checkpoint.json        # last durable snapshot
@@ -27,10 +28,16 @@ ref/tmp/runs/<run-id>/
 At the repository level, Cogito also writes:
 
 ```text
-ref/tmp/locks/<repo>.lock.json
+.cogito/locks/<repo>.lock.json
 ```
 
 This file prevents concurrent runs from mutating the same repository.
+
+The `.cogito/` state root also carries an auto-written `.gitignore` containing
+`*`, so run state inside a git repository never shows up as untracked changes
+(which would otherwise trip the dirty-worktree gate on the next run). An
+existing `.cogito/.gitignore` is never overwritten, and state dirs relocated
+outside a `.cogito` layout via `--state-dir` are left untouched.
 
 ## Canonical Persisted Shapes
 
@@ -186,11 +193,11 @@ This allows resume and replay to share a single durable history model.
 ## Lock Files
 
 Locking is implemented in `internal/runtime/lock.go`, but it is part of the on-disk
-contract because the default repo-level metadata lives under `ref/tmp/locks/`.
+contract because the default repo-level metadata lives under `.cogito/locks/`.
 
 Two lock files are written on acquisition:
 
-- repo-global lock in `ref/tmp/locks/`
+- repo-global lock in `.cogito/locks/`
 - run-local mirror in `<run-dir>/locks/`
 
 Lock metadata includes:

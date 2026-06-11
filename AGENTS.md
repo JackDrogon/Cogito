@@ -12,7 +12,7 @@
 
 
 ## OVERVIEW
-Cogito is a Go CLI for deterministic, auditable AI workflow execution. The maintained code lives under `cmd/`, `internal/`, and `docs/design/`; `ref/tmp/` is the default home for runs, downloaded references, and scratch material.
+Cogito is a Go CLI for deterministic, auditable AI workflow execution. The maintained code lives under `cmd/`, `internal/`, and `docs/design/`. Run state defaults to `<repo>/.cogito/` at the target repository root; `ref/tmp/` is the home for downloaded references and scratch material.
 
 ## STRUCTURE
 ```text
@@ -20,7 +20,7 @@ Cogito/
 |-- cmd/cogito/        # CLI entrypoint; turns argv + signals into app.Run
 |-- internal/          # maintained implementation packages; see internal/AGENTS.md
 |-- docs/design/       # code-aligned design notes for shipped behavior
-|-- ref/tmp/           # default run state, tests, downloaded upstream code, scratch
+|-- ref/tmp/           # tests, downloaded upstream code, scratch (run state defaults to <repo>/.cogito/)
 |-- justfile           # maintainer command surface
 `-- .github/workflows/ # CI mirrors build + test + lint gates
 ```

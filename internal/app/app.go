@@ -113,7 +113,7 @@ func parseSharedFlags(commandName string, args []string, stdout io.Writer) (*par
 	}
 
 	if strings.TrimSpace(flags.stateDir) == "" {
-		flags.stateDir = defaultStateDir()
+		flags.stateDir = defaultStateDir(flags.repo)
 	}
 
 	return &parsedSharedFlagsResult{flags: &flags, remainingArgs: fs.Args()}, nil
@@ -125,7 +125,7 @@ func parseSharedFlags(commandName string, args []string, stdout io.Writer) (*par
 // stay in sync with `parseSharedFlags` instead of duplicating definitions.
 func registerSharedFlags(fs *flag.FlagSet, flags *sharedFlags) {
 	fs.StringVar(&flags.repo, "repo", "", "Repository root for workflow execution")
-	fs.StringVar(&flags.stateDir, "state-dir", "", "Run state directory (default: ref/tmp/runs/<generated-run-id>)")
+	fs.StringVar(&flags.stateDir, "state-dir", "", "Run state directory (default: <repo>/.cogito/runs/<generated-run-id>)")
 	fs.StringVar(&flags.approval, "approval", "", "Approval mode")
 	fs.DurationVar(&flags.providerTimeout, "provider-timeout", 0, "Provider timeout (for example: 30s, 2m)")
 	fs.BoolVar(&flags.allowDirty, "allow-dirty", false, "Allow dirty repository state")
@@ -136,8 +136,17 @@ func isHelpRequested(err error) bool {
 	return errors.Is(err, errHelpRequested)
 }
 
-func defaultStateDir() string {
-	return filepath.Join(store.DefaultRunsRoot, generatedRunID())
+// defaultStateDir places new run state under <repo>/.cogito/runs so runs are
+// anchored at the target repository root instead of the operator's cwd, and
+// never scatter state across the rest of the worktree. An empty repo falls
+// back to the current directory, matching the execution-context default.
+func defaultStateDir(repo string) string {
+	root := strings.TrimSpace(repo)
+	if root == "" {
+		root = "."
+	}
+
+	return filepath.Join(root, store.DefaultRunsRoot, generatedRunID())
 }
 
 func generatedRunID() string {
