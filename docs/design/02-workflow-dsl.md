@@ -54,12 +54,12 @@ such as `agent: { prompt: ... }` or `command: { command: ... }`.
 
 ```yaml
 - id: unique-step-id
-  kind: agent | command | approval
+  kind: agent | command | approval | verify | commit_check
   needs: [optional, dependencies]
 ```
 
 - `id` - required, unique within the workflow
-- `kind` - required, one of `agent`, `command`, `approval`
+- `kind` - required, one of `agent`, `command`, `approval`, `verify`, `commit_check`
 - `needs` - optional list of prerequisite step IDs
 
 ## Step kinds
@@ -135,6 +135,91 @@ Forbidden fields for this kind:
 
 Approval steps are modeled as first-class steps. They are queued like other steps,
 move into `waiting_approval`, and become `succeeded` only after approval is granted.
+
+### Verify step
+
+```yaml
+- id: verify
+  kind: verify
+  from: implement
+  needs: [implement]
+```
+
+A verify step replays verification commands with `bash -lc` in the run working
+directory, stopping at the first non-zero exit. It is a synchronous local gate
+implemented by `verifyDriver` in `internal/runtime/verify_driver.go`; there is no
+provider session.
+
+Field model (exactly one of `commands` or `from` must be set):
+
+- `commands` - explicit list of shell commands to replay
+- `from` - the id of an upstream agent step; its `AgentResult.Verification` list
+  is used as the command set, read from that step's persisted structured output
+
+```yaml
+- id: verify
+  kind: verify
+  commands:
+    - go build ./...
+    - go test ./...
+  needs: [implement]
+```
+
+Forbidden fields for this kind:
+
+- `agent`
+- `prompt`
+- `command`
+- `message`
+
+Rules:
+
+- `commands` and `from` are mutually exclusive; supplying both, or neither, fails
+  schema validation
+- when `from` is used, the referenced step must have succeeded and carry a
+  structured output, otherwise the verify step fails with an `ErrorCodeState`
+  summary (see `08-errors.md`)
+
+### Commit check step
+
+```yaml
+- id: commit_check
+  kind: commit_check
+  from: implement
+  require_some: true
+  allow_dirty: false
+  needs: [verify]
+```
+
+A commit_check step validates the commits an upstream agent self-reported against
+real git history. It is synchronous and implemented by `commitCheckDriver` in
+`internal/runtime/commit_check_driver.go`, using `internal/gitutil`.
+
+Required fields:
+
+- `from` - the id of the upstream agent step whose `AgentResult.Commits` are
+  validated
+
+Optional fields:
+
+- `require_some` - when true, fail if the agent reported zero commits
+- `allow_dirty` - when false (default), fail if the work tree still has
+  uncommitted changes after the agent ran
+
+Forbidden fields for this kind:
+
+- `agent`
+- `prompt`
+- `command`
+- `commands`
+- `message`
+
+Rules:
+
+- every reported commit is checked with `git rev-parse --verify <ref>^{commit}`;
+  any ref that does not resolve fails the step (`invalid commit refs: ...`)
+- the upstream step must have succeeded and carry a structured output, otherwise
+  the step fails with an `ErrorCodeState` summary
 
 ## Validation Rules
 
@@ -238,6 +323,39 @@ steps:
 
 Both `unit` and `integration` can become ready after `prepare`, but execution will
 still be deterministic and sequential in the current runtime.
+
+### Agent + verify + commit_check workflow
+
+This is the shape produced by `cogito feishu run` (see `06-cli.md`): an agent step
+delegates a task, a verify step replays the verification commands the agent
+reported, and a commit_check step asserts the self-reported commits exist.
+
+```yaml
+apiVersion: cogito/v1alpha1
+kind: Workflow
+metadata:
+  name: implement-and-check
+steps:
+  - id: agent
+    kind: agent
+    agent: codex
+    prompt: Implement the requested change and report commits
+
+  - id: verify
+    kind: verify
+    from: agent
+    needs: [agent]
+
+  - id: commit_check
+    kind: commit_check
+    from: agent
+    needs: [verify]
+```
+
+The `verify` and `commit_check` steps both read the agent step's persisted
+`AgentResult` structured output (`verification` and `commits` respectively). If the
+agent reports a commit that does not exist on `HEAD`, `commit_check` fails and the
+run fails.
 
 ## Unsupported Features
 

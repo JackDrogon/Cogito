@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -12,6 +13,10 @@ import (
 	"github.com/JackDrogon/Cogito/internal/runtime"
 	"github.com/JackDrogon/Cogito/internal/store"
 )
+
+// codexSandboxEnv mirrors AgentLoop's CODEX_SANDBOX override; empty falls back
+// to the codex adapter's danger-full-access default.
+const codexSandboxEnv = "CODEX_SANDBOX"
 
 type runtimeWiring struct {
 	LookupAdapter runtime.AdapterLookup
@@ -36,11 +41,26 @@ func buildRuntimeWiring(runStore *store.Store, flags *sharedFlags) (runtimeWirin
 	}
 
 	return runtimeWiring{
-		LookupAdapter: defaultAdapterLookup(),
+		LookupAdapter: defaultAdapterLookup(adapterOptionDefaults{
+			Sandbox:    codexSandbox(),
+			Model:      "",
+			LogDirRoot: runStore.Layout().RunDir,
+		}),
 		CommandRunner: newSupervisorCommandRunner(runStore, context.workingDir, providerTimeout(flags)),
 		RepoPath:      context.repoPath,
 		WorkingDir:    context.workingDir,
 	}, nil
+}
+
+// codexSandbox resolves the codex sandbox mode from the environment, falling
+// back to the adapter default when CODEX_SANDBOX is unset. Model is intentionally
+// left empty: the workflow DSL has no per-step model field yet (L1 revisits).
+func codexSandbox() string {
+	if value := strings.TrimSpace(os.Getenv(codexSandboxEnv)); value != "" {
+		return value
+	}
+
+	return "danger-full-access"
 }
 
 func resolveExecutionContext(runStore *store.Store, flags *sharedFlags) (*executionContext, error) {

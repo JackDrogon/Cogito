@@ -6,9 +6,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/JackDrogon/Cogito/internal/task/feishuproject"
+	"github.com/JackDrogon/Cogito/internal/workflow"
 )
 
 // feishuCommandRegistry is the subcommand table for `cogito feishu ...`.
@@ -17,6 +20,7 @@ import (
 var feishuCommandRegistry = newCommandRegistry(
 	feishuPullCommand{},
 	feishuWatchCommand{},
+	feishuRunCommand{},
 )
 
 type feishuPullCommand struct{}
@@ -55,6 +59,261 @@ func (feishuWatchCommand) Run(ctx context.Context, args []string, stdout io.Writ
 	}
 
 	return runFeishuWatch(ctx, flags, stdout)
+}
+
+type feishuRunCommand struct{}
+
+func (feishuRunCommand) Name() string { return "run" }
+func (feishuRunCommand) Summary() string {
+	return "Delegate a Feishu Project story to a code agent workflow"
+}
+
+func (feishuRunCommand) Run(ctx context.Context, args []string, stdout io.Writer) error {
+	flags, err := parseFeishuRunFlags(args, stdout)
+	if isHelpRequested(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	return runFeishuRun(ctx, flags, stdout)
+}
+
+// feishuRunFlags holds the parsed `cogito feishu run` flags. The shared
+// execution flags are embedded by value and threaded into RunCompiledWorkflow
+// so the ephemeral run honors --state-dir/--approval/--repo just like
+// `cogito run`.
+type feishuRunFlags struct {
+	storyID       int64
+	configPath    string
+	agentName     string
+	noVerify      bool
+	noCommitCheck bool
+	shared        sharedFlags
+}
+
+// parseFeishuRunFlags parses the feishu run command line. The story id is a
+// required positional argument; it may appear either before the flags
+// (`feishu run 7004 -c cfg.toml`) or after them (`feishu run -c cfg.toml 7004`),
+// so the leading positional is split off before the flag set runs.
+func parseFeishuRunFlags(args []string, stdout io.Writer) (feishuRunFlags, error) {
+	var (
+		storyToken string
+		flagArgs   []string
+	)
+	if len(args) > 0 && isSubcommandToken(args[0]) {
+		storyToken = args[0]
+		flagArgs = args[1:]
+	} else {
+		flagArgs = args
+	}
+
+	fs := flag.NewFlagSet("feishu run", flag.ContinueOnError)
+	fs.SetOutput(stdout)
+
+	flags := feishuRunFlags{}
+	fs.StringVar(&flags.configPath, "c", "", "Path to Cogito TOML config containing [meegle] section")
+	fs.StringVar(&flags.configPath, "config", "", "Path to Cogito TOML config containing [meegle] section")
+	fs.StringVar(&flags.agentName, "agent", "codex", "Code agent to delegate to (codex|claude|opencode)")
+	fs.BoolVar(&flags.noVerify, "no-verify", false, "Skip the verify step")
+	fs.BoolVar(&flags.noCommitCheck, "no-commit-check", false, "Skip the commit_check step")
+	registerSharedFlags(fs, &flags.shared)
+
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(stdout, "Usage: cogito feishu run <story-id> -c <config.toml> [--agent codex|claude|opencode] [--no-verify] [--no-commit-check] [flags]")
+		fs.PrintDefaults()
+	}
+
+	if err := fs.Parse(flagArgs); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return feishuRunFlags{}, errHelpRequested
+		}
+		return feishuRunFlags{}, err
+	}
+
+	rest := fs.Args()
+	if storyToken == "" {
+		if len(rest) == 0 {
+			return feishuRunFlags{}, errors.New("feishu run: <story-id> is required")
+		}
+		storyToken = rest[0]
+		rest = rest[1:]
+	}
+	if len(rest) > 0 {
+		return feishuRunFlags{}, fmt.Errorf("feishu run: unexpected positional arguments: %v", rest)
+	}
+
+	storyID, err := strconv.ParseInt(storyToken, 10, 64)
+	if err != nil {
+		return feishuRunFlags{}, fmt.Errorf("feishu run: invalid story-id %q: must be an integer", storyToken)
+	}
+	flags.storyID = storyID
+
+	if strings.TrimSpace(flags.configPath) == "" {
+		return feishuRunFlags{}, errors.New("feishu run: --config (or -c) is required")
+	}
+
+	flags.agentName = strings.TrimSpace(flags.agentName)
+	if flags.agentName == "" {
+		flags.agentName = "codex"
+	}
+	if !isValidAgentName(flags.agentName) {
+		return feishuRunFlags{}, fmt.Errorf("feishu run: invalid --agent %q; must be one of codex, claude, opencode", flags.agentName)
+	}
+
+	if strings.TrimSpace(flags.shared.stateDir) == "" {
+		flags.shared.stateDir = defaultStateDir()
+	}
+
+	return flags, nil
+}
+
+func isValidAgentName(name string) bool {
+	switch name {
+	case "codex", "claude", "opencode":
+		return true
+	default:
+		return false
+	}
+}
+
+func runFeishuRun(ctx context.Context, flags feishuRunFlags, stdout io.Writer) error {
+	cfg, err := feishuproject.LoadConfig(flags.configPath)
+	if err != nil {
+		return err
+	}
+
+	svc := feishuproject.NewService(cfg)
+	result, err := svc.Pull(ctx)
+	if err != nil {
+		return err
+	}
+	reportWorkflowErrors(stdout, result.WorkflowErrors)
+
+	compiled, repoPath, err := buildFeishuRunPlan(result.Stories, flags)
+	if err != nil {
+		return err
+	}
+
+	// The agent prompt declares story.RepoPath as the project root, so the
+	// runtime wiring (runner Dir, repo lock, verify/commit_check workingDir)
+	// must target that repo rather than the cogito process cwd. Thread it
+	// through the shared --repo flag the run kernel already honors.
+	sharedCopy := flags.shared
+	sharedCopy.repo = repoPath
+
+	output, err := appsvc.RunCompiledWorkflow(ctx, RunCompiledWorkflowInput{Compiled: compiled, Flags: &sharedCopy})
+	if err != nil {
+		return err
+	}
+
+	return presenter.PresentRunWorkflow(stdout, output)
+}
+
+// buildFeishuRunPlan resolves the story, validates its repo mapping, builds the
+// ephemeral spec, and compiles it. It returns the resolved repo path alongside
+// the compiled workflow so the caller can target the runtime wiring at the
+// story repo. It is split out from runFeishuRun so the post-pull logic is
+// unit-testable without hitting the Feishu API.
+func buildFeishuRunPlan(stories []feishuproject.Story, flags feishuRunFlags) (*workflow.CompiledWorkflow, string, error) {
+	story, ok := findStory(stories, flags.storyID)
+	if !ok {
+		return nil, "", fmt.Errorf("feishu run: story %d not found", flags.storyID)
+	}
+
+	rawRepoPath := strings.TrimSpace(story.RepoPath)
+	if rawRepoPath == "" {
+		return nil, "", fmt.Errorf("feishu run: story %d has no repo_path mapping; configure [repos] in TOML", flags.storyID)
+	}
+
+	repoPath, err := canonicalRepoPath(rawRepoPath)
+	if err != nil {
+		return nil, "", fmt.Errorf("feishu run: resolve story %d repo_path %q: %w", flags.storyID, rawRepoPath, err)
+	}
+
+	// A user-supplied --repo that disagrees with the story mapping is almost
+	// certainly a mistake: the prompt and the runtime would target different
+	// trees. Compare canonical absolute paths so "./repo" vs "/abs/repo" or a
+	// trailing-slash variant of the same directory is not a false conflict.
+	if userRepo := strings.TrimSpace(flags.shared.repo); userRepo != "" {
+		match, matchErr := repoMatches(rawRepoPath, userRepo)
+		if matchErr != nil {
+			return nil, "", fmt.Errorf("feishu run: resolve --repo %q: %w", userRepo, matchErr)
+		}
+
+		if !match {
+			return nil, "", fmt.Errorf("feishu run: --repo %q conflicts with story %d repo_path %q", userRepo, flags.storyID, rawRepoPath)
+		}
+	}
+
+	spec, err := feishuproject.BuildEphemeralSpec(feishuproject.EphemeralOptions{
+		Story:           story,
+		AgentName:       flags.agentName,
+		RepoPath:        repoPath,
+		WithVerify:      !flags.noVerify,
+		WithCommitCheck: !flags.noCommitCheck,
+	})
+	if err != nil {
+		return nil, "", err
+	}
+
+	compiled, err := workflow.CompileWorkflow(spec)
+	if err != nil {
+		return nil, "", err
+	}
+
+	return compiled, repoPath, nil
+}
+
+// canonicalRepoPath normalizes a repo path to an absolute, slash-trimmed,
+// Clean'd form so equivalent spellings ("./repo", "repo/", "/abs/repo")
+// canonicalize identically. An empty input returns an empty string.
+func canonicalRepoPath(path string) (string, error) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "", nil
+	}
+
+	// Drop trailing slashes so "repo/" and "repo" agree, but keep a bare root.
+	trimmed = strings.TrimRight(trimmed, "/")
+	if trimmed == "" {
+		trimmed = "/"
+	}
+
+	// filepath.Abs resolves against the process cwd and also Clean's the result.
+	abs, err := filepath.Abs(trimmed)
+	if err != nil {
+		return "", err
+	}
+
+	return abs, nil
+}
+
+// repoMatches reports whether the story repo path and a user-supplied --repo
+// point at the same directory once both are canonicalized.
+func repoMatches(story, user string) (bool, error) {
+	storyCanonical, err := canonicalRepoPath(story)
+	if err != nil {
+		return false, err
+	}
+
+	userCanonical, err := canonicalRepoPath(user)
+	if err != nil {
+		return false, err
+	}
+
+	return storyCanonical == userCanonical, nil
+}
+
+func findStory(stories []feishuproject.Story, id int64) (feishuproject.Story, bool) {
+	for _, story := range stories {
+		if story.ID == id {
+			return story, true
+		}
+	}
+
+	return feishuproject.Story{}, false
 }
 
 type feishuFlags struct {

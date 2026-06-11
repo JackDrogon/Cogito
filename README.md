@@ -23,6 +23,8 @@ Key properties:
 - resumable runs through checkpoint recovery and replay
 - approval gates for explicit workflow pauses, adapter requests, and policy exceptions
 - repository locking and dirty-worktree protection for safer automation
+- non-git directories are supported: runs degrade gracefully (path-based lock,
+  no worktree checks, commit_check becomes a no-op)
 
 ## Installation
 
@@ -51,6 +53,16 @@ cogito workflow validate workflow.yaml
 ```bash
 cogito run workflow.yaml --state-dir ./ref/tmp/runs/run-123
 ```
+
+### Run an ad hoc agent task
+
+```bash
+cogito agents run -p claude "refactor auth module"
+```
+
+This synthesizes an ephemeral `agent -> verify -> commit_check` workflow for the
+prompt and runs it against the current directory (or `--repo`). Use
+`--no-verify` / `--no-commit-check` to skip the trailing checks.
 
 ### Inspect, resume, approve, cancel, and replay
 
@@ -150,6 +162,7 @@ Implemented commands:
 
 - `cogito workflow validate <file>`
 - `cogito run <file>`
+- `cogito agents run <prompt> [-p codex|claude|opencode]`
 - `cogito status --state-dir <dir>`
 - `cogito resume --state-dir <dir>`
 - `cogito approve --state-dir <dir>`

@@ -183,6 +183,11 @@ ref/tmp/
 
 - **Dirty worktree check**: enforced before run start unless `--allow-dirty` is set.
 - **Single repo lock**: only one run may mutate a repository at a time.
+- **Non-git degradation** (AgentLoop port): a `--repo` directory that is not a
+  git repository still runs. The absolute directory path becomes the lock root,
+  the dirty-worktree check is skipped (no worktree exists), and `commit_check`
+  steps pass as an explicit no-op. The agent prompt already instructs agents to
+  leave `commits` empty outside git.
 - **Strict schema parsing**: unknown workflow fields fail validation immediately.
 - **Event-first persistence**: runtime previews each transition before appending it.
 - **Checkpoint recovery**: incomplete checkpoint writes fall back to the temp file.

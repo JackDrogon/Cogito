@@ -71,6 +71,14 @@ func runCapabilityTest(t *testing.T, tc *ContractCase) CapabilityMatrix {
 func runStartAndPollTest(t *testing.T, ctx context.Context, tc *ContractCase) {
 	t.Helper()
 
+	// Async contract: a Start that reports Running must be followed by at
+	// least one PollOrCollect that drives the execution to a terminal,
+	// normalizable state. Without poll states the suite would try to
+	// normalize a Running execution, which is illegal.
+	if tc.WantStartState == ExecutionStateRunning && len(tc.WantPollStates) == 0 {
+		t.Fatalf("async contract: WantStartState=running requires at least one WantPollStates entry to reach a terminal state")
+	}
+
 	execution, err := tc.Adapter.Start(ctx, tc.StartRequest)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)

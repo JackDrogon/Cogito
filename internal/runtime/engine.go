@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ const (
 	dataApprovalTrigger   = "approval_trigger"
 	dataSummary           = "summary"
 	dataNormalizedStatus  = "normalized_status"
+	dataResumable         = "resumable"
 )
 
 type EventStore interface {
@@ -430,6 +432,25 @@ func (e *Engine) ReadyStepIDs() []string {
 	}
 
 	return ready
+}
+
+// StepStructuredOutput returns the normalized AgentResult JSON persisted for a
+// succeeded step. It returns an ErrorCodeState error when the step is unknown
+// or has not succeeded, so downstream verify/commit_check drivers report a
+// missing structured output rather than silently consuming nil. The step kind
+// is intentionally not validated (plan OQ #7): command/approval steps simply
+// carry a nil StructuredOutput.
+func (e *Engine) StepStructuredOutput(stepID string) (json.RawMessage, error) {
+	step, ok := e.snapshot.Steps[stepID]
+	if !ok {
+		return nil, newError(ErrorCodeState, fmt.Sprintf("unknown step %q", stepID))
+	}
+
+	if step.State != StepStateSucceeded {
+		return nil, newError(ErrorCodeState, fmt.Sprintf("step %q has not succeeded", stepID))
+	}
+
+	return cloneRawMessage(step.StructuredOutput), nil
 }
 
 func (e *Engine) GrantApproval(ctx context.Context, message string) error {

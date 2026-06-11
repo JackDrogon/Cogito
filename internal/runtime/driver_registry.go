@@ -21,7 +21,7 @@ type StepDriverRegistry struct {
 }
 
 func NewStepDriverRegistry() *StepDriverRegistry {
-	registry := &StepDriverRegistry{factories: make(map[workflow.StepKind]StepDriverFactory, 3)}
+	registry := &StepDriverRegistry{factories: make(map[workflow.StepKind]StepDriverFactory, 5)}
 
 	registry.Register(
 		workflow.StepKindAgent,
@@ -54,6 +54,20 @@ func NewStepDriverRegistry() *StepDriverRegistry {
 		workflow.StepKindApproval,
 		StepDriverFactoryFunc(func(engine *Engine, _ workflow.CompiledStep) (stepDriver, error) {
 			return approvalDriver{runID: engine.runID, ids: engine.ids}, nil
+		}),
+	)
+
+	registry.Register(
+		workflow.StepKindVerify,
+		StepDriverFactoryFunc(func(engine *Engine, _ workflow.CompiledStep) (stepDriver, error) {
+			return verifyDriver{syncTerminalDriver: syncTerminalDriver{kind: "verify"}, engine: engine}, nil
+		}),
+	)
+
+	registry.Register(
+		workflow.StepKindCommitCheck,
+		StepDriverFactoryFunc(func(engine *Engine, _ workflow.CompiledStep) (stepDriver, error) {
+			return commitCheckDriver{syncTerminalDriver: syncTerminalDriver{kind: "commit_check"}, engine: engine}, nil
 		}),
 	)
 

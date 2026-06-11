@@ -12,7 +12,7 @@ func TestLookupRegisteredAdapterSupportsBuiltinLocalProviders(t *testing.T) {
 	lookup := newAdapterLookup(newAdapterResolverChain(
 		builtinAdapterResolver(),
 		registeredAdapterResolver(),
-	))
+	), adapterOptionDefaults{})
 
 	for _, provider := range []string{"reviewer", "writer"} {
 		t.Run(provider, func(t *testing.T) {
@@ -46,7 +46,7 @@ func TestLookupRegisteredAdapterRejectsUnknownProvider(t *testing.T) {
 	lookup := newAdapterLookup(newAdapterResolverChain(
 		builtinAdapterResolver(),
 		registeredAdapterResolver(),
-	))
+	), adapterOptionDefaults{})
 
 	_, err := lookup(workflow.CompiledStep{
 		StepSpec: workflow.StepSpec{
@@ -65,14 +65,14 @@ func TestLookupRegisteredAdapterRejectsUnknownProvider(t *testing.T) {
 
 func TestAdapterResolverChainUsesFirstMatch(t *testing.T) {
 	chain := newAdapterResolverChain(
-		adapterResolverFunc(func(provider string) (adapters.Adapter, bool) {
+		adapterResolverFunc(func(provider string, _ adapters.AdapterOptions) (adapters.Adapter, bool) {
 			if provider != "reviewer" {
 				return nil, false
 			}
 
 			return builtinLocalAdapter{provider: "first"}, true
 		}),
-		adapterResolverFunc(func(provider string) (adapters.Adapter, bool) {
+		adapterResolverFunc(func(provider string, _ adapters.AdapterOptions) (adapters.Adapter, bool) {
 			if provider != "reviewer" {
 				return nil, false
 			}
@@ -81,7 +81,7 @@ func TestAdapterResolverChainUsesFirstMatch(t *testing.T) {
 		}),
 	)
 
-	adapter, ok := chain.Resolve("reviewer")
+	adapter, ok := chain.Resolve("reviewer", adapters.AdapterOptions{})
 	if !ok {
 		t.Fatal("Resolve() ok = false, want true")
 	}

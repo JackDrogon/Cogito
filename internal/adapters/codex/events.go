@@ -122,10 +122,20 @@ func buildExecution(params executionParams) *shared.Execution {
 }
 
 func providerSessionID(request shared.StartRequest, events []event) string {
+	// Walk every event and keep the LAST non-empty thread_id. When logs are
+	// concatenated or the session was rotated mid-run, the most recent thread
+	// id is the one `resume <sid>` must target; returning the first match would
+	// re-attach to a stale session.
+	latest := ""
+
 	for _, event := range events {
-		if strings.TrimSpace(event.ThreadID) != "" {
-			return strings.TrimSpace(event.ThreadID)
+		if threadID := strings.TrimSpace(event.ThreadID); threadID != "" {
+			latest = threadID
 		}
+	}
+
+	if latest != "" {
+		return latest
 	}
 
 	return fmt.Sprintf("codex-%s-%s", sanitizeID(request.StepID), sanitizeID(request.AttemptID))

@@ -44,6 +44,13 @@ Cogito/
 | `CompiledWorkflow` | struct | `internal/workflow/model.go` | central | immutable runtime-ready DAG |
 | `applyEvent` | function | `internal/runtime/state_machine.go` | central | folds persisted events into snapshot state |
 | `Register` / `Lookup` | function | `internal/adapters/registry.go` | central | process-local adapter registry for CLI wiring |
+| `BuildMain` / `BuildCommitRecovery` / `BuildDirtyWorktree` | function | `internal/adapters/prompt/prompt.go` | central | AgentLoop-ported prompt templates (main + recovery flavors) |
+| `Runner.Start` / `Runner.Session` | method/type | `internal/adapters/runner/runner.go` | central | async provider process launcher + live session handle |
+| `GitOps.IsRepo` / `GitOps.ValidateCommitRefs` | method | `internal/gitutil/gitutil.go` | central | strict repo detection + self-reported commit validation |
+| `applicationService.RunCompiledWorkflow` | method | `internal/app/application_service.go` | central | run a pre-compiled (ephemeral) workflow without a YAML file |
+| `feishuproject.BuildEphemeralSpec` | function | `internal/task/feishuproject/run.go` | central | story -> agent/verify/commit_check workflow spec |
+| `Engine.StepStructuredOutput` | method | `internal/runtime/engine.go` | central | read a succeeded step's normalized AgentResult JSON |
+| `Engine.resumeStep` / `EventStepInterrupted` | method/event | `internal/runtime/step_executor.go`, `internal/store/types.go` | central | resumable post-interrupt re-attach + recovery prompt selection |
 
 ## CONVENTIONS
 - Temporary files, downloaded code, and test scratch space belong under `$repo/ref/tmp`.

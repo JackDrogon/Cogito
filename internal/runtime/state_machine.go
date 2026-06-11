@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -193,9 +194,35 @@ func applyStepEvent(request stateMachineEventRequest) error {
 		current.Summary = summary
 	}
 
-	if to == StepStateQueued && request.Event.Type == store.EventStepRetried {
-		current.AttemptID = ""
-		current.ProviderSessionID = ""
+	// Fold structured output whenever an event carries it (only successful
+	// agent transitions do). The field is per-step, not per-attempt, so it is
+	// preserved through retries until a later attempt overwrites it.
+	if len(request.Event.StructuredOutput) > 0 {
+		current.StructuredOutput = append(json.RawMessage(nil), request.Event.StructuredOutput...)
+	}
+
+	switch request.Event.Type {
+	case store.EventStepInterrupted:
+		// EventStepInterrupted parks a running step back in the queued state
+		// while preserving AttemptID + ProviderSessionID so executeStep can
+		// resume the same provider session on the next pass.
+		if to == StepStateQueued {
+			current.Resumable = true
+		}
+	case store.EventStepRetried:
+		// EventStepRetried is a fresh attempt: drop the prior session and resume
+		// intent so the next pass performs a clean Start.
+		if to == StepStateQueued {
+			current.AttemptID = ""
+			current.ProviderSessionID = ""
+			current.Resumable = false
+		}
+	case store.EventStepStarted, store.EventStepSucceeded, store.EventStepFailed:
+		// Resume intent is single-shot. Once the step re-enters running (the
+		// resume actually fired) or reaches a terminal outcome, clear Resumable
+		// so a stale "true" cannot persist in the checkpoint indefinitely. Only
+		// EventStepInterrupted ever sets it back to true.
+		current.Resumable = false
 	}
 
 	request.Snapshot.Steps[stepID] = current

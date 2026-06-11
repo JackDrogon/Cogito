@@ -80,6 +80,10 @@ Typical use:
 - approval resolution failures
 - replay validation failures
 - missing collaborators such as store, driver factory, or compiled workflow
+- missing or undecodable structured output when a downstream `verify` /
+  `commit_check` step reads an upstream agent step (raised by
+  `readAgentResult` / `Engine.StepStructuredOutput` in `internal/runtime`); the
+  step is unknown, has not succeeded, or carries no `AgentResult` JSON
 
 Rendered form:
 

@@ -12,6 +12,8 @@ internal/
 |-- adapters/  # provider SPI, registry, fake adapter, provider impls
 |-- store/     # file-backed events/checkpoints/artifacts/workflow persistence
 |-- executor/  # local command supervision and normalization
+|-- gitutil/   # strict repo detection + self-reported commit validation (commit_check/recovery)
+|-- task/      # task-source integrations; task/feishuproject/run.go builds ephemeral story workflows
 `-- version/   # build-time version surface
 ```
 

@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -15,6 +16,14 @@ type StepSnapshot struct {
 	ApprovalID        string
 	ApprovalTrigger   ApprovalTrigger
 	Summary           string
+	// StructuredOutput holds the normalized AgentResult JSON produced by a
+	// succeeded agent step. It is persisted through events and checkpoints so
+	// downstream steps can read upstream agent results across resumes.
+	StructuredOutput json.RawMessage
+	// Resumable marks a step that was interrupted while running but still has a
+	// provider session id to resume from. executeStep dispatches to resumeStep
+	// instead of Start while a queued step carries this flag.
+	Resumable bool
 }
 
 // Snapshot represents the in-memory state of a workflow run at a point in time.
@@ -58,6 +67,8 @@ func checkpointFromSnapshot(snapshot Snapshot, repoPath, workingDir string) *sto
 			ApprovalID:        step.ApprovalID,
 			ApprovalTrigger:   string(step.ApprovalTrigger),
 			Summary:           step.Summary,
+			StructuredOutput:  cloneRawMessage(step.StructuredOutput),
+			Resumable:         step.Resumable,
 		}
 	}
 
@@ -129,6 +140,8 @@ func snapshotFromCheckpoint(
 			ApprovalID:        stored.ApprovalID,
 			ApprovalTrigger:   ApprovalTrigger(strings.TrimSpace(stored.ApprovalTrigger)),
 			Summary:           stored.Summary,
+			StructuredOutput:  cloneRawMessage(stored.StructuredOutput),
+			Resumable:         stored.Resumable,
 		}
 	}
 
@@ -181,8 +194,20 @@ func cloneSnapshot(snapshot Snapshot) Snapshot {
 	}
 
 	for stepID, step := range snapshot.Steps {
+		step.StructuredOutput = cloneRawMessage(step.StructuredOutput)
 		cloned.Steps[stepID] = step
 	}
+
+	return cloned
+}
+
+func cloneRawMessage(value json.RawMessage) json.RawMessage {
+	if value == nil {
+		return nil
+	}
+
+	cloned := make(json.RawMessage, len(value))
+	copy(cloned, value)
 
 	return cloned
 }
@@ -213,14 +238,15 @@ func cloneStringMap(values map[string]string) map[string]string {
 
 func cloneEvent(event store.Event) store.Event {
 	return store.Event{
-		Sequence:   event.Sequence,
-		Type:       event.Type,
-		RunID:      event.RunID,
-		StepID:     event.StepID,
-		AttemptID:  event.AttemptID,
-		ApprovalID: event.ApprovalID,
-		Message:    event.Message,
-		Data:       cloneStringMap(event.Data),
+		Sequence:         event.Sequence,
+		Type:             event.Type,
+		RunID:            event.RunID,
+		StepID:           event.StepID,
+		AttemptID:        event.AttemptID,
+		ApprovalID:       event.ApprovalID,
+		Message:          event.Message,
+		Data:             cloneStringMap(event.Data),
+		StructuredOutput: cloneRawMessage(event.StructuredOutput),
 	}
 }
 

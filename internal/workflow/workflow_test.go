@@ -157,7 +157,8 @@ func TestCompileStepKindSpecUsesRegisteredDescriptors(t *testing.T) {
 }
 
 func TestStepKindDescriptorsCoverBuiltins(t *testing.T) {
-	for _, kind := range []StepKind{StepKindAgent, StepKindCommand, StepKindApproval} {
+	kinds := []StepKind{StepKindAgent, StepKindCommand, StepKindApproval, StepKindVerify, StepKindCommitCheck}
+	for _, kind := range kinds {
 		descriptor, ok := lookupStepKindDescriptor(kind)
 		if !ok {
 			t.Fatalf("descriptor missing for %q", kind)
@@ -165,6 +166,208 @@ func TestStepKindDescriptorsCoverBuiltins(t *testing.T) {
 		if descriptor.bind == nil {
 			t.Fatalf("descriptor bind missing for %q", kind)
 		}
+	}
+}
+
+func TestCompileStepVerifyAndCommitCheck(t *testing.T) {
+	t.Run("verify with commands", func(t *testing.T) {
+		spec, err := compileStep(rawStep{
+			ID:       "check",
+			Kind:     string(StepKindVerify),
+			Commands: []string{"go test ./...", " "},
+		}, 0)
+		if err != nil {
+			t.Fatalf("compileStep() error = %v", err)
+		}
+		if spec.Verify == nil || len(spec.Verify.Commands) != 1 || spec.Verify.Commands[0] != "go test ./..." {
+			t.Fatalf("verify spec = %#v", spec.Verify)
+		}
+		if spec.Verify.From != "" {
+			t.Fatalf("verify From = %q, want empty", spec.Verify.From)
+		}
+	})
+
+	t.Run("verify with from", func(t *testing.T) {
+		spec, err := compileStep(rawStep{
+			ID:   "check",
+			Kind: string(StepKindVerify),
+			From: ptr("agent"),
+		}, 0)
+		if err != nil {
+			t.Fatalf("compileStep() error = %v", err)
+		}
+		if spec.Verify == nil || spec.Verify.From != "agent" || len(spec.Verify.Commands) != 0 {
+			t.Fatalf("verify spec = %#v", spec.Verify)
+		}
+	})
+
+	t.Run("verify with both commands and from", func(t *testing.T) {
+		_, err := compileStep(rawStep{
+			ID:       "check",
+			Kind:     string(StepKindVerify),
+			Commands: []string{"go test ./..."},
+			From:     ptr("agent"),
+		}, 0)
+		assertWorkflowError(workflowErrorExpectation{Test: t, Error: err, WantCode: ErrorCodeSchema, WantMessage: "not both"})
+	})
+
+	t.Run("verify with neither", func(t *testing.T) {
+		_, err := compileStep(rawStep{ID: "check", Kind: string(StepKindVerify)}, 0)
+		assertWorkflowError(workflowErrorExpectation{Test: t, Error: err, WantCode: ErrorCodeSchema, WantMessage: "either commands or from"})
+	})
+
+	t.Run("commit_check with from", func(t *testing.T) {
+		requireSome := true
+		allowDirty := true
+		spec, err := compileStep(rawStep{
+			ID:          "commits",
+			Kind:        string(StepKindCommitCheck),
+			From:        ptr("agent"),
+			RequireSome: &requireSome,
+			AllowDirty:  &allowDirty,
+		}, 0)
+		if err != nil {
+			t.Fatalf("compileStep() error = %v", err)
+		}
+		if spec.CommitCheck == nil || spec.CommitCheck.From != "agent" {
+			t.Fatalf("commit_check spec = %#v", spec.CommitCheck)
+		}
+		if !spec.CommitCheck.RequireSome || !spec.CommitCheck.AllowDirty {
+			t.Fatalf("commit_check flags = %#v", spec.CommitCheck)
+		}
+	})
+
+	t.Run("commit_check defaults", func(t *testing.T) {
+		spec, err := compileStep(rawStep{ID: "commits", Kind: string(StepKindCommitCheck), From: ptr("agent")}, 0)
+		if err != nil {
+			t.Fatalf("compileStep() error = %v", err)
+		}
+		if spec.CommitCheck.RequireSome || spec.CommitCheck.AllowDirty {
+			t.Fatalf("commit_check defaults = %#v, want both false", spec.CommitCheck)
+		}
+	})
+
+	t.Run("commit_check missing from", func(t *testing.T) {
+		_, err := compileStep(rawStep{ID: "commits", Kind: string(StepKindCommitCheck)}, 0)
+		assertWorkflowError(workflowErrorExpectation{Test: t, Error: err, WantCode: ErrorCodeSchema, WantMessage: "is required"})
+	})
+
+	t.Run("commit_check with commands", func(t *testing.T) {
+		_, err := compileStep(rawStep{
+			ID:       "commits",
+			Kind:     string(StepKindCommitCheck),
+			From:     ptr("agent"),
+			Commands: []string{"echo nope"},
+		}, 0)
+		assertWorkflowError(workflowErrorExpectation{Test: t, Error: err, WantCode: ErrorCodeSchema, WantMessage: "not allowed"})
+	})
+}
+
+func TestLoadWorkflowAgentVerifyCommitCheckChain(t *testing.T) {
+	input := "apiVersion: cogito/v1alpha1\n" +
+		"kind: Workflow\n" +
+		"metadata:\n  name: agent-verify-commit\n" +
+		"steps:\n" +
+		"  - id: agent\n    kind: agent\n    agent: codex\n    prompt: do the work\n" +
+		"  - id: verify\n    kind: verify\n    needs: [agent]\n    from: agent\n" +
+		"  - id: commit_check\n    kind: commit_check\n    needs: [verify]\n    from: agent\n    require_some: true\n"
+
+	compiled, err := LoadWorkflow([]byte(input))
+	if err != nil {
+		t.Fatalf("LoadWorkflow() error = %v", err)
+	}
+
+	if want := []string{"agent", "verify", "commit_check"}; !reflect.DeepEqual(compiled.TopologicalOrder, want) {
+		t.Fatalf("TopologicalOrder = %v, want %v", compiled.TopologicalOrder, want)
+	}
+
+	verifyStep := compiled.Steps[compiled.StepIndex["verify"]]
+	if verifyStep.Verify == nil || verifyStep.Verify.From != "agent" {
+		t.Fatalf("verify step = %#v", verifyStep.Verify)
+	}
+
+	commitStep := compiled.Steps[compiled.StepIndex["commit_check"]]
+	if commitStep.CommitCheck == nil || commitStep.CommitCheck.From != "agent" || !commitStep.CommitCheck.RequireSome {
+		t.Fatalf("commit_check step = %#v", commitStep.CommitCheck)
+	}
+}
+
+func TestParseWorkflowVerifyConflictSurfacesSchemaError(t *testing.T) {
+	input := "apiVersion: cogito/v1alpha1\n" +
+		"kind: Workflow\n" +
+		"metadata:\n  name: bad-verify\n" +
+		"steps:\n" +
+		"  - id: verify\n    kind: verify\n    from: agent\n    commands: [\"go test ./...\"]\n"
+
+	_, err := ParseWorkflow([]byte(input))
+	assertWorkflowError(workflowErrorExpectation{Test: t, Error: err, WantCode: ErrorCodeSchema, WantMessage: "not both"})
+}
+
+// TestValidateStepFromReferences is v3.2 N5: a verify/commit_check `from:` must
+// name an existing agent step that the referencing step depends on. Bad
+// references must fail compilation rather than silently read garbage or run
+// before the agent they claim to consume.
+func TestValidateStepFromReferences(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		wantMessage string
+	}{
+		{
+			name: "verify from missing step",
+			input: "apiVersion: cogito/v1alpha1\nkind: Workflow\nmetadata:\n  name: bad\nsteps:\n" +
+				"  - id: agent\n    kind: agent\n    agent: codex\n    prompt: do work\n" +
+				"  - id: verify\n    kind: verify\n    needs: [agent]\n    from: missing\n",
+			wantMessage: "references unknown step",
+		},
+		{
+			name: "verify from non-agent step",
+			input: "apiVersion: cogito/v1alpha1\nkind: Workflow\nmetadata:\n  name: bad\nsteps:\n" +
+				"  - id: build\n    kind: command\n    command: make\n" +
+				"  - id: verify\n    kind: verify\n    needs: [build]\n    from: build\n",
+			wantMessage: "must reference an agent step",
+		},
+		{
+			name: "verify from without needs",
+			input: "apiVersion: cogito/v1alpha1\nkind: Workflow\nmetadata:\n  name: bad\nsteps:\n" +
+				"  - id: agent\n    kind: agent\n    agent: codex\n    prompt: do work\n" +
+				"  - id: verify\n    kind: verify\n    from: agent\n",
+			wantMessage: "does not declare it in needs",
+		},
+		{
+			name: "commit_check from non-agent step",
+			input: "apiVersion: cogito/v1alpha1\nkind: Workflow\nmetadata:\n  name: bad\nsteps:\n" +
+				"  - id: build\n    kind: command\n    command: make\n" +
+				"  - id: commit_check\n    kind: commit_check\n    needs: [build]\n    from: build\n",
+			wantMessage: "must reference an agent step",
+		},
+		{
+			name: "commit_check from without needs",
+			input: "apiVersion: cogito/v1alpha1\nkind: Workflow\nmetadata:\n  name: bad\nsteps:\n" +
+				"  - id: agent\n    kind: agent\n    agent: codex\n    prompt: do work\n" +
+				"  - id: commit_check\n    kind: commit_check\n    from: agent\n",
+			wantMessage: "does not declare it in needs",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := LoadWorkflow([]byte(tt.input))
+			assertWorkflowError(workflowErrorExpectation{Test: t, Error: err, WantCode: ErrorCodeSemantic, WantMessage: tt.wantMessage})
+		})
+	}
+}
+
+// TestValidateStepFromTransitiveNeeds is v3.2 N5: a `from:` target reachable
+// only through a transitive needs chain is accepted (no false rejection).
+func TestValidateStepFromTransitiveNeeds(t *testing.T) {
+	input := "apiVersion: cogito/v1alpha1\nkind: Workflow\nmetadata:\n  name: chain\nsteps:\n" +
+		"  - id: agent\n    kind: agent\n    agent: codex\n    prompt: do work\n" +
+		"  - id: gate\n    kind: command\n    needs: [agent]\n    command: echo gate\n" +
+		"  - id: verify\n    kind: verify\n    needs: [gate]\n    from: agent\n"
+
+	if _, err := LoadWorkflow([]byte(input)); err != nil {
+		t.Fatalf("LoadWorkflow() error = %v, want nil (transitive needs reach agent)", err)
 	}
 }
 

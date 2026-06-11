@@ -97,13 +97,18 @@ func (m *RepoLockManager) Acquire(opts AcquireOptions) (*RepoLock, error) {
 		return nil, newError(ErrorCodePath, "run id is required")
 	}
 
-	repoRoot, err := resolveRepoRoot(opts.RepoPath)
+	rootInfo, err := resolveRepoRoot(opts.RepoPath)
 	if err != nil {
 		return nil, err
 	}
+	repoRoot := rootInfo.root
 
-	if err := ensureCleanWorktree(repoRoot, opts.AllowDirty); err != nil {
-		return nil, err
+	// Worktree cleanliness is a git concept; in non-git mode (AgentLoop port)
+	// there is nothing to check and the run proceeds with just the path lock.
+	if rootInfo.isGit {
+		if err := ensureCleanWorktree(repoRoot, opts.AllowDirty); err != nil {
+			return nil, err
+		}
 	}
 
 	runsRoot := strings.TrimSpace(opts.RunsRoot)
@@ -241,7 +246,19 @@ func ensureCleanWorktree(repoRoot string, allowDirty bool) error {
 	return nil
 }
 
-func resolveRepoRoot(repoPath string) (string, error) {
+// repoRootInfo carries the resolved lock root plus whether it is a git work
+// tree, so Acquire applies git-only gates (worktree cleanliness) selectively.
+type repoRootInfo struct {
+	root  string
+	isGit bool
+}
+
+// resolveRepoRoot resolves the lock root for repoPath. Inside a git work tree
+// it locks on the repository top level so concurrent runs from different
+// subdirectories contend on the same lock. When git cannot resolve a top level
+// (most commonly: the directory is not a git repository), it degrades to
+// non-git mode ported from AgentLoop instead of failing the run.
+func resolveRepoRoot(repoPath string) (repoRootInfo, error) {
 	repoPath = strings.TrimSpace(repoPath)
 	if repoPath == "" {
 		repoPath = "."
@@ -249,15 +266,35 @@ func resolveRepoRoot(repoPath string) (string, error) {
 
 	output, err := runGit(repoPath, "rev-parse", "--show-toplevel")
 	if err != nil {
-		return "", err
+		return resolveNonGitRoot(repoPath, err)
 	}
 
 	repoRoot := strings.TrimSpace(output)
 	if repoRoot == "" {
-		return "", newError(ErrorCodeGit, "resolve repo root")
+		return repoRootInfo{}, newError(ErrorCodeGit, "resolve repo root")
 	}
 
-	return filepath.Clean(repoRoot), nil
+	return repoRootInfo{root: filepath.Clean(repoRoot), isGit: true}, nil
+}
+
+// resolveNonGitRoot is the non-git degradation path: a directory that is not a
+// git repository can still host a run, with the absolute directory path acting
+// as the lock root so concurrent runs in the same directory still contend on
+// one lock. The original git error is surfaced only when repoPath is not a
+// usable directory at all, keeping the diagnostic for genuinely broken --repo
+// values (e.g. a path that does not exist).
+func resolveNonGitRoot(repoPath string, gitErr error) (repoRootInfo, error) {
+	info, statErr := os.Stat(repoPath)
+	if statErr != nil || !info.IsDir() {
+		return repoRootInfo{}, gitErr
+	}
+
+	abs, absErr := filepath.Abs(repoPath)
+	if absErr != nil {
+		return repoRootInfo{}, wrapError(ErrorCodePath, "resolve repo path "+repoPath, absErr)
+	}
+
+	return repoRootInfo{root: filepath.Clean(abs), isGit: false}, nil
 }
 
 func runGit(repoPath string, args ...string) (string, error) {

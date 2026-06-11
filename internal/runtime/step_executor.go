@@ -87,10 +87,26 @@ func (e *Engine) executeStep(ctx context.Context, stepID string) error {
 		return e.failStepStart(stepID, attemptID, err, "driver setup failed")
 	}
 
+	// An interrupted step is parked in StepStateQueued with Resumable=true and a
+	// preserved provider session. Re-attach to that session instead of starting
+	// a brand-new attempt.
+	prior := e.snapshot.Steps[stepID]
+	if prior.Resumable &&
+		strings.TrimSpace(prior.ProviderSessionID) != "" &&
+		strings.TrimSpace(prior.AttemptID) != "" {
+		return e.resumeStep(ctx, resumeStepParams{
+			Step:              step,
+			Driver:            driver,
+			AttemptID:         prior.AttemptID,
+			ProviderSessionID: prior.ProviderSessionID,
+		})
+	}
+
 	execution, err := driver.Start(ctx, stepStartRequest{
-		Step:      step,
-		AttemptID: attemptID,
-		Snapshot:  e.Snapshot(),
+		Step:       step,
+		AttemptID:  attemptID,
+		Snapshot:   e.Snapshot(),
+		WorkingDir: e.workingDir,
 	})
 	if err != nil {
 		return e.failStepStart(stepID, attemptID, err, "step start failed")
@@ -119,6 +135,68 @@ func (e *Engine) executeStep(ctx context.Context, stepID string) error {
 		Step:      step,
 		AttemptID: attemptID,
 		Driver:    driver,
+		Execution: execution,
+	})
+}
+
+// resumeStepParams groups the inputs for resuming an interrupted step. It keeps
+// the prior AttemptID + ProviderSessionID so the resume re-attaches to the same
+// provider session rather than minting a fresh attempt.
+type resumeStepParams struct {
+	Step              workflow.CompiledStep
+	Driver            stepDriver
+	AttemptID         string
+	ProviderSessionID string
+}
+
+// resumeStep re-attaches to a previously interrupted provider session. It calls
+// the driver's Resume path, then persists EventStepStarted (StepStateQueued →
+// StepStateRunning) reusing the prior attempt + session before handing back to
+// the normal poll/normalize loop.
+func (e *Engine) resumeStep(ctx context.Context, params resumeStepParams) error {
+	handle := adapters.ExecutionHandle{
+		RunID:             e.runID,
+		StepID:            params.Step.ID,
+		AttemptID:         params.AttemptID,
+		ProviderSessionID: params.ProviderSessionID,
+	}
+
+	prior := e.snapshot.Steps[params.Step.ID]
+
+	execution, err := params.Driver.Resume(ctx, stepResumeRequest{
+		Step:           params.Step,
+		Handle:         handle,
+		Snapshot:       e.Snapshot(),
+		WorkingDir:     e.workingDir,
+		RecoveryPrompt: e.recoveryPromptOverride(params.Step, prior),
+	})
+	if err != nil {
+		return e.failStepStart(params.Step.ID, params.AttemptID, err, "step resume failed")
+	}
+
+	providerSessionID := strings.TrimSpace(execution.Handle.ProviderSessionID)
+	if providerSessionID == "" {
+		providerSessionID = params.ProviderSessionID
+		execution.Handle.ProviderSessionID = providerSessionID
+	}
+
+	if err := e.persistStepTransition(StepTransitionParams{
+		EventType:         store.EventStepStarted,
+		StepID:            params.Step.ID,
+		From:              StepStateQueued,
+		To:                StepStateRunning,
+		AttemptID:         params.AttemptID,
+		ProviderSessionID: providerSessionID,
+		Summary:           normalizeSummary(execution.Summary, execution.State),
+		NormalizedStatus:  "",
+	}); err != nil {
+		return err
+	}
+
+	return e.continueExecution(ctx, executionContinuationRequest{
+		Step:      params.Step,
+		AttemptID: params.AttemptID,
+		Driver:    params.Driver,
 		Execution: execution,
 	})
 }
@@ -263,6 +341,7 @@ func (e *Engine) applyResult(ctx context.Context, request executionResultRequest
 			ProviderSessionID: providerSessionID,
 			Summary:           summary,
 			NormalizedStatus:  string(request.Result.Status),
+			StructuredOutput:  request.Result.StructuredOutput,
 		})
 	case adapters.ExecutionStateFailed:
 		if err := e.persistStepTransition(StepTransitionParams{
@@ -298,7 +377,7 @@ func (e *Engine) applyResult(ctx context.Context, request executionResultRequest
 		)
 	case adapters.ExecutionStateInterrupted:
 		if err := e.persistStepTransition(StepTransitionParams{
-			EventType:         store.EventStepRetried,
+			EventType:         store.EventStepInterrupted,
 			StepID:            request.Step.ID,
 			From:              StepStateRunning,
 			To:                StepStateQueued,
@@ -306,6 +385,7 @@ func (e *Engine) applyResult(ctx context.Context, request executionResultRequest
 			ProviderSessionID: providerSessionID,
 			Summary:           summary,
 			NormalizedStatus:  string(request.Result.Status),
+			Resumable:         true,
 		}); err != nil {
 			return err
 		}
@@ -338,15 +418,25 @@ type stepDriver interface {
 }
 
 type stepStartRequest struct {
-	Step      workflow.CompiledStep
-	AttemptID string
-	Snapshot  Snapshot
+	Step       workflow.CompiledStep
+	AttemptID  string
+	Snapshot   Snapshot
+	WorkingDir string
 }
 
 type stepResumeRequest struct {
 	Step     workflow.CompiledStep
 	Handle   adapters.ExecutionHandle
 	Snapshot Snapshot
+	// WorkingDir is the run's working directory, threaded so a cross-process
+	// resume can hand the adapter the original directory instead of relying on
+	// the now-empty in-process session map.
+	WorkingDir string
+	// RecoveryPrompt, when non-empty, overrides the agent step's main prompt on
+	// resume. The engine computes it from the work-tree state (dirty worktree or
+	// missing self-reported commits) so a post-interrupt resume finishes the
+	// prior attempt instead of restarting it. Empty means resume verbatim.
+	RecoveryPrompt string
 }
 
 type agentDriver struct {
@@ -359,10 +449,11 @@ func (d agentDriver) Start(ctx context.Context, request stepStartRequest) (*adap
 	}
 
 	return d.adapter.Start(ctx, adapters.StartRequest{
-		RunID:     request.Snapshot.RunID,
-		StepID:    request.Step.ID,
-		AttemptID: request.AttemptID,
-		Prompt:    request.Step.Agent.Prompt,
+		RunID:      request.Snapshot.RunID,
+		StepID:     request.Step.ID,
+		AttemptID:  request.AttemptID,
+		WorkingDir: request.WorkingDir,
+		Prompt:     request.Step.Agent.Prompt,
 	})
 }
 
@@ -387,9 +478,17 @@ func (d agentDriver) Resume(ctx context.Context, request stepResumeRequest) (*ad
 		return nil, wrapError(ErrorCodeExecution, "resume agent step", err)
 	}
 
+	// A recovery prompt (dirty worktree / missing commit) overrides the main
+	// prompt on resume; an empty override resumes the original task verbatim.
+	resumePrompt := request.Step.Agent.Prompt
+	if strings.TrimSpace(request.RecoveryPrompt) != "" {
+		resumePrompt = request.RecoveryPrompt
+	}
+
 	return d.adapter.Resume(ctx, adapters.ResumeRequest{
-		Handle: request.Handle,
-		Prompt: request.Step.Agent.Prompt,
+		Handle:     request.Handle,
+		Prompt:     resumePrompt,
+		WorkingDir: request.WorkingDir,
 	})
 }
 
@@ -406,12 +505,17 @@ func (d commandDriver) Start(ctx context.Context, request stepStartRequest) (*ad
 		return nil, newError(ErrorCodeConfig, fmt.Sprintf("command config missing for step %q", request.Step.ID))
 	}
 
+	workingDir := strings.TrimSpace(request.WorkingDir)
+	if workingDir == "" {
+		workingDir = "."
+	}
+
 	return d.runner.Start(ctx, CommandRequest{
 		RunID:      request.Snapshot.RunID,
 		StepID:     request.Step.ID,
 		AttemptID:  request.AttemptID,
 		Command:    request.Step.Command.Command,
-		WorkingDir: ".",
+		WorkingDir: workingDir,
 	})
 }
 

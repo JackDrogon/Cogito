@@ -24,6 +24,10 @@ Top-level commands are:
 - `replay`
 - `cancel`
 - `approve`
+- `feishu pull`
+- `feishu watch`
+- `feishu run`
+- `agents run`
 
 Global root option:
 
@@ -144,6 +148,19 @@ Behavior:
 - asks runtime to cancel the run
 - if a step is actively running, runtime first attempts interruption
 
+### Cross-process cancel limitation
+
+`cogito cancel` runs as a **separate process** from the `cogito run` (or `feishu
+run`) process that owns the live adapter subprocess. It cannot directly signal an
+adapter child running inside another process. Instead it appends `RunCanceled` to
+`events.jsonl`; the in-progress run observes that event on its next state-machine
+poll and stops, and in-process interruption (e.g. Ctrl-C to the running process)
+is what actually signals the adapter process group.
+
+This is a pre-existing Cogito design limitation, intentionally left unchanged by
+the AgentLoop port (plan L2.6): cross-process synchronization happens through the
+event log, not through direct process signaling.
+
 ## `replay`
 
 Replay a run from an event log.
@@ -161,6 +178,83 @@ Behavior:
 - renders a `ReplayView`
 
 Replay is read-only and does not mutate the run.
+
+## `feishu run`
+
+Delegate a single Feishu Project story to a code agent. The story description
+becomes the agent task; the command synthesizes an ephemeral
+`agent -> verify -> commit_check` workflow (see `02-workflow-dsl.md`), compiles it,
+and runs it through the same engine as `cogito run`.
+
+```bash
+cogito feishu run 7004653782 -c cogito.toml --agent codex
+```
+
+Flags:
+
+| Flag | Meaning | Default |
+|------|---------|---------|
+| `-c` / `--config` | Feishu Project config TOML (required) | none |
+| `--agent` | Code agent to delegate to: `codex`, `claude`, or `opencode` | `codex` |
+| `--no-verify` | Omit the verify step from the ephemeral workflow | verify enabled |
+| `--no-commit-check` | Omit the commit_check step | commit_check enabled |
+
+It also accepts the shared execution flags (`--state-dir`, `--approval`,
+`--repo`, `--provider-timeout`, `--allow-dirty`). The `<story-id>` positional may
+appear before or after the flags.
+
+Behavior:
+
+1. load the config, build the Feishu service, and `Pull` the project stories
+2. find the story by id (error if missing)
+3. require the story's `repo_path` mapping (error: configure `[repos]` in the TOML);
+   the repo path becomes the run working directory
+4. `BuildEphemeralSpec` renders the agent prompt with `prompt.BuildMain`, embedding
+   the story description as the single task
+5. `workflow.CompileWorkflow` compiles the spec
+6. `applicationService.RunCompiledWorkflow` executes it; `workflow.json` is written
+   to the state dir, so the run is resumable with `cogito resume` just like a
+   standard `cogito run`
+
+`feishu pull` and `feishu watch` (story sync) are the other two `feishu`
+subcommands; `run` is the execution path added during the AgentLoop port.
+
+## `agents run`
+
+Delegate an ad hoc prompt to a code agent without writing a workflow YAML or
+configuring a task source. The prompt becomes the single agent task; like
+`feishu run`, the command synthesizes an ephemeral
+`agent -> verify -> commit_check` workflow through the shared
+`internal/task/agentflow` builder, compiles it, and runs it through the same
+engine as `cogito run`.
+
+```bash
+cogito agents run -p claude "refactor auth module"
+```
+
+Flags:
+
+| Flag | Meaning | Default |
+|------|---------|---------|
+| `-p` / `--agent` | Code agent to delegate to: `codex`, `claude`, or `opencode` | `codex` |
+| `--no-verify` | Omit the verify step from the ephemeral workflow | verify enabled |
+| `--no-commit-check` | Omit the commit_check step | commit_check enabled |
+
+It also accepts the shared execution flags (`--state-dir`, `--approval`,
+`--repo`, `--provider-timeout`, `--allow-dirty`). The `<prompt>` positional must
+be a single (quoted) argument and may appear before or after the flags.
+
+Behavior:
+
+1. resolve the target repository: explicit `--repo`, or the current directory
+   when omitted; the path is canonicalized so the agent prompt and the runtime
+   wiring agree on one absolute root
+2. `agentflow.BuildSpec` renders the agent prompt with `prompt.BuildMain`,
+   embedding the ad hoc prompt as the single task
+3. `workflow.CompileWorkflow` compiles the spec
+4. `applicationService.RunCompiledWorkflow` executes it; `workflow.json` is
+   written to the state dir, so the run is resumable with `cogito resume` just
+   like a standard `cogito run`
 
 ## Usage Patterns
 
@@ -196,6 +290,13 @@ Execution context is resolved in this order:
 1. explicit `--repo`
 2. checkpoint `repo_path` / `working_dir`
 3. current working directory
+
+The directory does not have to be a git repository. Inside git, the lock root
+is the repository top level and the dirty-worktree check applies. Outside git
+(AgentLoop-ported non-git mode), the absolute directory path becomes the lock
+root, the dirty-worktree check is skipped, and `commit_check` steps pass as an
+explicit no-op ("not a git repository"). A `--repo` path that does not exist
+still fails with the original git error.
 
 ### Exit codes
 

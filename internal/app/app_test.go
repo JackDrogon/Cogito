@@ -408,16 +408,16 @@ func TestResumeCommandResumesPausedRunAndRejectsDuplicate(t *testing.T) {
 		t.Fatalf("status.State after resume = %q, want %q", snapshotState, runtime.RunStateSucceeded)
 	}
 
+	// Resuming an already-succeeded run is a no-op (Oracle finding #6): the run
+	// has no remaining work, so the CLI reports "run already succeeded" instead
+	// of erroring with "cannot resume run from \"succeeded\"".
 	var dupOut bytes.Buffer
 	err = Run(t.Context(), []string{"resume", "--state-dir", stateDir}, &dupOut)
-	if err == nil {
-		t.Fatal("Run(resume duplicate) error = nil, want invalid resume state")
+	if err != nil {
+		t.Fatalf("Run(resume duplicate) error = %v, want nil no-op", err)
 	}
-	if !strings.Contains(err.Error(), "cannot resume run from") {
-		t.Fatalf("Run(resume duplicate) error = %v, want contains cannot resume run from", err)
-	}
-	if dupOut.Len() != 0 {
-		t.Fatalf("Run(resume duplicate) output = %q, want empty", dupOut.String())
+	if dupOut.String() != "run already succeeded\n" {
+		t.Fatalf("Run(resume duplicate) output = %q, want %q", dupOut.String(), "run already succeeded\n")
 	}
 }
 

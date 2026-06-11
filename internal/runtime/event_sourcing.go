@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -166,6 +167,14 @@ type StepTransitionParams struct {
 	ProviderSessionID string
 	Summary           string
 	NormalizedStatus  string
+	// StructuredOutput carries the normalized AgentResult JSON for a succeeded
+	// agent step. It is nil for every other transition.
+	StructuredOutput json.RawMessage
+	// Resumable records that an interrupted step keeps a resumable provider
+	// session. It is encoded into event.Data as "true" so replay and downstream
+	// readers can audit the resume intent; applyStepEvent still derives the
+	// snapshot flag from the event type.
+	Resumable bool
 }
 
 func (e *Engine) persistStepTransition(params StepTransitionParams) error {
@@ -181,10 +190,15 @@ func (e *Engine) persistStepTransition(params StepTransitionParams) error {
 			dataProviderSessionID: params.ProviderSessionID,
 			dataSummary:           normalizeSummary(params.Summary, adapters.ExecutionStateRunning),
 		},
+		StructuredOutput: params.StructuredOutput,
 	}
 
 	if params.NormalizedStatus != "" {
 		event.Data[dataNormalizedStatus] = params.NormalizedStatus
+	}
+
+	if params.Resumable {
+		event.Data[dataResumable] = "true"
 	}
 
 	return e.persistEvent(event)

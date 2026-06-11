@@ -1,5 +1,7 @@
 package store
 
+import "encoding/json"
+
 const DefaultRunsRoot = "ref/tmp/runs"
 
 const (
@@ -22,6 +24,7 @@ const (
 	EventStepSucceeded      EventType = "StepSucceeded"
 	EventStepFailed         EventType = "StepFailed"
 	EventStepRetried        EventType = "StepRetried"
+	EventStepInterrupted    EventType = "StepInterrupted"
 	EventApprovalRequested  EventType = "ApprovalRequested"
 	EventApprovalGranted    EventType = "ApprovalGranted"
 	EventApprovalDenied     EventType = "ApprovalDenied"
@@ -48,23 +51,29 @@ type Layout struct {
 // Event represents one durable state transition in the append-only event log.
 // Sequence numbers are assigned atomically by Store and increase monotonically.
 type Event struct {
-	Sequence   int64             `json:"sequence"`
-	Type       EventType         `json:"type"`
-	RunID      string            `json:"run_id"`
-	StepID     string            `json:"step_id,omitempty"`
-	AttemptID  string            `json:"attempt_id,omitempty"`
-	ApprovalID string            `json:"approval_id,omitempty"`
-	Message    string            `json:"message,omitempty"`
-	Data       map[string]string `json:"data,omitempty"`
+	Sequence         int64             `json:"sequence"`
+	Type             EventType         `json:"type"`
+	RunID            string            `json:"run_id"`
+	StepID           string            `json:"step_id,omitempty"`
+	AttemptID        string            `json:"attempt_id,omitempty"`
+	ApprovalID       string            `json:"approval_id,omitempty"`
+	Message          string            `json:"message,omitempty"`
+	Data             map[string]string `json:"data,omitempty"`
+	StructuredOutput json.RawMessage   `json:"structured_output,omitempty"`
 }
 
 type StepCheckpoint struct {
-	State             string `json:"state"`
-	AttemptID         string `json:"attempt_id,omitempty"`
-	ProviderSessionID string `json:"provider_session_id,omitempty"`
-	ApprovalID        string `json:"approval_id,omitempty"`
-	ApprovalTrigger   string `json:"approval_trigger,omitempty"`
-	Summary           string `json:"summary,omitempty"`
+	State             string          `json:"state"`
+	AttemptID         string          `json:"attempt_id,omitempty"`
+	ProviderSessionID string          `json:"provider_session_id,omitempty"`
+	ApprovalID        string          `json:"approval_id,omitempty"`
+	ApprovalTrigger   string          `json:"approval_trigger,omitempty"`
+	Summary           string          `json:"summary,omitempty"`
+	StructuredOutput  json.RawMessage `json:"structured_output,omitempty"`
+	// Resumable marks a step that was interrupted with its provider session
+	// preserved. Cleared by any transition back to Running, terminal
+	// Succeeded/Failed, or fresh retry.
+	Resumable bool `json:"resumable,omitempty"`
 }
 
 // Checkpoint is a coarse-grained snapshot of run state used for resume after interruption.

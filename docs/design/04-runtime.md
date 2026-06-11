@@ -129,7 +129,7 @@ RunCreated
            -> one of:
               - StepSucceeded -> maybe queue dependents
               - StepFailed -> RunFailed
-              - StepRetried -> RunPaused
+              - StepInterrupted -> RunPaused (step parked queued + Resumable)
               - ApprovalRequested -> RunWaitingApproval
 ```
 
@@ -184,7 +184,10 @@ session exists, while adapter-triggered approval happens during provider executi
 ### Pause
 
 - A running run can be paused explicitly.
-- If a step returns `interrupted`, runtime persists `StepRetried` and sets the run to `paused`.
+- If a step returns `interrupted`, runtime persists `StepInterrupted` and sets the
+  run to `paused`. Unlike `StepRetried`, `StepInterrupted` preserves the step's
+  `attempt_id` + `provider_session_id` and sets `Resumable=true` so a later resume
+  re-attaches to the same provider session (see "Session resume" below).
 
 ### Cancel
 
@@ -210,6 +213,46 @@ Each `StepSnapshot` stores:
 - `approval_id`
 - `approval_trigger`
 - `summary`
+- `structured_output` - the normalized `AgentResult` JSON a succeeded agent step
+  produced; persisted through events and checkpoints so downstream `verify` /
+  `commit_check` steps can read it
+- `resumable` - set when the step was interrupted while running but still has a
+  provider session id to resume from
+
+## Session resume
+
+`StepInterrupted` and `StepRetried` both move a step from `running` back to
+`queued`, but they carry opposite intent:
+
+- **`StepRetried`** is a fresh retry. `applyStepEvent` clears `attempt_id`,
+  `provider_session_id`, and `resumable`, so the next attempt starts a brand-new
+  provider session.
+- **`StepInterrupted`** is a resumable pause. The handler keeps `attempt_id` +
+  `provider_session_id` and sets `resumable=true`.
+
+On the next engine tick, `executeStep` inspects the queued step. When it carries
+`resumable=true` plus a non-empty provider session id and attempt id, it dispatches
+to `resumeStep` (which calls `driver.Resume`) instead of `driver.Start`, re-using
+the prior attempt and session. Otherwise it performs a normal `Start`.
+
+### Recovery prompt selection
+
+For an agent step, `resumeStep` consults `Engine.recoveryPromptOverride`
+(`internal/runtime/recovery_prompt.go`) before resuming. The override looks at the
+run working directory:
+
+- not a git repo, or no working dir -> no override; resume with the original main
+  prompt
+- dirty work tree (`git status --porcelain` non-empty) -> `BuildDirtyWorktree`
+  recovery prompt, so the agent finishes and commits the in-progress work
+- clean tree, but the prior attempt's `structured_output` self-reported commits
+  that no longer resolve against `HEAD` -> `BuildCommitRecovery` recovery prompt,
+  listing the missing refs
+- clean tree, no commit gap -> no override; resume verbatim
+
+The selected prompt flows through `stepResumeRequest.RecoveryPrompt` into
+`agentDriver.Resume`, which substitutes it for the step's main prompt only when the
+override is non-empty. Non-agent steps never receive an override.
 
 ## Replay Guarantees
 

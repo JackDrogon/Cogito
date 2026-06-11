@@ -46,9 +46,16 @@ the execution state becomes normalizable.
 
 ### 3. `Interrupt` / `Resume`
 
-These methods exist in the SPI, but runtime checks capabilities before relying on
-them. Today, the built-in provider adapters do not implement provider-native
-interrupt or resume and will return capability errors when asked.
+Runtime checks capabilities before relying on these methods. The built-in adapters
+now implement both on top of `internal/adapters/runner`:
+
+- `Interrupt` looks up the live session by id and calls its cancel func, which
+  signals the process group (SIGTERM, grace, then SIGKILL).
+- `Resume` re-attaches to a prior provider session id by injecting a provider
+  resume flag into the argv (`resume <sid>` for codex, `--resume <sid>` for
+  claude, `--session <sid>` for opencode). `ResumeRequest.Prompt` carries the
+  prompt to continue with — by default the step's main prompt, but runtime may
+  substitute a recovery prompt (see `04-runtime.md`, "Recovery prompt selection").
 
 ### 4. `NormalizeResult`
 
@@ -77,6 +84,24 @@ an adapter does not support.
 | `artifact_refs` | Adapter can report artifact references directly |
 | `machine_readable_logs` | Adapter emits logs that runtime can preserve structurally |
 
+### Built-in capability matrix
+
+The three built-in adapters now declare the same matrix:
+
+| Capability | codex | claude | opencode |
+|------------|-------|--------|----------|
+| `structured_output` | true | true | true |
+| `resume` | true | true | true |
+| `interrupt` | true | true | true |
+| `machine_readable_logs` | true | true | true |
+| `artifact_refs` | false | false | false |
+
+`structured_output`, `resume`, and `interrupt` were all flipped to true during the
+AgentLoop port: adapters parse the `AGENT_RESULT_JSON` result line into a
+normalized `AgentResult` (`structured_output`), re-attach to a prior session
+(`resume`), and cancel a running process group (`interrupt`). `artifact_refs`
+remains false — artifacts are still derived by runtime, not reported by providers.
+
 ## Current Built-in Providers
 
 Three adapters are registered via package `init()`:
@@ -90,22 +115,38 @@ Three adapters are registered via package `init()`:
 All three adapters currently:
 
 - register themselves with the process-local registry
-- shell out to the provider CLI
-- persist the returned execution in an in-memory session map
-- support `PollOrCollect` by replaying the cached session snapshot
-- expose `machine_readable_logs` capability
-- do **not** currently implement provider-native `interrupt` or `resume`
+- launch the provider CLI through the shared async `internal/adapters/runner`
+- hold the live `runner.Session` (with its cancel func) in an in-memory map
+- support `PollOrCollect` by awaiting the session's `Done` channel
+- parse the `AGENT_RESULT_JSON` line into a normalized `AgentResult` and marshal
+  it into `Execution.StructuredOutput`
+- expose `structured_output`, `resume`, `interrupt`, and `machine_readable_logs`
 
 ### Provider-specific command style
 
-- **Codex**: `codex exec --json --color never --output-last-message <path> <prompt>`
-- **Claude**: `claude --print --output-format json <prompt>`
-- **OpenCode**: `opencode run --json <prompt>` or `opencode-desktop run --json <prompt>`
+Prompts are delivered on stdin for codex/claude and as the final argv for
+opencode. The session-resume flag differs per provider:
 
-The older docs also emphasized that adapters translate between Cogito's internal
-execution model and provider-specific environments. That remains accurate: each
-adapter owns CLI invocation, output parsing, and conversion into `Execution` /
-`StepResult`.
+- **Codex**: `codex exec --cd <root> --sandbox <sandbox> --skip-git-repo-check
+  --json --color never --output-last-message <path> [--model <m>] [resume <sid>] -`
+- **Claude**: `claude --print --permission-mode bypassPermissions --output-format
+  json [--model <m>] [--resume <sid>]` (prompt on stdin)
+- **OpenCode**: `opencode run --dir <root> --dangerously-skip-permissions
+  --print-logs --output-format json [--model <m>] [--session <sid>] <prompt>`
+
+Each adapter owns CLI invocation, output parsing, and conversion into `Execution`
+/ `StepResult`.
+
+### SessionID extraction protocol
+
+The runner mints a synthetic session id at `Start` so a session is addressable
+immediately (the async model returns before the process exits). While streaming
+provider stdout, it matches a `session id: <uuid>` line and, when found, replaces
+the synthetic id with the real provider session id (updating the `sessions` map
+key as well). That extracted id flows back through `Result.SessionID` →
+`Execution.Handle.ProviderSessionID`, and runtime persists it so a later `Resume`
+can pass it to the provider's resume flag. When no session line is matched, the
+synthetic id is kept so interrupt/await still work in-process.
 
 ## Execution Data Types
 
@@ -211,13 +252,14 @@ provider package to hand-roll the same lifecycle assertions.
 
 ## What is not implemented yet
 
-The SPI is broader than the currently shipped providers. In particular, the built-
-in adapters do not yet provide:
+The SPI is broader than the currently shipped providers. After the AgentLoop port,
+resume, interrupt, and structured output are live, but the built-in adapters still
+do not provide:
 
-- provider-native resume
-- provider-native interrupt
-- mandatory structured output contracts
-- provider-derived artifact references
+- mandatory structured output contracts (an agent that omits the
+  `AGENT_RESULT_JSON` line yields a zero-value `AgentResult`, not an error)
+- provider-derived artifact references (`artifact_refs` stays false)
 
-Those capabilities can be added later without changing runtime orchestration,
-which is the main reason the SPI is wider than today's provider behavior.
+Those remaining capabilities can be added later without changing runtime
+orchestration, which is the main reason the SPI is wider than today's provider
+behavior.

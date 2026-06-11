@@ -40,6 +40,7 @@ func lookupStateMachineEventHandler(eventType store.EventType) (stateMachineEven
 		store.EventStepSucceeded:      stateMachineEventHandlerFunc(applyStepEvent),
 		store.EventStepFailed:         stateMachineEventHandlerFunc(applyStepEvent),
 		store.EventStepRetried:        stateMachineEventHandlerFunc(applyStepEvent),
+		store.EventStepInterrupted:    stateMachineEventHandlerFunc(applyStepEvent),
 		store.EventApprovalRequested:  stateMachineEventHandlerFunc(applyApprovalEvent),
 		store.EventApprovalGranted:    stateMachineEventHandlerFunc(applyApprovalEvent),
 		store.EventApprovalDenied:     stateMachineEventHandlerFunc(applyApprovalEvent),

@@ -37,6 +37,7 @@ var (
 	rootCommands = newCommandRegistry(
 		commandGroup{name: "workflow", summary: "Workflow operations", registry: workflowCommands},
 		commandGroup{name: "feishu", summary: "Feishu Project (Meegle) task operations", registry: feishuCommandRegistry},
+		commandGroup{name: "agents", summary: "Ad hoc code agent operations", registry: agentsCommandRegistry},
 		workflowRunCommand{},
 		statusCommand{},
 		resumeCommand{},
@@ -95,12 +96,7 @@ func parseSharedFlags(commandName string, args []string, stdout io.Writer) (*par
 	fs.SetOutput(stdout)
 
 	flags := sharedFlags{}
-	fs.StringVar(&flags.repo, "repo", "", "Repository root for workflow execution")
-	fs.StringVar(&flags.stateDir, "state-dir", "", "Run state directory (default: ref/tmp/runs/<generated-run-id>)")
-	fs.StringVar(&flags.approval, "approval", "", "Approval mode")
-	fs.DurationVar(&flags.providerTimeout, "provider-timeout", 0, "Provider timeout (for example: 30s, 2m)")
-	fs.BoolVar(&flags.allowDirty, "allow-dirty", false, "Allow dirty repository state")
-	fs.BoolVar(&flags.verbose, "v", false, "Enable verbose logging")
+	registerSharedFlags(fs, &flags)
 
 	fs.Usage = func() {
 		_, _ = fmt.Fprintf(stdout, "Usage: cogito %s [flags]\n", commandName)
@@ -121,6 +117,19 @@ func parseSharedFlags(commandName string, args []string, stdout io.Writer) (*par
 	}
 
 	return &parsedSharedFlagsResult{flags: &flags, remainingArgs: fs.Args()}, nil
+}
+
+// registerSharedFlags binds the common execution flags onto fs. It is the
+// single source of truth for the shared flag contract so commands that mix
+// shared flags with command-specific flags (for example `cogito feishu run`)
+// stay in sync with `parseSharedFlags` instead of duplicating definitions.
+func registerSharedFlags(fs *flag.FlagSet, flags *sharedFlags) {
+	fs.StringVar(&flags.repo, "repo", "", "Repository root for workflow execution")
+	fs.StringVar(&flags.stateDir, "state-dir", "", "Run state directory (default: ref/tmp/runs/<generated-run-id>)")
+	fs.StringVar(&flags.approval, "approval", "", "Approval mode")
+	fs.DurationVar(&flags.providerTimeout, "provider-timeout", 0, "Provider timeout (for example: 30s, 2m)")
+	fs.BoolVar(&flags.allowDirty, "allow-dirty", false, "Allow dirty repository state")
+	fs.BoolVar(&flags.verbose, "v", false, "Enable verbose logging")
 }
 
 func isHelpRequested(err error) bool {

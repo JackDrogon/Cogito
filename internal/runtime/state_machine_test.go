@@ -914,6 +914,7 @@ type runtimeMachineFixtureParams struct {
 	CommandScripts map[string]commandScript
 	Adapter        adapters.Adapter
 	ApprovalPolicy ApprovalPolicy
+	WorkingDir     string
 }
 
 type testEventParams struct {
@@ -959,6 +960,7 @@ func newRuntimeMachineFixtureWithPolicy(params runtimeMachineFixtureParams) runt
 		Store:          runStore,
 		ApprovalPolicy: params.ApprovalPolicy,
 		CommandRunner:  runner,
+		WorkingDir:     params.WorkingDir,
 		LookupAdapter: func(step workflow.CompiledStep) (adapters.Adapter, error) {
 			if params.Adapter == nil {
 				return nil, fmt.Errorf("unexpected agent step %s", step.ID)
@@ -1045,6 +1047,7 @@ func reloadRuntimeMachineFixtureWithPolicy(params runtimeMachineFixtureParams, f
 		Store:          runStore,
 		ApprovalPolicy: params.ApprovalPolicy,
 		CommandRunner:  runner,
+		WorkingDir:     params.WorkingDir,
 		LookupAdapter: func(step workflow.CompiledStep) (adapters.Adapter, error) {
 			if params.Adapter == nil {
 				return nil, fmt.Errorf("unexpected agent step %s", step.ID)
@@ -1346,6 +1349,132 @@ func (r *interruptRecordingCommandRunner) NormalizeResult(_ context.Context, exe
 	}
 
 	return &adapters.StepResult{Handle: execution.Handle, Status: execution.State, Summary: execution.Summary}, nil
+}
+
+func interruptReplayEvents(lastType store.EventType) []store.Event {
+	return []store.Event{
+		buildTestEvent(testEventParams{Sequence: 1, EventType: store.EventRunCreated, RunID: "run-123", Data: eventData(eventDataParams{From: "", To: string(RunStatePending), Summary: "run created"})}),
+		buildTestEvent(testEventParams{Sequence: 2, EventType: store.EventRunStarted, RunID: "run-123", Data: eventData(eventDataParams{From: string(RunStatePending), To: string(RunStateRunning), Summary: "run started"})}),
+		buildTestEvent(testEventParams{Sequence: 3, EventType: store.EventStepQueued, RunID: "run-123", StepID: "review", Data: eventData(eventDataParams{From: string(StepStatePending), To: string(StepStateQueued), Summary: "step ready"})}),
+		buildTestEvent(testEventParams{Sequence: 4, EventType: store.EventStepStarted, RunID: "run-123", StepID: "review", AttemptID: "attempt-review-01", Data: eventData(eventDataParams{From: string(StepStateQueued), To: string(StepStateRunning), Summary: "review started", ProviderSessionID: "session-review-01"})}),
+		buildTestEvent(testEventParams{Sequence: 5, EventType: lastType, RunID: "run-123", StepID: "review", AttemptID: "attempt-review-01", Data: eventData(eventDataParams{From: string(StepStateRunning), To: string(StepStateQueued), Summary: "interrupted", ProviderSessionID: "session-review-01"})}),
+	}
+}
+
+func replayInterruptStep(t *testing.T, lastType store.EventType) StepSnapshot {
+	t.Helper()
+
+	compiled := compileSpec(t, &workflow.Spec{
+		Metadata: workflow.Metadata{Name: "interrupt-replay"},
+		Steps: []workflow.StepSpec{{
+			ID:    "review",
+			Kind:  workflow.StepKindAgent,
+			Agent: &workflow.AgentStepSpec{Agent: "fake", Prompt: "review"},
+		}},
+	})
+
+	replay, err := Replay("run-123", compiled, interruptReplayEvents(lastType))
+	if err != nil {
+		t.Fatalf("Replay() error = %v", err)
+	}
+
+	return replay.Snapshot.Steps["review"]
+}
+
+// TestEventStepInterruptedPreservesSession asserts that folding an
+// EventStepInterrupted parks the step in StepStateQueued while keeping the
+// attempt + provider session so executeStep can resume the same session.
+func TestEventStepInterruptedPreservesSession(t *testing.T) {
+	review := replayInterruptStep(t, store.EventStepInterrupted)
+
+	if review.State != StepStateQueued {
+		t.Fatalf("review.State = %q, want %q", review.State, StepStateQueued)
+	}
+
+	if review.AttemptID != "attempt-review-01" {
+		t.Fatalf("review.AttemptID = %q, want %q", review.AttemptID, "attempt-review-01")
+	}
+
+	if review.ProviderSessionID != "session-review-01" {
+		t.Fatalf("review.ProviderSessionID = %q, want %q", review.ProviderSessionID, "session-review-01")
+	}
+
+	if !review.Resumable {
+		t.Fatal("review.Resumable = false, want true after EventStepInterrupted")
+	}
+}
+
+// TestEventStepRetriedStillClearsSession regression-protects the original
+// EventStepRetried semantics: a fresh retry drops the attempt, provider
+// session, and resume intent.
+func TestEventStepRetriedStillClearsSession(t *testing.T) {
+	review := replayInterruptStep(t, store.EventStepRetried)
+
+	if review.State != StepStateQueued {
+		t.Fatalf("review.State = %q, want %q", review.State, StepStateQueued)
+	}
+
+	if review.AttemptID != "" {
+		t.Fatalf("review.AttemptID = %q, want empty after EventStepRetried", review.AttemptID)
+	}
+
+	if review.ProviderSessionID != "" {
+		t.Fatalf("review.ProviderSessionID = %q, want empty after EventStepRetried", review.ProviderSessionID)
+	}
+
+	if review.Resumable {
+		t.Fatal("review.Resumable = true, want false after EventStepRetried")
+	}
+}
+
+// TestResumableClearedOnStartedAndTerminal asserts Oracle finding #7: once an
+// interrupted (Resumable=true) step re-enters running via EventStepStarted, the
+// resume intent is cleared, and it stays cleared through a terminal
+// EventStepSucceeded. This prevents a stale resumable flag from persisting in
+// the checkpoint after the resume actually fired.
+func TestResumableClearedOnStartedAndTerminal(t *testing.T) {
+	compiled := compileSpec(t, &workflow.Spec{
+		Metadata: workflow.Metadata{Name: "interrupt-resume-replay"},
+		Steps: []workflow.StepSpec{{
+			ID:    "review",
+			Kind:  workflow.StepKindAgent,
+			Agent: &workflow.AgentStepSpec{Agent: "fake", Prompt: "review"},
+		}},
+	})
+
+	events := append(interruptReplayEvents(store.EventStepInterrupted),
+		buildTestEvent(testEventParams{Sequence: 6, EventType: store.EventStepStarted, RunID: "run-123", StepID: "review", AttemptID: "attempt-review-01", Data: eventData(eventDataParams{From: string(StepStateQueued), To: string(StepStateRunning), Summary: "review resumed", ProviderSessionID: "session-review-01"})}),
+	)
+
+	replay, err := Replay("run-123", compiled, events)
+	if err != nil {
+		t.Fatalf("Replay() error = %v", err)
+	}
+
+	review := replay.Snapshot.Steps["review"]
+	if review.State != StepStateRunning {
+		t.Fatalf("review.State = %q, want %q", review.State, StepStateRunning)
+	}
+	if review.Resumable {
+		t.Fatal("review.Resumable = true, want false after EventStepStarted re-entry")
+	}
+	// The preserved session must still be intact for the in-flight attempt.
+	if review.ProviderSessionID != "session-review-01" {
+		t.Fatalf("review.ProviderSessionID = %q, want session-review-01", review.ProviderSessionID)
+	}
+
+	events = append(events,
+		buildTestEvent(testEventParams{Sequence: 7, EventType: store.EventStepSucceeded, RunID: "run-123", StepID: "review", AttemptID: "attempt-review-01", Data: eventData(eventDataParams{From: string(StepStateRunning), To: string(StepStateSucceeded), Summary: "review done", ProviderSessionID: "session-review-01"})}),
+	)
+
+	replay, err = Replay("run-123", compiled, events)
+	if err != nil {
+		t.Fatalf("Replay() after success error = %v", err)
+	}
+
+	if review := replay.Snapshot.Steps["review"]; review.Resumable {
+		t.Fatal("review.Resumable = true, want false after EventStepSucceeded")
+	}
 }
 
 func buildTestEvent(params testEventParams) store.Event {

@@ -22,6 +22,11 @@ type RunWorkflowInput struct {
 	Flags        *sharedFlags
 }
 
+type RunCompiledWorkflowInput struct {
+	Compiled *workflow.CompiledWorkflow
+	Flags    *sharedFlags
+}
+
 type RunWorkflowOutput struct {
 	RunID    string
 	StateDir string
@@ -86,26 +91,56 @@ func (s applicationService) RunWorkflow(ctx context.Context, input RunWorkflowIn
 		return RunWorkflowOutput{}, errors.New("applicationService.RunWorkflow: flags are required")
 	}
 
-	approvalMode, err := runtime.ParseApprovalMode(input.Flags.approval)
-	if err != nil {
-		return RunWorkflowOutput{}, err
-	}
-
 	compiled, err := workflow.LoadFile(input.WorkflowPath)
 	if err != nil {
 		return RunWorkflowOutput{}, err
 	}
 
-	stateRef, err := newRunStateRef(input.Flags.stateDir)
+	return s.runCompiled(ctx, compiled, input.Flags)
+}
+
+// RunCompiledWorkflow runs an already-compiled workflow that was built in
+// memory (for example by `cogito feishu run`) rather than loaded from a YAML
+// file. It shares the same execution kernel as RunWorkflow, so the produced run
+// directory (events.jsonl + checkpoint.json + persisted workflow.json) stays
+// resume-compatible with the standard `cogito run` flow.
+func (s applicationService) RunCompiledWorkflow(ctx context.Context, input RunCompiledWorkflowInput) (RunWorkflowOutput, error) {
+	if input.Compiled == nil {
+		return RunWorkflowOutput{}, errors.New("applicationService.RunCompiledWorkflow: compiled workflow is required")
+	}
+
+	return s.runCompiled(ctx, input.Compiled, input.Flags)
+}
+
+// runCompiled is the shared execution kernel for both RunWorkflow and
+// RunCompiledWorkflow. It owns approval parsing, run-state resolution, repo
+// locking, durable workflow persistence, and engine execution. The only
+// difference between the two public entry points is the source of compiled:
+// a YAML file vs an in-memory build.
+func (s applicationService) runCompiled(ctx context.Context, compiled *workflow.CompiledWorkflow, flags *sharedFlags) (output RunWorkflowOutput, err error) {
+	if flags == nil {
+		return RunWorkflowOutput{}, errors.New("applicationService.runCompiled: flags are required")
+	}
+
+	approvalMode, err := runtime.ParseApprovalMode(flags.approval)
 	if err != nil {
 		return RunWorkflowOutput{}, err
 	}
 
-	repoLock, err := acquireRepoLock(input.Flags, stateRef.runID, stateRef.baseDir)
+	stateRef, err := newRunStateRef(flags.stateDir)
 	if err != nil {
 		return RunWorkflowOutput{}, err
 	}
 
+	repoLock, err := acquireRepoLock(flags, stateRef.runID, stateRef.baseDir)
+	if err != nil {
+		return RunWorkflowOutput{}, err
+	}
+
+	// Named returns are required here: this defer surfaces a repo-lock release
+	// failure to the caller by writing the function's actual return value. With
+	// bare returns the assignment would target a shadow variable and the stale
+	// lock would go unreported.
 	defer func() {
 		if releaseErr := repoLock.Release(); err == nil && releaseErr != nil {
 			err = releaseErr
@@ -125,7 +160,7 @@ func (s applicationService) RunWorkflow(ctx context.Context, input RunWorkflowIn
 		RunID:          stateRef.runID,
 		Compiled:       compiled,
 		RunStore:       runStore,
-		Flags:          input.Flags,
+		Flags:          flags,
 		ApprovalPolicy: runtime.NewApprovalModePolicy(approvalMode),
 	})
 	if err != nil {
@@ -169,6 +204,14 @@ func (s applicationService) ResumeRun(ctx context.Context, input ResumeRunInput)
 	session, err := s.runs.openExistingRunSession(input.Flags.stateDir, input.Flags)
 	if err != nil {
 		return ResumeRunOutput{}, err
+	}
+
+	// Resuming a run that already settled successfully is a no-op, not an
+	// error: the user asked to make progress and there is none left to make.
+	// Failed/canceled runs still fall through to engine.Resume, which reports
+	// the appropriate "cannot resume from <state>" error.
+	if session.engine.Snapshot().State == runtime.RunStateSucceeded {
+		return ResumeRunOutput{Message: "run already succeeded"}, nil
 	}
 
 	if err := session.engine.Resume(""); err != nil {

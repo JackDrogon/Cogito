@@ -221,6 +221,16 @@ func cloneStep(step StepSpec) StepSpec {
 		cloned.Approval = &approval
 	}
 
+	if step.Verify != nil {
+		verify := VerifyStepSpec{Commands: cloneStrings(step.Verify.Commands), From: step.Verify.From}
+		cloned.Verify = &verify
+	}
+
+	if step.CommitCheck != nil {
+		commitCheck := *step.CommitCheck
+		cloned.CommitCheck = &commitCheck
+	}
+
 	return cloned
 }
 

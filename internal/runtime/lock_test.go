@@ -186,6 +186,80 @@ func TestDirtyWorktreeRejected(t *testing.T) {
 	}
 }
 
+// TestAcquireNonGitDirectorySucceeds covers the AgentLoop-ported non-git mode:
+// a plain directory (with uncommitted-looking files in it) must acquire a path
+// lock without any git error and without a dirty-worktree rejection.
+func TestAcquireNonGitDirectorySucceeds(t *testing.T) {
+	baseDir := t.TempDir()
+	plainDir := filepath.Join(baseDir, "plain")
+	if err := os.MkdirAll(plainDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(plain) error = %v", err)
+	}
+	writeFile(t, filepath.Join(plainDir, "notes.txt"), []byte("not committed anywhere\n"))
+
+	manager := NewRepoLockManager(Dependencies{
+		PID:      444,
+		Hostname: "test-host",
+		ProcessRunning: func(pid int) bool {
+			return pid == 444
+		},
+	})
+
+	lock, err := manager.Acquire(AcquireOptions{
+		RunID:         "run-non-git",
+		RepoPath:      plainDir,
+		RunsRoot:      filepath.Join(baseDir, "ref", "tmp", "runs"),
+		RepoLocksRoot: filepath.Join(baseDir, "ref", "tmp", "locks"),
+	})
+	if err != nil {
+		t.Fatalf("Acquire() in non-git dir error = %v, want success", err)
+	}
+
+	if lock.Metadata().RepoRoot != filepath.Clean(plainDir) {
+		t.Fatalf("metadata.RepoRoot = %q, want %q", lock.Metadata().RepoRoot, filepath.Clean(plainDir))
+	}
+
+	assertExists(t, lock.RepoLockPath())
+	assertExists(t, lock.RunLockPath())
+
+	if err := lock.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+}
+
+// TestAcquireNonexistentRepoPathFails keeps the original diagnostic for broken
+// --repo values: a path that does not exist must still surface the git error
+// instead of silently degrading to non-git mode.
+func TestAcquireNonexistentRepoPathFails(t *testing.T) {
+	baseDir := t.TempDir()
+
+	manager := NewRepoLockManager(Dependencies{
+		PID:      555,
+		Hostname: "test-host",
+		ProcessRunning: func(pid int) bool {
+			return pid == 555
+		},
+	})
+
+	_, err := manager.Acquire(AcquireOptions{
+		RunID:         "run-missing-repo",
+		RepoPath:      filepath.Join(baseDir, "does-not-exist"),
+		RunsRoot:      filepath.Join(baseDir, "ref", "tmp", "runs"),
+		RepoLocksRoot: filepath.Join(baseDir, "ref", "tmp", "locks"),
+	})
+	if err == nil {
+		t.Fatal("Acquire() error = nil, want failure for nonexistent repo path")
+	}
+
+	var runtimeErr *Error
+	if !errors.As(err, &runtimeErr) {
+		t.Fatalf("error type = %T, want *runtime.Error", err)
+	}
+	if runtimeErr.Code != ErrorCodeGit {
+		t.Fatalf("error code = %q, want %q", runtimeErr.Code, ErrorCodeGit)
+	}
+}
+
 type runtimeFixture struct {
 	repoDir       string
 	runsRoot      string

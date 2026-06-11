@@ -11,6 +11,8 @@ internal/adapters/
 |-- contract_suite.go       # provider contract tests shared by every adapter
 |-- fake.go                 # scriptable fake adapter for tests
 |-- <provider>_integration_test.go
+|-- prompt/                 # AgentLoop-ported prompt templates + AGENT_RESULT_JSON parsing
+|-- runner/                 # async provider process launcher (Start/Interrupt/Await + session map)
 |-- codex/
 |-- claude/
 `-- opencode/

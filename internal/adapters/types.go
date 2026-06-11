@@ -86,6 +86,12 @@ type StartRequest struct {
 type ResumeRequest struct {
 	Handle ExecutionHandle
 	Prompt string
+	// WorkingDir is the directory the resumed invocation must run in. A fresh
+	// `cogito resume` process has an empty in-memory session map, so without
+	// this the adapter would lose the original directory and build `--cd ""` /
+	// `--dir ""`. Adapters prefer this value and fall back to their session map
+	// only for backward compatibility within a single process.
+	WorkingDir string
 }
 
 type NormalizeRequest struct {

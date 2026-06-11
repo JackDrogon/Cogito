@@ -2,6 +2,7 @@ package adapters_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os/exec"
 	"reflect"
@@ -10,10 +11,12 @@ import (
 
 	"github.com/JackDrogon/Cogito/internal/adapters"
 	"github.com/JackDrogon/Cogito/internal/adapters/opencode"
+	"github.com/JackDrogon/Cogito/internal/adapters/runner"
 )
 
 func TestOpenCodeAdapterContract(t *testing.T) {
-	runner := &opencodeContractRunner{}
+	versionRunner := &opencodeVersionRunner{}
+	starter := &opencodeFakeStarter{}
 	lookups := make([]string, 0, 2)
 	adapter := opencode.New(opencode.Config{
 		LookPath: func(name string) (string, error) {
@@ -28,17 +31,21 @@ func TestOpenCodeAdapterContract(t *testing.T) {
 				return "", nil
 			}
 		},
-		Runner: runner,
+		Runner:  versionRunner,
+		Starter: starter.start,
 	})
 
 	adapters.RunContractSuite(t, []adapters.ContractCase{{
 		Name:             "opencode run terminal success path",
 		Adapter:          adapter,
 		StartRequest:     adapters.StartRequest{RunID: "run-345", StepID: "summarize", AttemptID: "attempt-3", WorkingDir: "/workspace/repo", Prompt: "Summarize the latest changes"},
-		WantCapabilities: adapters.CapabilityMatrix{MachineReadableLogs: true},
-		WantStartState:   adapters.ExecutionStateSucceeded,
+		WantCapabilities: adapters.CapabilityMatrix{MachineReadableLogs: true, StructuredOutput: true, Resume: true, Interrupt: true},
+		WantStartState:   adapters.ExecutionStateRunning,
+		WantPollStates:   []adapters.ExecutionState{adapters.ExecutionStateSucceeded},
 		NormalizeRequest: adapters.NormalizeRequest{RequireMachineReadableLogs: true},
 		WantResult: adapters.StepResult{
+			// The terminal handle adopts the real opencode session_id surfaced
+			// from the response, not the synthetic Start-time fallback.
 			Handle:     adapters.ExecutionHandle{RunID: "run-345", StepID: "summarize", AttemptID: "attempt-3", ProviderSessionID: "session-345"},
 			Status:     adapters.ExecutionStateSucceeded,
 			Summary:    "opencode adapter passed",
@@ -54,23 +61,30 @@ func TestOpenCodeAdapterContract(t *testing.T) {
 		t.Fatalf("binary lookup sequence = %#v, want %#v", got, []string{"opencode", "opencode-desktop"})
 	}
 
-	if len(runner.calls) != 2 {
-		t.Fatalf("runner call count = %d, want %d", len(runner.calls), 2)
+	if len(versionRunner.calls) != 1 {
+		t.Fatalf("version runner call count = %d, want %d", len(versionRunner.calls), 1)
 	}
 
-	if got := runner.calls[0].Args; !reflect.DeepEqual(got, []string{"--version"}) {
+	if got := versionRunner.calls[0]; !reflect.DeepEqual(got, []string{"--version"}) {
 		t.Fatalf("version args = %#v, want %#v", got, []string{"--version"})
 	}
 
-	runCall := runner.calls[1]
-	if runCall.Path != "/usr/local/bin/opencode-desktop" {
-		t.Fatalf("run path = %q, want %q", runCall.Path, "/usr/local/bin/opencode-desktop")
+	if starter.req.Binary != "/usr/local/bin/opencode-desktop" {
+		t.Fatalf("starter binary = %q, want %q", starter.req.Binary, "/usr/local/bin/opencode-desktop")
 	}
-	if runCall.Dir != "/workspace/repo" {
-		t.Fatalf("run dir = %q, want %q", runCall.Dir, "/workspace/repo")
+	if starter.req.Dir != "/workspace/repo" {
+		t.Fatalf("starter dir = %q, want %q", starter.req.Dir, "/workspace/repo")
 	}
-	if got := runCall.Args; !reflect.DeepEqual(got, []string{"run", "--json", "Summarize the latest changes"}) {
-		t.Fatalf("run args = %#v, want %#v", got, []string{"run", "--json", "Summarize the latest changes"})
+	if starter.req.PromptOnStdin {
+		t.Fatal("starter PromptOnStdin = true, want false (opencode takes prompt via argv)")
+	}
+
+	want := []string{
+		"run", "--dir", "/workspace/repo", "--dangerously-skip-permissions",
+		"--print-logs", "--output-format", "json", "Summarize the latest changes",
+	}
+	if got := starter.req.Args; !reflect.DeepEqual(got, want) {
+		t.Fatalf("run args = %#v, want %#v", got, want)
 	}
 
 	t.Log("opencode adapter passed")
@@ -81,7 +95,7 @@ func TestOpenCodeBinaryMissingIsExplicit(t *testing.T) {
 		LookPath: func(string) (string, error) {
 			return "", exec.ErrNotFound
 		},
-		Runner: &opencodeContractRunner{},
+		Runner: &opencodeVersionRunner{},
 	})
 
 	_, err := adapter.Start(t.Context(), adapters.StartRequest{RunID: "run-345", StepID: "summarize", AttemptID: "attempt-3", Prompt: "Summarize"})
@@ -109,12 +123,12 @@ func TestOpenCodeCapabilitiesRegistered(t *testing.T) {
 		t.Fatalf("Lookup(%q) found = false, want true", opencode.ProviderName)
 	}
 
-	want := adapters.CapabilityMatrix{MachineReadableLogs: true}
+	want := adapters.CapabilityMatrix{MachineReadableLogs: true, StructuredOutput: true, Resume: true, Interrupt: true}
 	if !reflect.DeepEqual(registration.Capabilities, want) {
 		t.Fatalf("registered capabilities = %+v, want %+v", registration.Capabilities, want)
 	}
 
-	if registration.Capabilities.StructuredOutput || registration.Capabilities.Resume || registration.Capabilities.Interrupt || registration.Capabilities.ArtifactRefs {
+	if registration.Capabilities.ArtifactRefs {
 		t.Fatalf("unsupported capabilities must stay explicit: %+v", registration.Capabilities)
 	}
 
@@ -123,34 +137,216 @@ func TestOpenCodeCapabilitiesRegistered(t *testing.T) {
 	}
 }
 
-type opencodeContractRunner struct {
-	calls []opencodeCommandSpec
-}
-
-type opencodeCommandSpec struct {
-	Path   string
-	Args   []string
-	Dir    string
-	Stdin  string
-	Stdout bool
-	Stderr bool
-}
-
-func (r *opencodeContractRunner) Run(_ context.Context, command opencode.CommandSpec) (opencode.CommandResult, error) {
-	r.calls = append(r.calls, opencodeCommandSpec{
-		Path:   command.Path,
-		Args:   append([]string(nil), command.Args...),
-		Dir:    command.Dir,
-		Stdin:  command.Stdin,
-		Stdout: command.Stdout != nil,
-		Stderr: command.Stderr != nil,
+func TestOpenCodeResumeAppendsSessionArgs(t *testing.T) {
+	starter := &opencodeRecordingStarter{}
+	adapter := opencode.New(opencode.Config{
+		LookPath: func(string) (string, error) { return "/usr/local/bin/opencode", nil },
+		Runner:   &opencodeVersionRunner{},
+		Starter:  starter.start,
 	})
+
+	ctx := t.Context()
+	start, err := adapter.Start(ctx, adapters.StartRequest{RunID: "run-1", StepID: "summarize", AttemptID: "attempt-3", WorkingDir: "/workspace/repo", Prompt: "do it"})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	resume, err := adapter.Resume(ctx, adapters.ResumeRequest{Handle: start.Handle, Prompt: "do it"})
+	if err != nil {
+		t.Fatalf("Resume() error = %v", err)
+	}
+
+	if resume.State != adapters.ExecutionStateRunning {
+		t.Fatalf("Resume().State = %q, want %q", resume.State, adapters.ExecutionStateRunning)
+	}
+
+	if len(starter.reqs) != 2 {
+		t.Fatalf("starter call count = %d, want 2", len(starter.reqs))
+	}
+
+	for _, arg := range starter.reqs[0].Args {
+		if arg == "--session" {
+			t.Fatalf("start args must not contain session hint: %#v", starter.reqs[0].Args)
+		}
+	}
+
+	resumeArgs := starter.reqs[1].Args
+	assertArgSubsequence(t, resumeArgs, []string{"--session", start.Handle.ProviderSessionID})
+	assertArgSubsequence(t, resumeArgs, []string{"--dir", "/workspace/repo"})
+	if resumeArgs[len(resumeArgs)-1] != "do it" {
+		t.Fatalf("resume args must end with prompt: %#v", resumeArgs)
+	}
+}
+
+// TestOpenCodeResumeUsesRealSessionID is Oracle coverage gap #2 for opencode: a
+// resume keyed off the terminal handle must put the real session_id into the
+// `--session <sid>` argv, not the synthetic Start-time fallback.
+func TestOpenCodeResumeUsesRealSessionID(t *testing.T) {
+	const realSessionID = "real-session-opencode"
+
+	starter := &opencodeRealSessionStarter{sessionID: realSessionID}
+	adapter := opencode.New(opencode.Config{
+		LookPath: func(string) (string, error) { return "/usr/local/bin/opencode", nil },
+		Runner:   &opencodeVersionRunner{},
+		Starter:  starter.start,
+	})
+
+	ctx := t.Context()
+	start, err := adapter.Start(ctx, adapters.StartRequest{RunID: "run-1", StepID: "summarize", AttemptID: "attempt-3", WorkingDir: "/workspace/repo", Prompt: "do it"})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	syntheticSessionID := start.Handle.ProviderSessionID
+	if syntheticSessionID == realSessionID {
+		t.Fatal("Start handle already carries the real session id, want synthetic fallback")
+	}
+
+	terminal, err := adapter.PollOrCollect(ctx, start.Handle)
+	if err != nil {
+		t.Fatalf("PollOrCollect() error = %v", err)
+	}
+	if terminal.Handle.ProviderSessionID != realSessionID {
+		t.Fatalf("terminal ProviderSessionID = %q, want real id %q", terminal.Handle.ProviderSessionID, realSessionID)
+	}
+
+	resume, err := adapter.Resume(ctx, adapters.ResumeRequest{Handle: terminal.Handle, Prompt: "do it", WorkingDir: "/workspace/repo"})
+	if err != nil {
+		t.Fatalf("Resume() error = %v", err)
+	}
+	if resume.State != adapters.ExecutionStateRunning {
+		t.Fatalf("Resume().State = %q, want %q", resume.State, adapters.ExecutionStateRunning)
+	}
+
+	if len(starter.reqs) != 2 {
+		t.Fatalf("starter call count = %d, want 2", len(starter.reqs))
+	}
+
+	resumeArgs := starter.reqs[1].Args
+	assertArgSubsequence(t, resumeArgs, []string{"--session", realSessionID})
+	for _, arg := range resumeArgs {
+		if arg == syntheticSessionID {
+			t.Fatalf("resume argv leaked synthetic session id %q: %#v", syntheticSessionID, resumeArgs)
+		}
+	}
+	assertArgSubsequence(t, resumeArgs, []string{"--dir", "/workspace/repo"})
+}
+
+// TestOpenCodeStructuredOutputFromOutputText is v3.2 N1: a real opencode run
+// returns the AGENT_RESULT_JSON marker inside the normalized output_text message
+// body, never as a standalone stdout line (the raw stdout is one JSON object
+// with the marker escaped inside a string value). collectTerminal must scan the
+// normalized OutputText so StructuredOutput is populated.
+func TestOpenCodeStructuredOutputFromOutputText(t *testing.T) {
+	outputText := "Finished.\nAGENT_RESULT_JSON: {\"commits\":[\"oc-commit\"],\"summary\":\"ok\"}"
+
+	payload, err := json.Marshal(map[string]any{
+		"session_id":  "oc-session-n1",
+		"success":     true,
+		"output_text": outputText,
+	})
+	if err != nil {
+		t.Fatalf("marshal opencode response: %v", err)
+	}
+
+	starter := &opencodeStdoutStarter{stdout: payload}
+	adapter := opencode.New(opencode.Config{
+		LookPath: func(string) (string, error) { return "/usr/local/bin/opencode", nil },
+		Runner:   &opencodeVersionRunner{},
+		Starter:  starter.start,
+	})
+
+	ctx := t.Context()
+	start, err := adapter.Start(ctx, adapters.StartRequest{RunID: "run-1", StepID: "step", AttemptID: "attempt", WorkingDir: "/workspace/repo", Prompt: "do it"})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	terminal, err := adapter.PollOrCollect(ctx, start.Handle)
+	if err != nil {
+		t.Fatalf("PollOrCollect() error = %v", err)
+	}
+
+	result := decodeAgentResult(t, terminal.StructuredOutput)
+	if !reflect.DeepEqual(result.Commits, []string{"oc-commit"}) {
+		t.Fatalf("StructuredOutput commits = %#v, want [oc-commit]", result.Commits)
+	}
+}
+
+// opencodeStdoutStarter resolves Done with a fixed stdout payload so a test can
+// exercise the response-parsing path with an arbitrary envelope.
+type opencodeStdoutStarter struct {
+	stdout []byte
+}
+
+func (s *opencodeStdoutStarter) start(_ context.Context, _ runner.StartRequest) (*runner.Session, error) {
+	done := make(chan runner.Result, 1)
+	done <- runner.Result{Stdout: s.stdout}
+	close(done)
+
+	return &runner.Session{Done: done}, nil
+}
+
+// opencodeRealSessionStarter resolves Done with a response carrying a
+// configurable real session_id, recording every StartRequest so resume argv can
+// be asserted.
+type opencodeRealSessionStarter struct {
+	sessionID string
+	reqs      []runner.StartRequest
+}
+
+func (s *opencodeRealSessionStarter) start(_ context.Context, req runner.StartRequest) (*runner.Session, error) {
+	s.reqs = append(s.reqs, req)
+
+	done := make(chan runner.Result, 1)
+	done <- runner.Result{Stdout: []byte(`{"session_id":"` + s.sessionID + `","success":true,"summary":"ok","output_text":"ok"}`)}
+	close(done)
+
+	return &runner.Session{Done: done}, nil
+}
+
+// opencodeRecordingStarter captures every async StartRequest and resolves Done
+// immediately so Resume/Start return without blocking.
+type opencodeRecordingStarter struct {
+	reqs []runner.StartRequest
+}
+
+func (s *opencodeRecordingStarter) start(_ context.Context, req runner.StartRequest) (*runner.Session, error) {
+	s.reqs = append(s.reqs, req)
+
+	done := make(chan runner.Result, 1)
+	done <- runner.Result{}
+	close(done)
+
+	return &runner.Session{Done: done}, nil
+}
+
+// opencodeVersionRunner records the synchronous `opencode --version` probe calls.
+type opencodeVersionRunner struct {
+	calls [][]string
+}
+
+func (r *opencodeVersionRunner) Run(_ context.Context, command opencode.CommandSpec) (opencode.CommandResult, error) {
+	r.calls = append(r.calls, append([]string(nil), command.Args...))
 
 	if reflect.DeepEqual(command.Args, []string{"--version"}) {
 		return opencode.CommandResult{Stdout: []byte("OpenCode 1.0.150\n")}, nil
 	}
 
-	return opencode.CommandResult{Stdout: []byte(strings.TrimSpace(`
+	return opencode.CommandResult{}, nil
+}
+
+// opencodeFakeStarter captures the async StartRequest and resolves Done with a
+// canned JSON response.
+type opencodeFakeStarter struct {
+	req runner.StartRequest
+}
+
+func (s *opencodeFakeStarter) start(_ context.Context, req runner.StartRequest) (*runner.Session, error) {
+	s.req = req
+
+	done := make(chan runner.Result, 1)
+	done <- runner.Result{Stdout: []byte(strings.TrimSpace(`
 {
   "session_id": "session-345",
   "success": true,
@@ -167,5 +363,8 @@ func (r *opencodeContractRunner) Run(_ context.Context, command opencode.Command
       }
     }
   ]
-}`))}, nil
+}`))}
+	close(done)
+
+	return &runner.Session{Done: done}, nil
 }

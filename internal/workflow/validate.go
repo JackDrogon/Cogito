@@ -54,7 +54,100 @@ func validateSemantic(spec *Spec) error {
 		}
 	}
 
+	return validateStepReferences(spec, stepIndex)
+}
+
+// validateStepReferences checks that every verify/commit_check `from:` field
+// names an existing agent step that the referencing step actually depends on.
+// Without this a verify step could read structured output from a non-agent step
+// or run BEFORE the agent it claims to verify, silently producing garbage.
+func validateStepReferences(spec *Spec, stepIndex map[string]int) error {
+	for _, step := range spec.Steps {
+		switch step.Kind {
+		case StepKindVerify:
+			if step.Verify == nil {
+				continue
+			}
+
+			if from := strings.TrimSpace(step.Verify.From); from != "" {
+				if err := validateFromReference(spec, stepIndex, step, from); err != nil {
+					return err
+				}
+			}
+		case StepKindCommitCheck:
+			if step.CommitCheck == nil {
+				continue
+			}
+
+			if from := strings.TrimSpace(step.CommitCheck.From); from != "" {
+				if err := validateFromReference(spec, stepIndex, step, from); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	return nil
+}
+
+// validateFromReference enforces the three rules a `from:` target must satisfy:
+// it exists, it is an agent step, and it is reachable through the referencing
+// step's needs (directly or transitively). A missing dependency is an explicit
+// error rather than an auto-injected edge: the user opted into `from`, so they
+// must also order the step after the agent they consume.
+func validateFromReference(spec *Spec, stepIndex map[string]int, step StepSpec, from string) error {
+	fromIndex, exists := stepIndex[from]
+	if !exists {
+		return newError(ErrorCodeSemantic, fmt.Sprintf("step %q references unknown step %q in from", step.ID, from))
+	}
+
+	if spec.Steps[fromIndex].Kind != StepKindAgent {
+		return newError(ErrorCodeSemantic, fmt.Sprintf(
+			"step %q from %q must reference an agent step, got kind %q",
+			step.ID, from, spec.Steps[fromIndex].Kind))
+	}
+
+	if !dependsOn(spec, stepIndex, step.ID, from) {
+		return newError(ErrorCodeSemantic, fmt.Sprintf(
+			"step %q references step %q in from but does not declare it in needs (directly or transitively)",
+			step.ID, from))
+	}
+
+	return nil
+}
+
+// dependsOn reports whether stepID reaches targetID through the needs graph. It
+// uses a visited set so a cycle (caught separately by validateDAG) cannot make
+// this loop forever.
+func dependsOn(spec *Spec, stepIndex map[string]int, stepID, targetID string) bool {
+	visited := make(map[string]struct{}, len(spec.Steps))
+	queue := []string{stepID}
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+
+		index, ok := stepIndex[current]
+		if !ok {
+			continue
+		}
+
+		for _, need := range spec.Steps[index].Needs {
+			need = strings.TrimSpace(need)
+			if need == targetID {
+				return true
+			}
+
+			if _, seen := visited[need]; seen {
+				continue
+			}
+
+			visited[need] = struct{}{}
+			queue = append(queue, need)
+		}
+	}
+
+	return false
 }
 
 func buildCompiledWorkflow(spec *Spec) *CompiledWorkflow {
