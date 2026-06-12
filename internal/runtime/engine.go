@@ -214,15 +214,33 @@ func (e *Engine) restoreState() error {
 		e.applyExecutionContext(checkpointExecutionContext(checkpoint, e.executionContext()))
 	}
 
-	if checkpoint != nil && latestEventSequence(events) <= checkpoint.LastSequence {
-		return e.restoreFromCheckpoint(checkpoint)
+	if checkpoint != nil {
+		latest := latestEventSequence(events)
+
+		// The event log is the source of truth. A checkpoint strictly AHEAD
+		// of it means events.jsonl lost entries (truncation, manual edits, a
+		// partial copy) or the checkpoint is corrupt — restoring from it
+		// would present a state the event log cannot reproduce, so replay,
+		// status, and resume would disagree. Refuse instead of guessing.
+		if latest < checkpoint.LastSequence {
+			return newError(ErrorCodeReplay, fmt.Sprintf(
+				"checkpoint sequence %d is ahead of the event log (latest %d); "+
+					"events.jsonl is truncated or checkpoint.json is corrupt",
+				checkpoint.LastSequence, latest))
+		}
+
+		// Exactly as new as the log: the checkpoint is a faithful snapshot,
+		// restoring from it is a pure replay shortcut.
+		if latest == checkpoint.LastSequence {
+			return e.restoreFromCheckpoint(checkpoint)
+		}
 	}
 
 	return e.restoreFromEvents(events)
 }
 
 // restoreFromCheckpoint installs the snapshot decoded from a checkpoint that
-// is at least as new as the event log.
+// is exactly as new as the event log.
 func (e *Engine) restoreFromCheckpoint(checkpoint *store.Checkpoint) error {
 	snapshot, err := snapshotFromCheckpoint(e.runID, e.compiled, checkpoint)
 	if err != nil {

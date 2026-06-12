@@ -87,9 +87,14 @@ not expose a dedicated retry command.
 When `NewEngine` is created, runtime loads checkpoint and event history from the
 store and chooses one of three initialization paths:
 
-1. **checkpoint only** - if checkpoint exists and is at least as fresh as the event log
+1. **checkpoint only** - if checkpoint exists and is exactly as fresh as the event log
 2. **event replay** - if events are newer than the checkpoint
 3. **empty snapshot** - if there is no persisted history yet
+
+The event log is the source of truth: a checkpoint whose `last_sequence` is
+strictly ahead of the latest event means `events.jsonl` lost entries or
+`checkpoint.json` is corrupt, and `NewEngine` refuses to restore with a
+`replay` error instead of trusting the checkpoint.
 
 If no snapshot exists, the first runtime action is `RunCreated`, which also
 initializes all compiled steps into `pending` state.

@@ -1082,6 +1082,66 @@ func TestNewEngineReplaysEventsWhenCheckpointSequenceIsStale(t *testing.T) {
 	}
 }
 
+// TestNewEngineRefusesCheckpointAheadOfEventLog locks the source-of-truth
+// rule: a checkpoint whose LastSequence is strictly ahead of the event log
+// means the log lost entries (or the checkpoint is corrupt), and the engine
+// must refuse to restore rather than present a state the events cannot
+// reproduce.
+func TestNewEngineRefusesCheckpointAheadOfEventLog(t *testing.T) {
+	compiled := compileSpec(t, &workflow.Spec{
+		Metadata: workflow.Metadata{Name: "ahead-checkpoint"},
+		Steps: []workflow.StepSpec{{
+			ID:      "prepare",
+			Kind:    workflow.StepKindCommand,
+			Command: &workflow.CommandStepSpec{Command: "echo prepare"},
+		}},
+	})
+
+	runStore, err := store.Open(filepath.Join(t.TempDir(), "runs"), "run-ahead")
+	if err != nil {
+		t.Fatalf("store.Open() error = %v", err)
+	}
+
+	for _, event := range []store.Event{
+		buildTestEvent(testEventParams{Sequence: 1, EventType: store.EventRunCreated, RunID: "run-ahead", Data: eventData(eventDataParams{From: "", To: string(RunStatePending), Summary: "run created"})}),
+		buildTestEvent(testEventParams{Sequence: 2, EventType: store.EventRunStarted, RunID: "run-ahead", Data: eventData(eventDataParams{From: string(RunStatePending), To: string(RunStateRunning), Summary: "run started"})}),
+	} {
+		if _, err := runStore.AppendEvent(event); err != nil {
+			t.Fatalf("AppendEvent() error = %v", err)
+		}
+	}
+
+	if err := runStore.SaveCheckpoint(&store.Checkpoint{
+		RunID:        "run-ahead",
+		State:        string(RunStateRunning),
+		LastSequence: 5,
+		UpdatedAt:    eventData(eventDataParams{})[dataOccurredAt],
+		Steps: map[string]store.StepCheckpoint{
+			"prepare": {State: string(StepStatePending)},
+		},
+	}); err != nil {
+		t.Fatalf("SaveCheckpoint() error = %v", err)
+	}
+
+	_, err = NewEngine("run-ahead", compiled, MachineDependencies{Store: runStore})
+	if err == nil {
+		t.Fatal("NewEngine() error = nil, want checkpoint-ahead refusal")
+	}
+
+	var runtimeErr *Error
+	if !errors.As(err, &runtimeErr) {
+		t.Fatalf("error type = %T, want *runtime.Error", err)
+	}
+
+	if runtimeErr.Code != ErrorCodeReplay {
+		t.Fatalf("error code = %q, want %q", runtimeErr.Code, ErrorCodeReplay)
+	}
+
+	if !strings.Contains(err.Error(), "ahead of the event log") {
+		t.Fatalf("error = %v, want mention of checkpoint ahead of event log", err)
+	}
+}
+
 type runtimeMachineFixture struct {
 	runID    string
 	compiled *workflow.CompiledWorkflow
