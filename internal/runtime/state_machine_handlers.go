@@ -39,6 +39,7 @@ var stateMachineEventHandlers = map[store.EventType]stateMachineEventHandler{
 	store.EventRunCanceled:        stateMachineEventHandlerFunc(applyRunEvent),
 	store.EventStepQueued:         stateMachineEventHandlerFunc(applyStepEvent),
 	store.EventStepStarted:        stateMachineEventHandlerFunc(applyStepEvent),
+	store.EventStepResumed:        stateMachineEventHandlerFunc(applyStepEvent),
 	store.EventStepSucceeded:      stateMachineEventHandlerFunc(applyStepEvent),
 	store.EventStepFailed:         stateMachineEventHandlerFunc(applyStepEvent),
 	store.EventStepRetried:        stateMachineEventHandlerFunc(applyStepEvent),

@@ -79,7 +79,7 @@ func TestAppendOnlyEventLog(t *testing.T) {
 		t.Fatalf("len(lines) = %d, want 4", len(lines))
 	}
 
-	if !strings.Contains(lines[0], string(EventRunCreated)) || !strings.Contains(lines[3], string(EventRunSucceeded)) {
+	if !strings.Contains(lines[0], EventRunCreated.String()) || !strings.Contains(lines[3], EventRunSucceeded.String()) {
 		t.Fatalf("events.jsonl content = %q", string(raw))
 	}
 }

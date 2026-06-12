@@ -126,3 +126,67 @@ func TestEventOmitsEmptyStructuredOutput(t *testing.T) {
 		t.Fatalf("structured_output must be omitted when empty: %s", string(encoded))
 	}
 }
+
+// TestEventTypeJSONRoundTrip verifies that EventType marshals to its string
+// name and unmarshals back to the same value.
+func TestEventTypeJSONRoundTrip(t *testing.T) {
+	event := Event{
+		Sequence: 3,
+		Type:     EventStepResumed,
+		RunID:    "run-abc",
+		StepID:   "step-1",
+	}
+
+	encoded, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("Marshal error = %v", err)
+	}
+
+	// Wire format must contain the string name, not a number.
+	var raw map[string]any
+	if err := json.Unmarshal(encoded, &raw); err != nil {
+		t.Fatalf("Unmarshal raw error = %v", err)
+	}
+	if raw["type"] != "StepResumed" {
+		t.Fatalf("wire type = %v, want \"StepResumed\"", raw["type"])
+	}
+
+	var decoded Event
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("Unmarshal error = %v", err)
+	}
+	if decoded.Type != EventStepResumed {
+		t.Fatalf("round-tripped Type = %v, want EventStepResumed", decoded.Type)
+	}
+}
+
+// TestEventTypeUnmarshalUnknownName verifies that an unknown string name
+// produces a descriptive error.
+func TestEventTypeUnmarshalUnknownName(t *testing.T) {
+	raw := `{"sequence":1,"type":"Bogus","run_id":"run-x"}`
+	var event Event
+	if err := json.Unmarshal([]byte(raw), &event); err == nil {
+		t.Fatal("Unmarshal unknown type name: want error, got nil")
+	}
+}
+
+// TestEventTypeMarshalZero verifies that marshaling a zero EventType returns
+// an error (zero is the invalid sentinel value).
+func TestEventTypeMarshalZero(t *testing.T) {
+	var zero EventType
+	_, err := json.Marshal(zero)
+	if err == nil {
+		t.Fatal("Marshal zero EventType: want error, got nil")
+	}
+}
+
+// TestEventTypeString verifies String() on known and unknown values.
+func TestEventTypeString(t *testing.T) {
+	if got := EventStepStarted.String(); got != "StepStarted" {
+		t.Fatalf("EventStepStarted.String() = %q, want \"StepStarted\"", got)
+	}
+	unknown := EventType(9999)
+	if got := unknown.String(); got != "EventType(9999)" {
+		t.Fatalf("unknown.String() = %q, want \"EventType(9999)\"", got)
+	}
+}

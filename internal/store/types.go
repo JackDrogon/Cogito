@@ -1,6 +1,10 @@
 package store
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+	"sync"
+)
 
 // DefaultStateRoot is the directory Cogito creates inside the target
 // repository root to hold run state, so runs never pollute the rest of the
@@ -15,30 +19,136 @@ const (
 	persistedDirMode  = 0o700
 )
 
-type EventType string
+// EventType identifies a durable state-transition event.
+//
+// Wire format: the JSON representation is always the string name (e.g.
+// "StepStarted"), never the numeric value. Numeric values are purely
+// in-memory and may change between versions; only the string names are
+// stable on disk.
+// The json.Unmarshaler contract forces a pointer receiver next to the enum's
+// value receivers (String/Valid/MarshalJSON) — the stdlib idiom, not a smell.
+// Upstream recvcheck v0.3.0 excludes *.UnmarshalJSON by default
+// (raeperd/recvcheck#17), but golangci-lint still bundles v0.2.0 whose builtin
+// excludes cover only the Marshal/Encode family. Drop the directive once it
+// ships recvcheck >= v0.3.0.
+type EventType uint32 //nolint:recvcheck // see comment above: stdlib (Un)Marshaler receiver split
 
 const (
-	EventRunCreated         EventType = "RunCreated"
-	EventRunStarted         EventType = "RunStarted"
-	EventRunPaused          EventType = "RunPaused"
-	EventRunWaitingApproval EventType = "RunWaitingApproval"
-	EventRunSucceeded       EventType = "RunSucceeded"
-	EventRunFailed          EventType = "RunFailed"
-	EventRunCanceled        EventType = "RunCanceled"
-	EventStepQueued         EventType = "StepQueued"
-	EventStepStarted        EventType = "StepStarted"
-	EventStepSucceeded      EventType = "StepSucceeded"
-	EventStepFailed         EventType = "StepFailed"
-	EventStepRetried        EventType = "StepRetried"
-	EventStepInterrupted    EventType = "StepInterrupted"
-	EventApprovalRequested  EventType = "ApprovalRequested"
-	EventApprovalGranted    EventType = "ApprovalGranted"
-	EventApprovalDenied     EventType = "ApprovalDenied"
-	EventApprovalTimedOut   EventType = "ApprovalTimedOut"
-	EventReplayStarted      EventType = "ReplayStarted"
-	EventReplaySucceeded    EventType = "ReplaySucceeded"
-	EventReplayFailed       EventType = "ReplayFailed"
+	// 0 is intentionally left as the invalid zero value.
+	EventRunCreated EventType = iota + 1
+	EventRunStarted
+	EventRunPaused
+	EventRunWaitingApproval
+	EventRunSucceeded
+	EventRunFailed
+	EventRunCanceled
+	EventStepQueued
+	EventStepStarted
+	// EventStepResumed re-attaches to an interrupted step's provider session;
+	// counts as the SAME attempt (no Attempts increment).
+	EventStepResumed
+	EventStepSucceeded
+	EventStepFailed
+	EventStepRetried
+	EventStepInterrupted
+	EventApprovalRequested
+	EventApprovalGranted
+	EventApprovalDenied
+	EventApprovalTimedOut
+	EventReplayStarted
+	EventReplaySucceeded
+	EventReplayFailed
 )
+
+// eventTypeNames is the single source of truth mapping numeric EventType
+// values to their stable on-disk string names.
+var eventTypeNames = map[EventType]string{
+	EventRunCreated:         "RunCreated",
+	EventRunStarted:         "RunStarted",
+	EventRunPaused:          "RunPaused",
+	EventRunWaitingApproval: "RunWaitingApproval",
+	EventRunSucceeded:       "RunSucceeded",
+	EventRunFailed:          "RunFailed",
+	EventRunCanceled:        "RunCanceled",
+	EventStepQueued:         "StepQueued",
+	EventStepStarted:        "StepStarted",
+	EventStepResumed:        "StepResumed",
+	EventStepSucceeded:      "StepSucceeded",
+	EventStepFailed:         "StepFailed",
+	EventStepRetried:        "StepRetried",
+	EventStepInterrupted:    "StepInterrupted",
+	EventApprovalRequested:  "ApprovalRequested",
+	EventApprovalGranted:    "ApprovalGranted",
+	EventApprovalDenied:     "ApprovalDenied",
+	EventApprovalTimedOut:   "ApprovalTimedOut",
+	EventReplayStarted:      "ReplayStarted",
+	EventReplaySucceeded:    "ReplaySucceeded",
+	EventReplayFailed:       "ReplayFailed",
+}
+
+// eventTypeByName is the lazily-built reverse map of eventTypeNames.
+var (
+	eventTypeByName     map[string]EventType
+	eventTypeByNameOnce sync.Once
+)
+
+func reverseEventTypeNames() map[string]EventType {
+	eventTypeByNameOnce.Do(func() {
+		m := make(map[string]EventType, len(eventTypeNames))
+		for k, v := range eventTypeNames {
+			m[v] = k
+		}
+
+		eventTypeByName = m
+	})
+
+	return eventTypeByName
+}
+
+// String returns the stable string name of t, or "EventType(<n>)" for unknown values.
+func (t EventType) String() string {
+	if name, ok := eventTypeNames[t]; ok {
+		return name
+	}
+
+	return fmt.Sprintf("EventType(%d)", uint32(t))
+}
+
+// Valid reports whether t is a known EventType constant.
+func (t EventType) Valid() bool {
+	_, ok := eventTypeNames[t]
+
+	return ok
+}
+
+// MarshalJSON encodes the stable string name, rejecting unknown or zero
+// values so a bad EventType can never corrupt the log.
+func (t EventType) MarshalJSON() ([]byte, error) {
+	name, ok := eventTypeNames[t]
+	if !ok {
+		return nil, fmt.Errorf("cannot marshal unknown EventType(%d)", uint32(t))
+	}
+
+	return json.Marshal(name)
+}
+
+// UnmarshalJSON decodes a string name, rejecting unknown names so replay
+// fails loudly at the read boundary instead of inside the state machine.
+func (t *EventType) UnmarshalJSON(data []byte) error {
+	var name string
+	if err := json.Unmarshal(data, &name); err != nil {
+		return fmt.Errorf("event type must be a JSON string: %w", err)
+	}
+
+	v, ok := reverseEventTypeNames()[name]
+	if !ok {
+		return fmt.Errorf("unknown event type name %q", name)
+	}
+
+	*t = v
+
+	return nil
+}
 
 // Layout holds canonical file paths for a single run under DefaultRunsRoot.
 // Use LayoutForRun to construct instances rather than assembling paths manually.

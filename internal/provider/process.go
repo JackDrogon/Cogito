@@ -542,7 +542,7 @@ func supervise(params superviseParams) {
 			KillGrace:   params.KillGrace,
 			ReadersDone: readersDone,
 			Interrupted: &interrupted,
-			WarnStuck:   func() { warnKillTimeout(logWriter, params.WarningSink) },
+			WarnStuck:   func() { warnKillTimeout(params.WarningSink) },
 		})
 
 		startWatchdog(watchdogParams{
@@ -902,22 +902,14 @@ func signalOnCancel(params signalParams) {
 }
 
 // warnKillTimeout records that a process survived the post-SIGKILL grace window.
-// When a log writer is present it writes there through the same capped writer
-// the IO tee goroutines use; the file is guaranteed open because supervise
-// closes it only after the IO pipes drain, which cannot happen until the process
-// exits.
-//
-// When there is no log file the warning is routed to the caller-provided sink,
-// and when that is also nil it falls back to stderr — so a stuck process is
-// never silently ignored just because the caller passed an empty LogPath.
-func warnKillTimeout(logWriter io.Writer, sink func(string)) {
+// It deliberately never writes to the log file: this fires from signalOnCancel's
+// KillGrace branch, which can outlive supervise's flushLogFile/closeLogFile (a
+// SIGKILL that drains the pipes closes the log while the kill timer is still
+// pending), so the log writer may already be closed here. The warning goes to
+// the caller-provided sink, falling back to stderr — a stuck process is never
+// silently ignored.
+func warnKillTimeout(sink func(string)) {
 	const message = "[runner] WARNING: process did not exit after SIGKILL grace; giving up"
-
-	if logWriter != nil {
-		_, _ = io.WriteString(logWriter, "\n"+message+"\n")
-
-		return
-	}
 
 	if sink != nil {
 		sink(message)

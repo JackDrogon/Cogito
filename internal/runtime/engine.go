@@ -368,6 +368,8 @@ func (e *Engine) ExecuteNext(ctx context.Context) (bool, error) {
 	case RunStatePaused, RunStateWaitingApproval, RunStateSucceeded, RunStateFailed, RunStateCanceled:
 		return false, nil
 	case RunStateRunning:
+	case RunStatePending:
+		return false, newError(ErrorCodeState, fmt.Sprintf("unknown run state %q", e.snapshot.State))
 	default:
 		return false, newError(ErrorCodeState, fmt.Sprintf("unknown run state %q", e.snapshot.State))
 	}
@@ -427,6 +429,8 @@ func (e *Engine) Pause(message string) error {
 			To:        RunStatePaused,
 			Message:   message,
 		})
+	case RunStatePending, RunStatePaused, RunStateSucceeded, RunStateFailed, RunStateCanceled:
+		return newError(ErrorCodeState, fmt.Sprintf("cannot pause run from %q", e.snapshot.State))
 	default:
 		return newError(ErrorCodeState, fmt.Sprintf("cannot pause run from %q", e.snapshot.State))
 	}
@@ -487,6 +491,8 @@ func (e *Engine) Cancel(ctx context.Context, message string) error {
 			To:        RunStateCanceled,
 			Message:   message,
 		})
+	case RunStateSucceeded, RunStateFailed, RunStateCanceled:
+		return newError(ErrorCodeState, fmt.Sprintf("cannot cancel run from %q", e.snapshot.State))
 	default:
 		return newError(ErrorCodeState, fmt.Sprintf("cannot cancel run from %q", e.snapshot.State))
 	}

@@ -68,7 +68,7 @@ func TestResyncLastSequenceTrustsTheFile(t *testing.T) {
 
 	// Simulate an append whose error reached the caller although the data
 	// became durable: the line exists on disk while lastSequence still says 1.
-	outOfBand := `{"sequence":2,"run_id":"run-123","type":"run_started"}` + "\n"
+	outOfBand := `{"sequence":2,"run_id":"run-123","type":"RunStarted"}` + "\n"
 
 	file, err := os.OpenFile(store.Layout().EventsPath, os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {

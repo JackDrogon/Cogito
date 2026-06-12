@@ -10,6 +10,10 @@ import (
 
 const redactionMarker = "***REDACTED***"
 
+// Note: "AUTH" is deliberately absent. Substring matching would catch
+// GIT_AUTHOR_NAME/GIT_AUTHOR_EMAIL (and other *AUTHOR*/OAUTH_* config
+// values), silently corrupting commit metadata in logs and events. Real
+// auth secrets virtually always also carry TOKEN/KEY/SECRET in their name.
 var secretEnvNameMarkers = []string{
 	"TOKEN",
 	"SECRET",
@@ -19,7 +23,6 @@ var secretEnvNameMarkers = []string{
 	"API_KEY",
 	"APIKEY",
 	"PRIVATE_KEY",
-	"AUTH",
 }
 
 // CollectEnvSecrets returns secret-looking environment values sorted longest

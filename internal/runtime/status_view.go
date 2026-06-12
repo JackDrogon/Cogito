@@ -83,7 +83,7 @@ func BuildReplayView(compiled *workflow.CompiledWorkflow, replay ReplayResult) R
 		transition := replay.Transitions[i]
 		view.Transitions = append(view.Transitions, TransitionView{
 			Sequence:  transition.Sequence,
-			EventType: string(transition.EventType),
+			EventType: transition.EventType.String(),
 			Scope:     transition.Scope,
 			StepID:    transition.StepID,
 			From:      transition.From,

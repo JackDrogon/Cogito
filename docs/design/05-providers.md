@@ -148,7 +148,7 @@ stdout/stderr artifacts use the same secret heuristics before writing durable
 audit records. At redaction time, Cogito reads the parent environment and treats
 values of variables whose names contain
 `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `CREDENTIAL`, `API_KEY`, `APIKEY`,
-`PRIVATE_KEY`, or `AUTH` (case-insensitive) as secrets when the value is at least
+or `PRIVATE_KEY` (case-insensitive) as secrets when the value is at least
 8 bytes. Matching output bytes are replaced with `***REDACTED***`, including
 matches split across stream chunks. The in-memory stdout/stderr buffers remain
 raw so session-id scraping and `AGENT_RESULT_JSON` parsing continue to operate on
@@ -178,13 +178,20 @@ classifies each pidfile:
 
 | Process state | Identity check | Action |
 |---------------|----------------|--------|
-| alive | `/proc/<pid>/cmdline` basename matches recorded binary | send SIGTERM to `-pgid`, wait `DefaultExitGrace`, then SIGKILL to `-pgid` if needed; remove pidfile |
-| alive | binary mismatch or unsafe PID | do not signal; remove stale pidfile |
+| alive | `/proc/<pid>/cmdline` basename matches recorded binary, and start time within 10 s of `started_at` when recorded | send SIGTERM to `-pgid`, wait `DefaultExitGrace`, then SIGKILL to `-pgid` if needed; remove pidfile |
+| alive | binary mismatch, start-time mismatch, unsafe PID, or `/proc` read error | do not signal; remove stale pidfile |
 | dead | not applicable | remove stale pidfile |
 
-The identity check is mandatory because PIDs can be reused. `cogito status` uses
-`provider.FindOrphans(runDir)` and is read-only: it reports only alive,
-identity-matched provider orphans and leaves pidfiles and processes untouched.
+The identity check is mandatory because PIDs can be reused. A confirmed orphan
+must pass three checks: liveness (`kill(pid, 0)`), cmdline basename match
+(`/proc/<pid>/cmdline`), and — when `started_at` is present in the pidfile —
+process start time within 10 seconds of the recorded value (derived from
+`/proc/stat` boot time and `/proc/<pid>/stat` starttime ticks). Old pidfiles
+without `started_at` rely on liveness and cmdline alone. Any `/proc` read
+failure is treated as identity-not-confirmed so Cogito never kills on
+uncertainty. `cogito status` uses `provider.FindOrphans(runDir)` and is
+read-only: it reports only alive, identity-matched provider orphans and leaves
+pidfiles and processes untouched.
 
 ### Provider-specific command style
 

@@ -247,6 +247,10 @@ func applyStepEvent(request stateMachineEventRequest) error {
 	case store.EventStepStarted:
 		fold.step.Attempts++
 		fold.step.Resumable = false
+	case store.EventStepResumed:
+		// Re-attach to the same provider session: resume intent consumed, but
+		// Attempts is NOT incremented — this is the same attempt continuing.
+		fold.step.Resumable = false
 	case store.EventStepInterrupted:
 		// EventStepInterrupted parks a running step back in the queued state
 		// while preserving AttemptID + ProviderSessionID so executeStep can

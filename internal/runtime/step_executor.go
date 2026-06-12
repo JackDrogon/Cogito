@@ -190,7 +190,7 @@ func (e *Engine) resumeStep(ctx context.Context, params resumeStepParams) error 
 	}
 
 	if err := e.persistStepTransition(StepTransitionParams{
-		EventType:         store.EventStepStarted,
+		EventType:         store.EventStepResumed,
 		StepID:            params.Step.ID,
 		From:              StepStateQueued,
 		To:                StepStateRunning,
@@ -298,12 +298,17 @@ func (e *Engine) continueExecution(ctx context.Context, request executionContinu
 	for !request.Execution.State.Normalizable() {
 		request.Execution, err = request.Driver.PollOrCollect(ctx, request.Execution.Handle)
 		if err != nil {
+			// SkipRetry: a polling error is a cogito-side infrastructure
+			// failure, not evidence that the provider process exited. A
+			// retry would Start a fresh attempt while the prior process may
+			// still be running and mutating the same working directory.
 			return e.failRunForExecutionError(FailRunParams{
 				StepID:            request.Step.ID,
 				AttemptID:         request.AttemptID,
 				ProviderSessionID: providerSessionID,
 				ExecutionErr:      err,
 				Message:           "step polling failed",
+				SkipRetry:         true,
 			})
 		}
 
@@ -434,6 +439,8 @@ func (e *Engine) applyResult(ctx context.Context, request executionResultRequest
 			To:        RunStatePaused,
 			Message:   summary,
 		})
+	case provider.ExecutionStateRunning:
+		return newError(ErrorCodeExecution, fmt.Sprintf("unsupported normalized step status %q", request.Result.Status))
 	default:
 		return newError(ErrorCodeExecution, fmt.Sprintf("unsupported normalized step status %q", request.Result.Status))
 	}

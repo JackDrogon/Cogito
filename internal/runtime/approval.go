@@ -465,6 +465,8 @@ func approvalDecisionSummary(decision ApprovalDecision, step workflow.CompiledSt
 		return "approval denied"
 	case ApprovalDecisionTimeout:
 		return "approval timed out"
+	case ApprovalDecisionWait:
+		return defaultApprovalSummary(step, provider.ExecutionStateWaitingApproval)
 	default:
 		return defaultApprovalSummary(step, provider.ExecutionStateWaitingApproval)
 	}

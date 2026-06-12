@@ -153,6 +153,11 @@ The retry budget is replay-derived: `StepStarted` increments `StepSnapshot.Attem
 and checkpoints round-trip that value. Replaying an event log with `StepRetried`
 therefore produces the same retry budget and final state as live execution.
 
+When a running step is interrupted and later resumed, the re-attach emits
+`StepResumed` (not `StepStarted`) and does not increment `Attempts`. The retry
+budget is therefore preserved across an interrupt/resume cycle; only genuine
+fresh starts count toward the attempt total.
+
 ## Approval Integration
 
 Runtime supports three approval triggers:

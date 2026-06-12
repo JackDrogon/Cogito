@@ -126,7 +126,7 @@ linters:
       check-type-assertions: true
       check-blank: true
     exhaustive:
-      default-signifies-exhaustive: true
+      default-signifies-exhaustive: false
     exhaustruct:
       exclude:
         - testing\.T

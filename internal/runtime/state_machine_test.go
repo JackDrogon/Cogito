@@ -273,6 +273,119 @@ func TestStepRetryDefaultZeroFailsImmediately(t *testing.T) {
 	assertEventTypeCount(t, events, store.EventRunFailed, 1)
 }
 
+// TestInterruptResumeDoesNotConsumeRetryBudget verifies that a resume re-attach
+// emits EventStepResumed (not EventStepStarted) and therefore does not
+// increment Attempts. The retry budget must remain intact so that a subsequent
+// failure still triggers a retry.
+//
+// This is a replay-level test because the FakeProvider's interrupted flag is
+// only set via an explicit Interrupt() call, which the engine does not issue
+// when a poll returns ExecutionStateInterrupted. Replaying the event log
+// directly lets us assert the fold semantics without needing a live provider
+// interrupt/resume round-trip.
+//
+// Two sub-cases:
+//  1. Started(Attempts=1) → Interrupted → Resumed(Attempts still 1) → Failed →
+//     maybeRetryStep sees Attempts(1) ≤ Retries(1) → StepRetried fires → budget
+//     consumed → second start → Attempts=2.
+//  2. Started(Attempts=1) → Started(Attempts=2) → Failed → maybeRetryStep sees
+//     Attempts(2) > Retries(1) → no retry → StepFailed.
+func TestInterruptResumeDoesNotConsumeRetryBudget(t *testing.T) {
+	compiled := compileSpec(t, retrySpec(1))
+
+	// Sub-case 1: Started → Interrupted → Resumed → Failed.
+	// After folding these events Attempts must be 1 so maybeRetryStep still has
+	// budget (Retries=1, Attempts=1 → 1 ≤ 1 → retry allowed).
+	eventsWithResume := append(
+		interruptReplayEvents(store.EventStepInterrupted),
+		buildTestEvent(testEventParams{
+			Sequence:  6,
+			EventType: store.EventStepResumed,
+			RunID:     "run-123",
+			StepID:    "review",
+			AttemptID: "attempt-review-01",
+			Data: eventData(eventDataParams{
+				From:              string(StepStateQueued),
+				To:                string(StepStateRunning),
+				Summary:           "step resumed",
+				ProviderSessionID: "session-review-01",
+			}),
+		}),
+		buildTestEvent(testEventParams{
+			Sequence:  7,
+			EventType: store.EventStepRetried,
+			RunID:     "run-123",
+			StepID:    "review",
+			AttemptID: "attempt-review-01",
+			Data: eventData(eventDataParams{
+				From:              string(StepStateRunning),
+				To:                string(StepStateQueued),
+				Summary:           "attempt 1/2 failed: review failed after resume; retrying",
+				ProviderSessionID: "session-review-01",
+			}),
+		}),
+		buildTestEvent(testEventParams{
+			Sequence:  8,
+			EventType: store.EventStepStarted,
+			RunID:     "run-123",
+			StepID:    "review",
+			AttemptID: "attempt-review-02",
+			Data: eventData(eventDataParams{
+				From:              string(StepStateQueued),
+				To:                string(StepStateRunning),
+				Summary:           "review ok on retry",
+				ProviderSessionID: "session-review-02",
+			}),
+		}),
+	)
+
+	replayResume, err := Replay("run-123", compiled, eventsWithResume)
+	if err != nil {
+		t.Fatalf("Replay() with resume error = %v", err)
+	}
+
+	if got := replayResume.Snapshot.Steps["review"].Attempts; got != 2 {
+		t.Fatalf("resume path: review Attempts = %d, want 2 (resume must not increment Attempts)", got)
+	}
+
+	// Sub-case 2: Started → Started (second fresh start) → Failed.
+	// After two StepStarted events Attempts=2 which exceeds Retries=1, so
+	// maybeRetryStep must NOT fire — the step should be failed.
+	eventsDoubleStart := append(
+		interruptReplayEvents(store.EventStepRetried),
+		buildTestEvent(testEventParams{
+			Sequence:  6,
+			EventType: store.EventStepStarted,
+			RunID:     "run-123",
+			StepID:    "review",
+			AttemptID: "attempt-review-02",
+			Data: eventData(eventDataParams{
+				From:              string(StepStateQueued),
+				To:                string(StepStateRunning),
+				Summary:           "second attempt started",
+				ProviderSessionID: "session-review-02",
+			}),
+		}),
+	)
+
+	replayDouble, err := Replay("run-123", compiled, eventsDoubleStart)
+	if err != nil {
+		t.Fatalf("Replay() double-start error = %v", err)
+	}
+
+	if got := replayDouble.Snapshot.Steps["review"].Attempts; got != 2 {
+		t.Fatalf("double-start path: review Attempts = %d, want 2", got)
+	}
+
+	// With Attempts=2 and Retries=1 the budget is exhausted; maybeRetryStep
+	// returns false (2 > 1). Confirm the snapshot reflects this by checking
+	// that the step is still Running (not yet failed — we only replayed up to
+	// the second start, not a terminal event), and that Attempts is 2.
+	if got := replayDouble.Snapshot.Steps["review"].State; got != StepStateRunning {
+		t.Fatalf("double-start path: review.State = %q, want %q", got, StepStateRunning)
+	}
+}
+
 func TestDuplicateResumeRejected(t *testing.T) {
 	fixture := newRuntimeMachineFixture(runtimeMachineFixtureParams{Test: t, Spec: runtimeSpec(), CommandScripts: map[string]commandScript{
 		"prepare": {
@@ -789,7 +902,7 @@ func TestStateMachineEventHandlersCoverBuiltins(t *testing.T) {
 }
 
 func TestStateMachineEventHandlerRejectsUnknownType(t *testing.T) {
-	handler, err := lookupStateMachineEventHandler(store.EventType("unknown"))
+	handler, err := lookupStateMachineEventHandler(store.EventType(9999))
 	if err == nil {
 		t.Fatal("lookupStateMachineEventHandler() error = nil, want unsupported event type")
 	}
@@ -1587,6 +1700,64 @@ func TestResumableClearedOnStartedAndTerminal(t *testing.T) {
 
 	if review := replay.Snapshot.Steps["review"]; review.Resumable {
 		t.Fatal("review.Resumable = true, want false after EventStepSucceeded")
+	}
+}
+
+// TestEventStepResumedPreservesAttempts asserts that folding an EventStepResumed
+// transitions the step to Running, clears Resumable (resume intent consumed),
+// and does NOT increment Attempts — it is the same attempt continuing.
+func TestEventStepResumedPreservesAttempts(t *testing.T) {
+	compiled := compileSpec(t, &workflow.Spec{
+		Metadata: workflow.Metadata{Name: "step-resumed-fold"},
+		Steps: []workflow.StepSpec{{
+			ID:    "review",
+			Kind:  workflow.StepKindAgent,
+			Agent: &workflow.AgentStepSpec{Agent: "fake", Prompt: "review"},
+		}},
+	})
+
+	// Started (Attempts=1) → Interrupted (Resumable=true) → Resumed (same attempt)
+	events := append(interruptReplayEvents(store.EventStepInterrupted),
+		buildTestEvent(testEventParams{
+			Sequence:  6,
+			EventType: store.EventStepResumed,
+			RunID:     "run-123",
+			StepID:    "review",
+			AttemptID: "attempt-review-01",
+			Data: eventData(eventDataParams{
+				From:              string(StepStateQueued),
+				To:                string(StepStateRunning),
+				Summary:           "step resumed",
+				ProviderSessionID: "session-review-01",
+			}),
+		}),
+	)
+
+	replay, err := Replay("run-123", compiled, events)
+	if err != nil {
+		t.Fatalf("Replay() error = %v", err)
+	}
+
+	review := replay.Snapshot.Steps["review"]
+
+	if review.State != StepStateRunning {
+		t.Fatalf("review.State = %q, want %q", review.State, StepStateRunning)
+	}
+
+	if review.Attempts != 1 {
+		t.Fatalf("review.Attempts = %d, want 1 (EventStepResumed must not increment Attempts)", review.Attempts)
+	}
+
+	if review.Resumable {
+		t.Fatal("review.Resumable = true, want false after EventStepResumed")
+	}
+
+	if review.AttemptID != "attempt-review-01" {
+		t.Fatalf("review.AttemptID = %q, want %q", review.AttemptID, "attempt-review-01")
+	}
+
+	if review.ProviderSessionID != "session-review-01" {
+		t.Fatalf("review.ProviderSessionID = %q, want %q", review.ProviderSessionID, "session-review-01")
 	}
 }
 

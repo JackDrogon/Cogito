@@ -123,6 +123,8 @@ func (s ExecutionState) Normalizable() bool {
 	switch s {
 	case ExecutionStateSucceeded, ExecutionStateFailed, ExecutionStateInterrupted, ExecutionStateWaitingApproval:
 		return true
+	case ExecutionStateRunning:
+		return false
 	default:
 		return false
 	}

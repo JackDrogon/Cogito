@@ -39,6 +39,15 @@ func (v *verboseLogger) logEvent(event store.Event) {
 		} else {
 			v.printf(event, "Step started: %s (session: %s)", event.StepID, sessionID)
 		}
+	case store.EventStepResumed:
+		msg := strings.TrimSpace(event.Message)
+		sessionID := event.Data["provider_session_id"]
+
+		if msg != "" {
+			v.printf(event, "Step resumed: %s - %s (session: %s)", event.StepID, msg, sessionID)
+		} else {
+			v.printf(event, "Step resumed: %s (session: %s)", event.StepID, sessionID)
+		}
 	case store.EventStepSucceeded:
 		v.printf(event, "Step succeeded: %s - %s", event.StepID, extractSummary(event.Data))
 	case store.EventStepFailed:

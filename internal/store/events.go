@@ -11,12 +11,17 @@ import (
 	"strings"
 )
 
-// Event-log scanner sizing. Single events can be large because step
-// transitions may embed an agent's full structured output; the max line size
-// bounds memory while still accommodating generous AGENT_RESULT_JSON payloads.
+// Event-log line sizing. Single events can be large because step transitions
+// may embed an agent's full structured output. The append cap and the scanner
+// cap together guarantee the invariant "anything AppendEvent wrote, ReadEvents
+// can read back": an event that would exceed the append cap is rejected up
+// front (failing the append is better than writing a line that breaks every
+// later status/resume/replay), and the scanner cap stays well above the append
+// cap so historical logs near the old limit remain readable.
 const (
 	eventScanInitialBufferSize = 64 * 1024
-	eventScanMaxLineSize       = 1024 * 1024
+	maxAppendEventBytes        = 2 * 1024 * 1024
+	eventScanMaxLineSize       = 4 * 1024 * 1024
 )
 
 // AppendEvent durably appends one event with the next sequence number.
@@ -49,6 +54,11 @@ func (s *Store) AppendEvent(event Event) (Event, error) {
 	encoded, err := json.Marshal(event)
 	if err != nil {
 		return Event{}, wrapError(ErrorCodeEventLog, "marshal event", err)
+	}
+
+	if len(encoded) > maxAppendEventBytes {
+		return Event{}, wrapError(ErrorCodeEventLog, "append event",
+			fmt.Errorf("event of %d bytes exceeds the %d-byte limit", len(encoded), maxAppendEventBytes))
 	}
 
 	file, err := os.OpenFile(filepath.Clean(s.layout.EventsPath), os.O_WRONLY|os.O_APPEND, persistedFileMode)

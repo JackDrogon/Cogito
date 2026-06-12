@@ -130,6 +130,105 @@ func TestFindOrphansClassifiesAliveMismatchAndDeadReadOnly(t *testing.T) {
 	}
 }
 
+// TestReapOrphansStartTimeMatchReapsChild verifies that a live child whose
+// StartedAt matches the real process start time is still classified and reaped.
+func TestReapOrphansStartTimeMatchReapsChild(t *testing.T) {
+	t.Parallel()
+
+	rootDir := t.TempDir()
+	pidFile := filepath.Join(rootDir, "provider-logs", "startmatch", "attempt.pid.json")
+	cmd, record := startDetachedBashSleep(t)
+
+	writePIDRecord(t, pidFile, record)
+
+	report, err := ReapOrphans(rootDir)
+	if err != nil {
+		t.Fatalf("ReapOrphans() error = %v", err)
+	}
+	if len(report.Reaped) != 1 {
+		t.Fatalf("ReapOrphans() reaped = %d, want 1", len(report.Reaped))
+	}
+	if report.Reaped[0].StepID != "startmatch" {
+		t.Fatalf("reaped StepID = %q, want startmatch", report.Reaped[0].StepID)
+	}
+
+	waitForCommandExit(t, cmd)
+	if _, err := os.Stat(pidFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("pidfile stat after reap err = %v, want not exist", err)
+	}
+}
+
+// TestReapOrphansStartTimeMismatchDoesNotKill verifies that a live child whose
+// StartedAt is shifted by -1 hour (simulating a recycled PID) is NOT killed
+// and the record is cleaned instead.
+func TestReapOrphansStartTimeMismatchDoesNotKill(t *testing.T) {
+	t.Parallel()
+
+	rootDir := t.TempDir()
+	pidFile := filepath.Join(rootDir, "provider-logs", "startmismatch", "attempt.pid.json")
+	cmd, record := startDetachedBashSleep(t)
+	defer cleanupDetachedCommand(cmd, record.PGID)
+
+	// Shift StartedAt by -1 hour to simulate a recycled PID.
+	shiftedTime, err := time.Parse(time.RFC3339, record.StartedAt)
+	if err != nil {
+		t.Fatalf("parse StartedAt: %v", err)
+	}
+	record.StartedAt = shiftedTime.Add(-time.Hour).UTC().Format(time.RFC3339)
+
+	writePIDRecord(t, pidFile, record)
+
+	report, err := ReapOrphans(rootDir)
+	if err != nil {
+		t.Fatalf("ReapOrphans() error = %v", err)
+	}
+	if len(report.Reaped) != 0 {
+		t.Fatalf("ReapOrphans() reaped = %d, want 0 (must not kill recycled pid)", len(report.Reaped))
+	}
+	if len(report.Cleaned) != 1 {
+		t.Fatalf("ReapOrphans() cleaned = %d, want 1", len(report.Cleaned))
+	}
+
+	// The child process must still be alive after ReapOrphans.
+	if err := syscall.Kill(cmd.Process.Pid, 0); err != nil {
+		t.Fatalf("child process should still be alive after mismatch, got kill(0) err = %v", err)
+	}
+
+	if _, err := os.Stat(pidFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("pidfile stat after cleanup err = %v, want not exist", err)
+	}
+}
+
+// TestReapOrphansZeroStartedAtReapsChild verifies that a pidfile with an empty
+// StartedAt (old pidfile format) still reaps the child using cmdline check alone.
+func TestReapOrphansZeroStartedAtReapsChild(t *testing.T) {
+	t.Parallel()
+
+	rootDir := t.TempDir()
+	pidFile := filepath.Join(rootDir, "provider-logs", "zerostartedat", "attempt.pid.json")
+	cmd, record := startDetachedBashSleep(t)
+
+	// Clear StartedAt to simulate an old pidfile.
+	record.StartedAt = ""
+	writePIDRecord(t, pidFile, record)
+
+	report, err := ReapOrphans(rootDir)
+	if err != nil {
+		t.Fatalf("ReapOrphans() error = %v", err)
+	}
+	if len(report.Reaped) != 1 {
+		t.Fatalf("ReapOrphans() reaped = %d, want 1", len(report.Reaped))
+	}
+	if report.Reaped[0].StepID != "zerostartedat" {
+		t.Fatalf("reaped StepID = %q, want zerostartedat", report.Reaped[0].StepID)
+	}
+
+	waitForCommandExit(t, cmd)
+	if _, err := os.Stat(pidFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("pidfile stat after reap err = %v, want not exist", err)
+	}
+}
+
 func startDetachedBashSleep(t *testing.T) (*exec.Cmd, PIDRecord) {
 	t.Helper()
 
