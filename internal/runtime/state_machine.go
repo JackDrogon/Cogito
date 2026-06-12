@@ -244,6 +244,9 @@ func applyStepEvent(request stateMachineEventRequest) error {
 	}
 
 	switch request.Event.Type {
+	case store.EventStepStarted:
+		fold.step.Attempts++
+		fold.step.Resumable = false
 	case store.EventStepInterrupted:
 		// EventStepInterrupted parks a running step back in the queued state
 		// while preserving AttemptID + ProviderSessionID so executeStep can
@@ -259,7 +262,7 @@ func applyStepEvent(request stateMachineEventRequest) error {
 			fold.step.ProviderSessionID = ""
 			fold.step.Resumable = false
 		}
-	case store.EventStepStarted, store.EventStepSucceeded, store.EventStepFailed:
+	case store.EventStepSucceeded, store.EventStepFailed:
 		// Resume intent is single-shot. Once the step re-enters running (the
 		// resume actually fired) or reaches a terminal outcome, clear Resumable
 		// so a stale "true" cannot persist in the checkpoint indefinitely. Only
@@ -385,7 +388,8 @@ func initializePendingSteps(snapshot *Snapshot, compiled *workflow.CompiledWorkf
 		snapshot.Steps = make(map[string]StepSnapshot, len(compiled.Steps))
 	}
 
-	for _, step := range compiled.Steps {
+	for index := range compiled.Steps {
+		step := &compiled.Steps[index]
 		snapshot.Steps[step.ID] = StepSnapshot{State: StepStatePending}
 	}
 }

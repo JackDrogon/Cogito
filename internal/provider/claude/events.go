@@ -20,7 +20,15 @@ type response struct {
 	DurationMS    int64          `json:"duration_ms"`
 	DurationAPIMS int64          `json:"duration_api_ms"`
 	NumTurns      int64          `json:"num_turns"`
+	TotalCostUSD  float64        `json:"total_cost_usd"`
+	Usage         *usage         `json:"usage"`
 	Raw           map[string]any `json:"-"`
+}
+
+type usage struct {
+	InputTokens  int64 `json:"input_tokens"`
+	OutputTokens int64 `json:"output_tokens"`
+	TotalTokens  int64 `json:"total_tokens"`
 }
 
 type executionParams struct {
@@ -89,6 +97,25 @@ func buildExecution(params executionParams) *provider.Execution {
 		Summary:    summary,
 		OutputText: outputText,
 		Logs:       buildLogs(params.Version, params.Response, params.Stderr),
+		Usage:      responseUsage(params.Response),
+	}
+}
+
+func responseUsage(response *response) *provider.Usage {
+	if response == nil || response.Usage == nil {
+		return nil
+	}
+
+	totalTokens := response.Usage.TotalTokens
+	if totalTokens == 0 {
+		totalTokens = response.Usage.InputTokens + response.Usage.OutputTokens
+	}
+
+	return &provider.Usage{
+		InputTokens:  response.Usage.InputTokens,
+		OutputTokens: response.Usage.OutputTokens,
+		TotalTokens:  totalTokens,
+		CostUSD:      response.TotalCostUSD,
 	}
 }
 

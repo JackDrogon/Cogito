@@ -76,6 +76,8 @@ func buildExecution(params executionParams) *provider.Execution {
 		Summary:    summary,
 		OutputText: outputText,
 		Logs:       buildLogs(params.Version, params.Response, params.Stderr),
+		// OpenCode's current parsed JSON response has no documented token or cost
+		// fields in this adapter, so usage intentionally remains nil.
 	}
 }
 

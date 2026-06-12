@@ -14,6 +14,7 @@ type FakeSnapshot struct {
 	StructuredOutput json.RawMessage
 	ArtifactRefs     []ArtifactRef
 	Logs             []LogEntry
+	Usage            *Usage
 }
 
 type FakeScript struct {
@@ -216,6 +217,7 @@ func buildExecution(handle ExecutionHandle, snapshot FakeSnapshot) *Execution {
 		StructuredOutput: CloneJSON(snapshot.StructuredOutput),
 		ArtifactRefs:     CloneArtifactRefs(snapshot.ArtifactRefs),
 		Logs:             CloneLogs(snapshot.Logs),
+		Usage:            CloneUsage(snapshot.Usage),
 	}
 }
 
@@ -245,8 +247,8 @@ func cloneSnapshots(snapshots []FakeSnapshot) []FakeSnapshot {
 	}
 
 	cloned := make([]FakeSnapshot, 0, len(snapshots))
-	for _, snapshot := range snapshots {
-		cloned = append(cloned, cloneSnapshot(snapshot))
+	for index := range snapshots {
+		cloned = append(cloned, cloneSnapshot(snapshots[index]))
 	}
 
 	return cloned
@@ -260,5 +262,6 @@ func cloneSnapshot(snapshot FakeSnapshot) FakeSnapshot {
 		StructuredOutput: CloneJSON(snapshot.StructuredOutput),
 		ArtifactRefs:     CloneArtifactRefs(snapshot.ArtifactRefs),
 		Logs:             CloneLogs(snapshot.Logs),
+		Usage:            CloneUsage(snapshot.Usage),
 	}
 }

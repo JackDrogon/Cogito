@@ -86,7 +86,7 @@ func (e *Engine) executeStep(ctx context.Context, stepID string) error {
 	if err != nil {
 		return e.failStepStart(failStepStartParams{
 			StepID: stepID, AttemptID: attemptID,
-			Err: err, Message: "driver setup failed",
+			Err: err, Message: "driver setup failed", SkipRetry: true,
 		})
 	}
 
@@ -249,6 +249,7 @@ type failStepStartParams struct {
 	AttemptID string
 	Err       error
 	Message   string
+	SkipRetry bool
 }
 
 func (e *Engine) failStepStart(params failStepStartParams) error {
@@ -275,6 +276,7 @@ func (e *Engine) failStepStart(params failStepStartParams) error {
 		ProviderSessionID: providerSessionID,
 		ExecutionErr:      executionErr,
 		Message:           message,
+		SkipRetry:         params.SkipRetry,
 	})
 }
 
@@ -362,8 +364,23 @@ func (e *Engine) applyResult(ctx context.Context, request executionResultRequest
 			Summary:           summary,
 			NormalizedStatus:  string(request.Result.Status),
 			StructuredOutput:  request.Result.StructuredOutput,
+			Usage:             request.Result.Usage,
 		})
 	case provider.ExecutionStateFailed:
+		retried, err := e.maybeRetryStep(stepRetryParams{
+			Step:              request.Step,
+			AttemptID:         request.AttemptID,
+			ProviderSessionID: providerSessionID,
+			FailureSummary:    summary,
+		})
+		if err != nil {
+			return err
+		}
+
+		if retried {
+			return nil
+		}
+
 		if err := e.persistStepTransition(StepTransitionParams{
 			EventType:         store.EventStepFailed,
 			StepID:            request.Step.ID,
@@ -373,6 +390,7 @@ func (e *Engine) applyResult(ctx context.Context, request executionResultRequest
 			ProviderSessionID: providerSessionID,
 			Summary:           summary,
 			NormalizedStatus:  string(request.Result.Status),
+			Usage:             request.Result.Usage,
 		}); err != nil {
 			return err
 		}
@@ -419,6 +437,47 @@ func (e *Engine) applyResult(ctx context.Context, request executionResultRequest
 	default:
 		return newError(ErrorCodeExecution, fmt.Sprintf("unsupported normalized step status %q", request.Result.Status))
 	}
+}
+
+type stepRetryParams struct {
+	Step              workflow.CompiledStep
+	AttemptID         string
+	ProviderSessionID string
+	FailureSummary    string
+}
+
+func (e *Engine) maybeRetryStep(params stepRetryParams) (bool, error) {
+	if params.Step.Kind == workflow.StepKindApproval {
+		return false, nil
+	}
+
+	stepSnapshot := e.snapshot.Steps[params.Step.ID]
+	if stepSnapshot.Attempts > params.Step.Retries {
+		return false, nil
+	}
+
+	totalAttempts := params.Step.Retries + 1
+	summary := fmt.Sprintf(
+		"attempt %d/%d failed: %s; retrying",
+		stepSnapshot.Attempts,
+		totalAttempts,
+		normalizeSummary(params.FailureSummary, provider.ExecutionStateFailed),
+	)
+
+	if err := e.persistStepTransition(StepTransitionParams{
+		EventType:         store.EventStepRetried,
+		StepID:            params.Step.ID,
+		From:              StepStateRunning,
+		To:                StepStateQueued,
+		AttemptID:         params.AttemptID,
+		ProviderSessionID: params.ProviderSessionID,
+		Summary:           summary,
+		NormalizedStatus:  string(provider.ExecutionStateFailed),
+	}); err != nil {
+		return false, err
+	}
+
+	return true, nil
 }
 
 func (e *Engine) buildDriver(step workflow.CompiledStep) (stepDriver, error) {

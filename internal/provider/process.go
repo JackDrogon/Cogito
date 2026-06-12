@@ -196,6 +196,7 @@ func StartProcess(parentCtx context.Context, req ProcessRequest) (*Session, erro
 	}
 
 	settings := applyDefaults(req)
+	secretValues := collectSecretEnvValues(os.Environ())
 
 	var logFile *os.File
 
@@ -240,6 +241,7 @@ func StartProcess(parentCtx context.Context, req ProcessRequest) (*Session, erro
 		LogFile:     logFile,
 		LogPath:     req.LogPath,
 		ExtraSink:   req.ExtraSink,
+		Secrets:     secretValues,
 		Prompt:      req.Prompt,
 		Pattern:     settings.pattern,
 		Timeout:     req.Timeout,
@@ -387,6 +389,7 @@ type superviseParams struct {
 	LogFile     *os.File
 	LogPath     string
 	ExtraSink   io.Writer
+	Secrets     []string
 	Prompt      string
 	Pattern     *regexp.Regexp
 	Timeout     time.Duration
@@ -424,6 +427,7 @@ func supervise(params superviseParams) {
 			LogFile:    params.LogFile,
 			LogMu:      &logMu,
 			ExtraSink:  params.ExtraSink,
+			Secrets:    params.Secrets,
 			Pattern:    params.Pattern,
 			Session:    params.Session,
 			LastOutput: &lastOutput,
@@ -438,6 +442,7 @@ func supervise(params superviseParams) {
 			LogFile:    params.LogFile,
 			LogMu:      &logMu,
 			ExtraSink:  params.ExtraSink,
+			Secrets:    params.Secrets,
 			Session:    params.Session,
 			LastOutput: &lastOutput,
 		})
@@ -539,6 +544,7 @@ type teeParams struct {
 	LogFile    *os.File
 	LogMu      *sync.Mutex
 	ExtraSink  io.Writer
+	Secrets    []string
 	Pattern    *regexp.Regexp
 	Session    *Session
 	LastOutput *atomic.Int64
@@ -550,7 +556,12 @@ type teeParams struct {
 // error including io.EOF.
 func teeAndScan(src io.Reader, params teeParams) {
 	buf, pattern, session := params.Buffer, params.Pattern, params.Session
+	logWriter := redactingLogWriter(params.LogFile, params.LogMu, params.Secrets)
+	sinkWriter := redactingSinkWriter(params.ExtraSink, params.Secrets)
 	chunk := make([]byte, teeChunkSize)
+
+	defer closeRedactor(logWriter)
+	defer closeRedactor(sinkWriter)
 
 	var carry []byte
 
@@ -565,13 +576,11 @@ func teeAndScan(src io.Reader, params teeParams) {
 			buf.Write(data)
 
 			if params.LogFile != nil {
-				params.LogMu.Lock()
-				_, _ = params.LogFile.Write(data)
-				params.LogMu.Unlock()
+				_, _ = logWriter.Write(data)
 			}
 
 			if params.ExtraSink != nil {
-				_, _ = params.ExtraSink.Write(data)
+				_, _ = sinkWriter.Write(data)
 			}
 
 			if pattern != nil && session.SessionID() == "" {
@@ -593,6 +602,46 @@ func teeAndScan(src io.Reader, params teeParams) {
 			return
 		}
 	}
+}
+
+func redactingLogWriter(logFile *os.File, logMu *sync.Mutex, secrets []string) io.WriteCloser {
+	if logFile == nil {
+		return nil
+	}
+
+	return newRedactingWriter(lockedWriter{Writer: logFile, Mu: logMu}, secrets)
+}
+
+func redactingSinkWriter(sink io.Writer, secrets []string) io.WriteCloser {
+	if sink == nil {
+		return nil
+	}
+
+	return newRedactingWriter(sink, secrets)
+}
+
+func closeRedactor(writer io.WriteCloser) {
+	if writer == nil {
+		return
+	}
+
+	_ = writer.Close()
+}
+
+type lockedWriter struct {
+	Writer io.Writer
+	Mu     *sync.Mutex
+}
+
+func (w lockedWriter) Write(data []byte) (int, error) {
+	if w.Mu == nil {
+		return w.Writer.Write(data)
+	}
+
+	w.Mu.Lock()
+	defer w.Mu.Unlock()
+
+	return w.Writer.Write(data)
 }
 
 // watchdogParams configures the optional process timeout watchdog. It is a

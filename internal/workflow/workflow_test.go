@@ -66,6 +66,26 @@ func TestParseWorkflow(t *testing.T) {
 			wantCode:    ErrorCodeSchema,
 			wantMessage: "unsupported step kind",
 		},
+		{
+			name:  "retries defaults to zero",
+			input: "apiVersion: cogito/v1alpha1\nkind: Workflow\nmetadata:\n  name: retries-default\nsteps:\n  - id: run\n    kind: command\n    command: echo hi\n",
+			check: func(t *testing.T, spec *Spec) {
+				t.Helper()
+				if spec.Steps[0].Retries != 0 {
+					t.Fatalf("Retries = %d, want 0", spec.Steps[0].Retries)
+				}
+			},
+		},
+		{
+			name:  "retries parsed",
+			input: "apiVersion: cogito/v1alpha1\nkind: Workflow\nmetadata:\n  name: retries\nsteps:\n  - id: run\n    kind: command\n    command: echo hi\n    retries: 2\n",
+			check: func(t *testing.T, spec *Spec) {
+				t.Helper()
+				if spec.Steps[0].Retries != 2 {
+					t.Fatalf("Retries = %d, want 2", spec.Steps[0].Retries)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -89,6 +109,34 @@ func TestParseWorkflow(t *testing.T) {
 			}
 
 			assertWorkflowError(workflowErrorExpectation{Test: t, Error: err, WantCode: tt.wantCode, WantMessage: tt.wantMessage})
+		})
+	}
+}
+
+func TestValidateStepRetries(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		wantMessage string
+	}{
+		{
+			name: "negative retries rejected",
+			input: "apiVersion: cogito/v1alpha1\nkind: Workflow\nmetadata:\n  name: bad-retries\nsteps:\n" +
+				"  - id: run\n    kind: command\n    command: echo hi\n    retries: -1\n",
+			wantMessage: "retries must be >= 0",
+		},
+		{
+			name: "approval retries rejected",
+			input: "apiVersion: cogito/v1alpha1\nkind: Workflow\nmetadata:\n  name: approval-retries\nsteps:\n" +
+				"  - id: gate\n    kind: approval\n    message: approve?\n    retries: 1\n",
+			wantMessage: "field \"retries\" is not allowed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := LoadWorkflow([]byte(tt.input))
+			assertWorkflowError(workflowErrorExpectation{Test: t, Error: err, WantCode: ErrorCodeSemantic, WantMessage: tt.wantMessage})
 		})
 	}
 }

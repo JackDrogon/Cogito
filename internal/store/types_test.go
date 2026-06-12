@@ -19,9 +19,47 @@ func TestEventDecodesLegacyRowWithoutStructuredOutput(t *testing.T) {
 	if event.StructuredOutput != nil {
 		t.Fatalf("legacy event StructuredOutput = %s, want nil", string(event.StructuredOutput))
 	}
+	if event.Usage != nil {
+		t.Fatalf("legacy event Usage = %+v, want nil", event.Usage)
+	}
 
 	if event.Sequence != 7 || event.StepID != "review" {
 		t.Fatalf("legacy event decoded incorrectly: %+v", event)
+	}
+}
+
+func TestEventUsageRoundTrip(t *testing.T) {
+	usage := &Usage{InputTokens: 10, OutputTokens: 5, TotalTokens: 15, CostUSD: 0.001}
+	event := Event{Sequence: 9, Type: EventStepSucceeded, RunID: "run-123", StepID: "review", Usage: usage}
+
+	encoded, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("Marshal event error = %v", err)
+	}
+
+	var decoded Event
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("Unmarshal event error = %v", err)
+	}
+
+	if decoded.Usage == nil || *decoded.Usage != *usage {
+		t.Fatalf("round-tripped Usage = %+v, want %+v", decoded.Usage, usage)
+	}
+}
+
+func TestEventOmitsEmptyUsage(t *testing.T) {
+	encoded, err := json.Marshal(Event{Sequence: 1, Type: EventRunStarted, RunID: "run-123"})
+	if err != nil {
+		t.Fatalf("Marshal event error = %v", err)
+	}
+
+	var generic map[string]any
+	if err := json.Unmarshal(encoded, &generic); err != nil {
+		t.Fatalf("Unmarshal generic error = %v", err)
+	}
+
+	if _, ok := generic["usage"]; ok {
+		t.Fatalf("usage must be omitted when empty: %s", string(encoded))
 	}
 }
 

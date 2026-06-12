@@ -128,10 +128,30 @@ RunCreated
         -> StepStarted
            -> one of:
               - StepSucceeded -> maybe queue dependents
+              - StepRetried -> step parked queued, run remains running
               - StepFailed -> RunFailed
               - StepInterrupted -> RunPaused (step parked queued + Resumable)
               - ApprovalRequested -> RunWaitingApproval
 ```
+
+## Step retries
+
+Executable steps (`agent`, `command`, `verify`, and `commit_check`) can declare
+`retries: N` in the compiled workflow. The value is an additional-attempt budget:
+`0` means the first failed attempt immediately becomes `StepFailed` and
+`RunFailed`, while `2` allows three total attempts.
+
+Retry decisions are event-sourced. When a running step fails and its folded
+`attempts` count is still within budget, runtime persists `StepRetried` from
+`running` to `queued` and does not emit any run-level event. The next engine tick
+selects that queued step again in the normal scheduler path and starts a fresh
+attempt. There is no backoff, sleep, or error-code classification beyond driver
+setup failures, which are treated as deterministic configuration errors and are
+not retried.
+
+The retry budget is replay-derived: `StepStarted` increments `StepSnapshot.Attempts`,
+and checkpoints round-trip that value. Replaying an event log with `StepRetried`
+therefore produces the same retry budget and final state as live execution.
 
 ## Approval Integration
 
@@ -208,6 +228,7 @@ The in-memory `Snapshot` stores:
 Each `StepSnapshot` stores:
 
 - `state`
+- `attempts` - number of folded `StepStarted` events for this step
 - `attempt_id`
 - `provider_session_id`
 - `approval_id`

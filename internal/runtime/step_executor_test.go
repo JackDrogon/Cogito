@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -17,6 +19,7 @@ type recordingStepDriver struct {
 	startCalled  bool
 	resumeCalled bool
 	resumeHandle provider.ExecutionHandle
+	usage        *provider.Usage
 }
 
 func (d *recordingStepDriver) Start(_ context.Context, request stepStartRequest) (*provider.Execution, error) {
@@ -46,7 +49,7 @@ func (d *recordingStepDriver) Resume(_ context.Context, request stepResumeReques
 }
 
 func (d *recordingStepDriver) PollOrCollect(_ context.Context, handle provider.ExecutionHandle) (*provider.Execution, error) {
-	return &provider.Execution{Handle: handle, State: provider.ExecutionStateSucceeded, Summary: "ok"}, nil
+	return &provider.Execution{Handle: handle, State: provider.ExecutionStateSucceeded, Summary: "ok", Usage: d.usage}, nil
 }
 
 func (d *recordingStepDriver) Interrupt(_ context.Context, handle provider.ExecutionHandle) (*provider.Execution, error) {
@@ -54,7 +57,7 @@ func (d *recordingStepDriver) Interrupt(_ context.Context, handle provider.Execu
 }
 
 func (d *recordingStepDriver) NormalizeResult(_ context.Context, execution *provider.Execution) (*provider.StepResult, error) {
-	return &provider.StepResult{Handle: execution.Handle, Status: execution.State, Summary: execution.Summary}, nil
+	return &provider.StepResult{Handle: execution.Handle, Status: execution.State, Summary: execution.Summary, Usage: execution.Usage}, nil
 }
 
 func newResumeDispatchEngine(t *testing.T, driver stepDriver, step StepSnapshot) *Engine {
@@ -140,4 +143,91 @@ func TestExecuteStepFallsThroughToStartWhenNotResumable(t *testing.T) {
 	if driver.resumeCalled {
 		t.Fatal("driver.Resume must not be called for a non-resumable step")
 	}
+}
+
+func TestExecuteStepPersistsUsageOnSucceededEvent(t *testing.T) {
+	usage := &provider.Usage{InputTokens: 111, OutputTokens: 22, TotalTokens: 133, CostUSD: 0.0123}
+	driver := &recordingStepDriver{runID: "run-123", usage: usage}
+	engine := newResumeDispatchEngine(t, driver, StepSnapshot{State: StepStateQueued})
+
+	if err := engine.executeStep(t.Context(), "review"); err != nil {
+		t.Fatalf("executeStep() error = %v", err)
+	}
+
+	events, err := engine.store.ReadEvents()
+	if err != nil {
+		t.Fatalf("ReadEvents() error = %v", err)
+	}
+
+	var succeeded store.Event
+	for _, event := range events {
+		if event.Type == store.EventStepSucceeded {
+			succeeded = event
+		}
+	}
+
+	if succeeded.Usage == nil {
+		t.Fatal("StepSucceeded Usage = nil, want persisted usage")
+	}
+	if succeeded.Usage.InputTokens != usage.InputTokens || succeeded.Usage.OutputTokens != usage.OutputTokens || succeeded.Usage.TotalTokens != usage.TotalTokens || succeeded.Usage.CostUSD != usage.CostUSD {
+		t.Fatalf("StepSucceeded Usage = %+v, want %+v", succeeded.Usage, usage)
+	}
+
+	encoded, err := json.Marshal(succeeded)
+	if err != nil {
+		t.Fatalf("Marshal StepSucceeded event: %v", err)
+	}
+	if !json.Valid(encoded) || !containsJSONField(encoded, "usage") {
+		t.Fatalf("StepSucceeded event JSON missing usage: %s", string(encoded))
+	}
+}
+
+func TestDriverSetupErrorDoesNotRetry(t *testing.T) {
+	compiled := compileSpec(t, &workflow.Spec{
+		Metadata: workflow.Metadata{Name: "driver-setup-retry"},
+		Steps: []workflow.StepSpec{{
+			ID:      "review",
+			Kind:    workflow.StepKindAgent,
+			Retries: 2,
+			Agent:   &workflow.AgentStepSpec{Agent: "fake", Prompt: "review"},
+		}},
+	})
+
+	runStore, err := store.Open(filepath.Join(t.TempDir(), "runs"), "run-123")
+	if err != nil {
+		t.Fatalf("store.Open() error = %v", err)
+	}
+
+	engine, err := NewEngine("run-123", compiled, MachineDependencies{
+		Store: runStore,
+		DriverFactory: StepDriverFactoryFunc(func(_ *Engine, _ workflow.CompiledStep) (stepDriver, error) {
+			return nil, errors.New("bad driver config")
+		}),
+	})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+
+	if err := engine.ExecuteAll(t.Context()); err == nil {
+		t.Fatal("ExecuteAll() error = nil, want driver setup failure")
+	}
+
+	events, err := runStore.ReadEvents()
+	if err != nil {
+		t.Fatalf("ReadEvents() error = %v", err)
+	}
+	assertEventTypeCount(t, events, store.EventStepRetried, 0)
+	assertEventTypeCount(t, events, store.EventStepFailed, 1)
+	assertEventTypeCount(t, events, store.EventRunFailed, 1)
+}
+
+func containsJSONField(encoded []byte, field string) bool {
+	var object map[string]any
+	if err := json.Unmarshal(encoded, &object); err != nil {
+		return false
+	}
+
+	_, ok := object[field]
+
+	return ok
 }

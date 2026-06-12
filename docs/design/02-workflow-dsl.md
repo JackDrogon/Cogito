@@ -56,11 +56,15 @@ such as `agent: { prompt: ... }` or `command: { command: ... }`.
 - id: unique-step-id
   kind: agent | command | approval | verify | commit_check
   needs: [optional, dependencies]
+  retries: 0
 ```
 
 - `id` - required, unique within the workflow
 - `kind` - required, one of `agent`, `command`, `approval`, `verify`, `commit_check`
 - `needs` - optional list of prerequisite step IDs
+- `retries` - optional non-negative integer; maximum additional attempts after
+  the first failed one. Omitted means `0`. It is accepted on `agent`, `command`,
+  `verify`, and `commit_check` steps, and rejected on `approval` steps.
 
 ## Step kinds
 
@@ -233,6 +237,7 @@ Rules:
 - step-kind required fields must be present and non-empty
 - step-kind forbidden fields must be absent
 - unknown YAML fields are rejected
+- `retries` must be non-negative when present
 
 ### Semantic validation
 
@@ -240,6 +245,7 @@ Rules:
 - dependency IDs in `needs` must be non-empty
 - dependency IDs must reference existing steps
 - duplicate dependency IDs in one step are rejected
+- approval steps cannot set `retries`
 
 ### DAG validation
 

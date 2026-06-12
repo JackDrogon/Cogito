@@ -44,6 +44,7 @@ func TestClaudeAdapterContract(t *testing.T) {
 			Status:     provider.ExecutionStateSucceeded,
 			Summary:    "claude adapter passed",
 			OutputText: "claude adapter passed\nEverything looks stable.",
+			Usage:      &provider.Usage{InputTokens: 2048, OutputTokens: 512, TotalTokens: 2560, CostUSD: 0.0425},
 			Logs: []provider.LogEntry{
 				{Level: "info", Message: "claude binary resolved", Fields: map[string]string{"provider": "claude", "version": "2.1.71 (Claude Code)"}},
 				{Level: "info", Message: "claude adapter passed", Fields: map[string]string{"type": "result", "subtype": "success", "stop_reason": "end_turn", "session_id": "session-234", "duration_ms": "1532", "duration_api_ms": "1200", "num_turns": "1"}},
@@ -387,6 +388,8 @@ func (s *claudeFakeStarter) start(_ context.Context, req provider.ProcessRequest
   "duration_ms": 1532,
   "duration_api_ms": 1200,
   "num_turns": 1,
+  "total_cost_usd": 0.0425,
+  "usage": {"input_tokens": 2048, "output_tokens": 512, "total_tokens": 2560},
   "result": "claude adapter passed\nEverything looks stable.",
   "stop_reason": "end_turn",
   "session_id": "session-234"

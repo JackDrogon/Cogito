@@ -34,6 +34,10 @@ func validateSemantic(spec *Spec) error {
 	}
 
 	for _, step := range spec.Steps {
+		if err := validateStepRetries(step); err != nil {
+			return err
+		}
+
 		seenDependencies := make(map[string]struct{}, len(step.Needs))
 
 		for _, dependencyID := range step.Needs {
@@ -55,6 +59,18 @@ func validateSemantic(spec *Spec) error {
 	}
 
 	return validateStepReferences(spec, stepIndex)
+}
+
+func validateStepRetries(step StepSpec) error {
+	if step.Retries < 0 {
+		return newError(ErrorCodeSemantic, fmt.Sprintf("step %q retries must be >= 0", step.ID))
+	}
+
+	if step.Kind == StepKindApproval && step.Retries > 0 {
+		return newError(ErrorCodeSemantic, fmt.Sprintf("step %q field %q is not allowed for kind %q", step.ID, "retries", step.Kind))
+	}
+
+	return nil
 }
 
 // validateStepReferences checks that every verify/commit_check `from:` field
@@ -177,7 +193,8 @@ func buildCompiledWorkflow(spec *Spec) *CompiledWorkflow {
 		compiled.StepIndex[step.ID] = index
 	}
 
-	for _, step := range compiled.Steps {
+	for index := range compiled.Steps {
+		step := &compiled.Steps[index]
 		for _, dependencyID := range step.Needs {
 			dependencyIndex := compiled.StepIndex[dependencyID]
 			compiled.Steps[dependencyIndex].Dependents = append(compiled.Steps[dependencyIndex].Dependents, step.ID)
@@ -195,7 +212,8 @@ func validateDAG(compiled *CompiledWorkflow) error {
 	indegree := make(map[string]int, len(compiled.Steps))
 	ready := make([]string, 0, len(compiled.Steps))
 
-	for _, step := range compiled.Steps {
+	for index := range compiled.Steps {
+		step := &compiled.Steps[index]
 		indegree[step.ID] = len(step.Needs)
 
 		if len(step.Needs) == 0 {
@@ -230,7 +248,8 @@ func validateDAG(compiled *CompiledWorkflow) error {
 	if len(order) != len(compiled.Steps) {
 		remaining := make([]string, 0, len(compiled.Steps)-len(order))
 
-		for _, step := range compiled.Steps {
+		for index := range compiled.Steps {
+			step := &compiled.Steps[index]
 			if indegree[step.ID] > 0 {
 				remaining = append(remaining, step.ID)
 			}

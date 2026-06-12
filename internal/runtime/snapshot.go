@@ -3,6 +3,7 @@ package runtime
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/JackDrogon/Cogito/internal/store"
@@ -11,6 +12,7 @@ import (
 
 type StepSnapshot struct {
 	State             StepState
+	Attempts          int
 	AttemptID         string
 	ProviderSessionID string
 	ApprovalID        string
@@ -69,6 +71,7 @@ func checkpointFromSnapshot(snapshot Snapshot, execContext executionContext) *st
 	for stepID, step := range snapshot.Steps { //nolint:gocritic // map values cannot be addressed; the copy is inherent
 		steps[stepID] = store.StepCheckpoint{
 			State:             string(step.State),
+			Attempts:          step.Attempts,
 			AttemptID:         step.AttemptID,
 			ProviderSessionID: step.ProviderSessionID,
 			ApprovalID:        step.ApprovalID,
@@ -125,7 +128,8 @@ func snapshotFromCheckpoint(
 		}
 	}
 
-	for _, step := range compiled.Steps {
+	for index := range compiled.Steps {
+		step := &compiled.Steps[index]
 		stored := checkpoint.Steps[step.ID]
 
 		stepState := StepState(strings.TrimSpace(stored.State))
@@ -142,6 +146,7 @@ func snapshotFromCheckpoint(
 
 		snapshot.Steps[step.ID] = StepSnapshot{
 			State:             stepState,
+			Attempts:          stored.Attempts,
 			AttemptID:         stored.AttemptID,
 			ProviderSessionID: stored.ProviderSessionID,
 			ApprovalID:        stored.ApprovalID,
@@ -246,9 +251,7 @@ func cloneStringMap(values map[string]string) map[string]string {
 	}
 
 	cloned := make(map[string]string, len(values))
-	for key, value := range values {
-		cloned[key] = value
-	}
+	maps.Copy(cloned, values)
 
 	return cloned
 }
@@ -264,7 +267,18 @@ func cloneEvent(event store.Event) store.Event {
 		Message:          event.Message,
 		Data:             cloneStringMap(event.Data),
 		StructuredOutput: cloneRawMessage(event.StructuredOutput),
+		Usage:            cloneStoreUsage(event.Usage),
 	}
+}
+
+func cloneStoreUsage(usage *store.Usage) *store.Usage {
+	if usage == nil {
+		return nil
+	}
+
+	cloned := *usage
+
+	return &cloned
 }
 
 func newZeroSnapshot(runID string) Snapshot {

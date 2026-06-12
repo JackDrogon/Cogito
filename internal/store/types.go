@@ -66,10 +66,20 @@ type Event struct {
 	Message          string            `json:"message,omitempty"`
 	Data             map[string]string `json:"data,omitempty"`
 	StructuredOutput json.RawMessage   `json:"structured_output,omitempty"`
+	Usage            *Usage            `json:"usage,omitempty"`
+}
+
+// Usage is the durable event-log representation of provider token and cost usage.
+type Usage struct {
+	InputTokens  int64   `json:"input_tokens"`
+	OutputTokens int64   `json:"output_tokens"`
+	TotalTokens  int64   `json:"total_tokens"`
+	CostUSD      float64 `json:"cost_usd,omitempty"`
 }
 
 type StepCheckpoint struct {
 	State             string          `json:"state"`
+	Attempts          int             `json:"attempts,omitempty"`
 	AttemptID         string          `json:"attempt_id,omitempty"`
 	ProviderSessionID string          `json:"provider_session_id,omitempty"`
 	ApprovalID        string          `json:"approval_id,omitempty"`

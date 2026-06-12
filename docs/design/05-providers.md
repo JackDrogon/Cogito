@@ -61,7 +61,16 @@ now implement both on top of `internal/provider`:
 
 Transforms a provider-facing `Execution` into a workflow-facing `StepResult`.
 This is the boundary where provider-specific output becomes runtime-safe status,
-output text, artifact refs, and logs.
+output text, artifact refs, logs, and optional usage metadata.
+
+Usage normalization preserves only per-step audit fields: input tokens, output
+tokens, total tokens, and provider-reported USD cost when present. Codex reports
+token counts in its `turn.completed` NDJSON `usage` object; Cogito records the
+latest reported usage and derives `total_tokens` from input plus output. Claude's
+`--print --output-format json` result reports `usage` token fields and
+`total_cost_usd`, both mapped directly. OpenCode's parsed JSON response currently
+does not expose documented token or cost fields in this adapter, so its usage is
+left nil and no `usage` field is persisted.
 
 ## Capability Matrix
 
@@ -124,6 +133,16 @@ All three providers currently:
 - parse the `AGENT_RESULT_JSON` line into a normalized `AgentResult` and marshal
   it into `Execution.StructuredOutput`
 - expose `structured_output`, `resume`, `interrupt`, and `machine_readable_logs`
+
+Provider process logs are redacted before they reach provider log files or the
+live `ExtraSink` console stream. At `StartProcess` time, the supervisor snapshots
+the parent environment and treats values of variables whose names contain
+`TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `CREDENTIAL`, `API_KEY`, `APIKEY`,
+`PRIVATE_KEY`, or `AUTH` (case-insensitive) as secrets when the value is at least
+8 bytes. Matching output bytes are replaced with `***REDACTED***`, including
+matches split across stream chunks. The in-memory stdout/stderr buffers remain
+raw so session-id scraping and `AGENT_RESULT_JSON` parsing continue to operate on
+the provider's original output.
 
 ### Provider-specific command style
 

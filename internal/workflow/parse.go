@@ -140,12 +140,21 @@ func compileStep(step rawStep, position int) (StepSpec, error) {
 	}
 
 	compiled := StepSpec{
-		ID:    id,
-		Kind:  kind,
-		Needs: cloneStrings(step.Needs),
+		ID:      id,
+		Kind:    kind,
+		Needs:   cloneStrings(step.Needs),
+		Retries: stepRetries(step),
 	}
 
 	return compileStepKindSpec(compileStepKindParams{ID: id, Kind: kind, Step: step, Compiled: compiled})
+}
+
+func stepRetries(step rawStep) int {
+	if step.Retries == nil {
+		return 0
+	}
+
+	return *step.Retries
 }
 
 func requiredStepFields(params stepFieldValidationParams) (map[string]string, error) {
@@ -201,9 +210,10 @@ func cloneStrings(values []string) []string {
 
 func cloneStep(step StepSpec) StepSpec {
 	cloned := StepSpec{
-		ID:    step.ID,
-		Kind:  step.Kind,
-		Needs: cloneStrings(step.Needs),
+		ID:      step.ID,
+		Kind:    step.Kind,
+		Needs:   cloneStrings(step.Needs),
+		Retries: step.Retries,
 	}
 
 	if step.Agent != nil {

@@ -204,6 +204,75 @@ func TestReplayProducesSameTransitions(t *testing.T) {
 	}
 }
 
+func TestStepRetrySucceedsOnSecondAttempt(t *testing.T) {
+	fixture := newRuntimeMachineFixture(runtimeMachineFixtureParams{Test: t, Spec: retrySpec(1), Provider: provider.NewFakeProvider(provider.FakeConfig{
+		Scripts: map[string]provider.FakeScript{
+			"attempt-review-01": {Start: provider.FakeSnapshot{State: provider.ExecutionStateFailed, Summary: "first failed"}},
+			"attempt-review-02": {Start: provider.FakeSnapshot{State: provider.ExecutionStateSucceeded, Summary: "second ok"}},
+		},
+	})})
+
+	if err := fixture.engine.ExecuteAll(t.Context()); err != nil {
+		t.Fatalf("ExecuteAll() error = %v", err)
+	}
+
+	snapshot := fixture.engine.Snapshot()
+	if snapshot.State != RunStateSucceeded {
+		t.Fatalf("Snapshot().State = %q, want %q", snapshot.State, RunStateSucceeded)
+	}
+	if got := snapshot.Steps["review"].Attempts; got != 2 {
+		t.Fatalf("review Attempts = %d, want 2", got)
+	}
+
+	assertEventTypeCount(t, mustReadEvents(t, fixture.store), store.EventStepRetried, 1)
+}
+
+func TestStepRetryExhaustionFailsRun(t *testing.T) {
+	fixture := newRuntimeMachineFixture(runtimeMachineFixtureParams{Test: t, Spec: retrySpec(1), Provider: provider.NewFakeProvider(provider.FakeConfig{
+		Scripts: map[string]provider.FakeScript{
+			"attempt-review-01": {Start: provider.FakeSnapshot{State: provider.ExecutionStateFailed, Summary: "first failed"}},
+			"attempt-review-02": {Start: provider.FakeSnapshot{State: provider.ExecutionStateFailed, Summary: "second failed"}},
+		},
+	})})
+
+	if err := fixture.engine.ExecuteAll(t.Context()); err != nil {
+		t.Fatalf("ExecuteAll() error = %v", err)
+	}
+
+	snapshot := fixture.engine.Snapshot()
+	if snapshot.State != RunStateFailed {
+		t.Fatalf("Snapshot().State = %q, want %q", snapshot.State, RunStateFailed)
+	}
+	if got := snapshot.Steps["review"].Attempts; got != 2 {
+		t.Fatalf("review Attempts = %d, want 2", got)
+	}
+
+	events := mustReadEvents(t, fixture.store)
+	assertEventTypeCount(t, events, store.EventStepRetried, 1)
+	assertEventTypeCount(t, events, store.EventStepFailed, 1)
+	assertEventTypeCount(t, events, store.EventRunFailed, 1)
+}
+
+func TestStepRetryDefaultZeroFailsImmediately(t *testing.T) {
+	fixture := newRuntimeMachineFixture(runtimeMachineFixtureParams{Test: t, Spec: retrySpec(0), Provider: provider.NewFakeProvider(provider.FakeConfig{
+		Scripts: map[string]provider.FakeScript{
+			"attempt-review-01": {Start: provider.FakeSnapshot{State: provider.ExecutionStateFailed, Summary: "failed"}},
+		},
+	})})
+
+	if err := fixture.engine.ExecuteAll(t.Context()); err != nil {
+		t.Fatalf("ExecuteAll() error = %v", err)
+	}
+	if got := fixture.engine.Snapshot().State; got != RunStateFailed {
+		t.Fatalf("Snapshot().State = %q, want %q", got, RunStateFailed)
+	}
+
+	events := mustReadEvents(t, fixture.store)
+	assertEventTypeCount(t, events, store.EventStepRetried, 0)
+	assertEventTypeCount(t, events, store.EventStepFailed, 1)
+	assertEventTypeCount(t, events, store.EventRunFailed, 1)
+}
+
 func TestDuplicateResumeRejected(t *testing.T) {
 	fixture := newRuntimeMachineFixture(runtimeMachineFixtureParams{Test: t, Spec: runtimeSpec(), CommandScripts: map[string]commandScript{
 		"prepare": {
@@ -1091,6 +1160,18 @@ func runtimeSpec() *workflow.Spec {
 	}
 }
 
+func retrySpec(retries int) *workflow.Spec {
+	return &workflow.Spec{
+		Metadata: workflow.Metadata{Name: "retry"},
+		Steps: []workflow.StepSpec{{
+			ID:      "review",
+			Kind:    workflow.StepKindAgent,
+			Retries: retries,
+			Agent:   &workflow.AgentStepSpec{Agent: "fake", Prompt: "review"},
+		}},
+	}
+}
+
 func approvalWorkflowSpec() *workflow.Spec {
 	return &workflow.Spec{
 		Metadata: workflow.Metadata{Name: "approval"},
@@ -1311,6 +1392,21 @@ func buildCommandExecution(handle provider.ExecutionHandle, snapshot snapshotSpe
 	}
 }
 
+func assertEventTypeCount(t *testing.T, events []store.Event, eventType store.EventType, want int) {
+	t.Helper()
+
+	got := 0
+	for _, event := range events {
+		if event.Type == eventType {
+			got++
+		}
+	}
+
+	if got != want {
+		t.Fatalf("event count for %s = %d, want %d", eventType, got, want)
+	}
+}
+
 type interruptRecordingCommandRunner struct {
 	store                 *store.Store
 	handle                provider.ExecutionHandle
@@ -1424,6 +1520,23 @@ func TestEventStepRetriedStillClearsSession(t *testing.T) {
 
 	if review.Resumable {
 		t.Fatal("review.Resumable = true, want false after EventStepRetried")
+	}
+}
+
+func TestReplayStepRetriedFoldsAttempts(t *testing.T) {
+	compiled := compileSpec(t, retrySpec(1))
+	events := append(interruptReplayEvents(store.EventStepRetried),
+		buildTestEvent(testEventParams{Sequence: 6, EventType: store.EventStepStarted, RunID: "run-123", StepID: "review", AttemptID: "attempt-review-02", Data: eventData(eventDataParams{From: string(StepStateQueued), To: string(StepStateRunning), Summary: "review retried", ProviderSessionID: "session-review-02"})}),
+		buildTestEvent(testEventParams{Sequence: 7, EventType: store.EventStepSucceeded, RunID: "run-123", StepID: "review", AttemptID: "attempt-review-02", Data: eventData(eventDataParams{From: string(StepStateRunning), To: string(StepStateSucceeded), Summary: "review done", ProviderSessionID: "session-review-02"})}),
+	)
+
+	replay, err := Replay("run-123", compiled, events)
+	if err != nil {
+		t.Fatalf("Replay() error = %v", err)
+	}
+
+	if got := replay.Snapshot.Steps["review"].Attempts; got != 2 {
+		t.Fatalf("review Attempts = %d, want 2", got)
 	}
 }
 

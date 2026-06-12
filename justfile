@@ -77,6 +77,15 @@ test pkg='./cmd/... ./internal/...':
 test-v pkg='./cmd/... ./internal/...':
     go test -v {{pkg}}
 
+# Run real provider CLI e2e smoke tests (all, codex, claude, opencode, or package)
+[group('test')]
+test-e2e target='all':
+    @case "{{target}}" in \
+        all|"") COGITO_E2E=1 go test -tags e2e -v -run TestE2E -timeout 20m ./internal/provider/... ;; \
+        codex|claude|opencode) COGITO_E2E=1 go test -tags e2e -v -run 'TestE2E/{{target}}' -timeout 20m ./internal/provider/... ;; \
+        *) COGITO_E2E=1 go test -tags e2e -v -run TestE2E -timeout 20m {{target}} ;; \
+    esac
+
 # Generate coverage report
 [group('test')]
 cover:

@@ -69,7 +69,7 @@ type liveEvent struct {
 	Message  string      `json:"message"`
 	Error    *eventError `json:"error"`
 	Item     *liveItem   `json:"item"`
-	Usage    *liveUsage  `json:"usage"`
+	Usage    *eventUsage `json:"usage"`
 }
 
 type liveItem struct {
@@ -88,12 +88,6 @@ type liveItem struct {
 type liveFileChange struct {
 	Path string `json:"path"`
 	Kind string `json:"kind"`
-}
-
-type liveUsage struct {
-	InputTokens       int64 `json:"input_tokens"`
-	CachedInputTokens int64 `json:"cached_input_tokens"`
-	OutputTokens      int64 `json:"output_tokens"`
 }
 
 func (r *liveRenderer) renderLine(line string) {

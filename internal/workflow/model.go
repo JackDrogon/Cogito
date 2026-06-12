@@ -60,9 +60,11 @@ type CommitCheckStepSpec struct {
 // It represents a schema-valid step with kind-specific fields populated correctly,
 // but has not yet been compiled into the dependency graph.
 type StepSpec struct {
-	ID          string
-	Kind        StepKind
-	Needs       []string
+	ID    string
+	Kind  StepKind
+	Needs []string
+	// Retries is the maximum additional attempts after the first failed one; 0 = no retry.
+	Retries     int
 	Agent       *AgentStepSpec
 	Command     *CommandStepSpec
 	Approval    *ApprovalStepSpec
@@ -112,6 +114,7 @@ type rawStep struct {
 	ID          string   `yaml:"id"`
 	Kind        string   `yaml:"kind"`
 	Needs       []string `yaml:"needs"`
+	Retries     *int     `yaml:"retries"`
 	Agent       *string  `yaml:"agent"`
 	Prompt      *string  `yaml:"prompt"`
 	Command     *string  `yaml:"command"`

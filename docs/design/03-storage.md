@@ -97,6 +97,24 @@ candidate-commit scheme:
 }
 ```
 
+Terminal step events may also carry provider usage when the adapter reported it:
+
+```json
+{
+  "type": "StepSucceeded",
+  "usage": {
+    "input_tokens": 1200,
+    "output_tokens": 345,
+    "total_tokens": 1545,
+    "cost_usd": 0.0425
+  }
+}
+```
+
+`usage` is optional and omitted for old logs and providers that do not report
+token or cost data. Runtime replay treats the field as audit metadata; it is not
+folded into `checkpoint.json`.
+
 ### Event categories used by runtime
 
 - run lifecycle: `RunCreated`, `RunStarted`, `RunPaused`, `RunWaitingApproval`, `RunSucceeded`, `RunFailed`, `RunCanceled`
@@ -123,6 +141,7 @@ as the canonical history.
   "steps": {
     "review": {
       "state": "succeeded",
+      "attempts": 1,
       "attempt_id": "attempt-review-01",
       "provider_session_id": "command-review-attempt-review-01",
       "summary": "review completed"

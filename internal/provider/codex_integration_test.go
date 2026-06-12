@@ -44,6 +44,7 @@ func TestCodexAdapterContract(t *testing.T) {
 			Status:     provider.ExecutionStateSucceeded,
 			Summary:    "All changes look good.",
 			OutputText: "All changes look good.\nNothing else to add.",
+			Usage:      &provider.Usage{InputTokens: 1200, OutputTokens: 345, TotalTokens: 1545},
 			Logs: []provider.LogEntry{
 				{Level: "info", Message: "codex binary resolved", Fields: map[string]string{"provider": "codex", "version": "codex-cli 0.66.0"}},
 				{Level: "info", Message: "thread.started", Fields: map[string]string{"type": "thread.started", "thread_id": "thread-123"}},
@@ -306,7 +307,7 @@ func (s *codexRealSessionStarter) start(_ context.Context, req provider.ProcessR
 	done := make(chan provider.ProcessResult, 1)
 	done <- provider.ProcessResult{Stdout: []byte(strings.Join([]string{
 		`{"type":"thread.started","thread_id":"` + s.sessionID + `"}`,
-		`{"type":"turn.completed"}`,
+		`{"type":"turn.completed","usage":{"input_tokens":1200,"cached_input_tokens":300,"output_tokens":345}}`,
 	}, "\n"))}
 	close(done)
 

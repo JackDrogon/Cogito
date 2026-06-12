@@ -234,6 +234,10 @@ just lint     # Run linter
 just cover    # Coverage report
 ```
 
+`just test-e2e [codex|claude|opencode]` runs build-tagged provider smoke tests
+against real CLIs. It sets `COGITO_E2E=1`, requires ambient CLI auth, and makes
+real provider API calls; normal `just test` and CI exclude these tests.
+
 ## Error Handling
 
 Subsystems expose structured errors with stable codes (`workflow`, `runtime`,

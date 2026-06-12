@@ -19,11 +19,18 @@ type event struct {
 	ThreadID string         `json:"thread_id"`
 	Message  string         `json:"message"`
 	Error    *eventError    `json:"error"`
+	Usage    *eventUsage    `json:"usage"`
 	Raw      map[string]any `json:"-"`
 }
 
 type eventError struct {
 	Message string `json:"message"`
+}
+
+type eventUsage struct {
+	InputTokens       int64 `json:"input_tokens"`
+	CachedInputTokens int64 `json:"cached_input_tokens"`
+	OutputTokens      int64 `json:"output_tokens"`
 }
 
 type executionParams struct {
@@ -118,6 +125,27 @@ func buildExecution(params executionParams) *provider.Execution {
 		Summary:    summary,
 		OutputText: outputText,
 		Logs:       buildLogs(params.Version, params.Events, params.Stderr),
+		Usage:      usageFromEvents(params.Events),
+	}
+}
+
+func usageFromEvents(events []event) *provider.Usage {
+	var latest *eventUsage
+
+	for index := range events {
+		if events[index].Usage != nil {
+			latest = events[index].Usage
+		}
+	}
+
+	if latest == nil {
+		return nil
+	}
+
+	return &provider.Usage{
+		InputTokens:  latest.InputTokens,
+		OutputTokens: latest.OutputTokens,
+		TotalTokens:  latest.InputTokens + latest.OutputTokens,
 	}
 }
 

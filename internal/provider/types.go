@@ -141,6 +141,18 @@ type LogEntry struct {
 	Fields  map[string]string `json:"fields,omitempty"`
 }
 
+// Usage captures provider-reported token and billing usage for one agent step.
+type Usage struct {
+	// InputTokens is the number of prompt/input tokens reported by the provider.
+	InputTokens int64 `json:"input_tokens"`
+	// OutputTokens is the number of completion/output tokens reported by the provider.
+	OutputTokens int64 `json:"output_tokens"`
+	// TotalTokens is the total token count reported by the provider, or input plus output when only those parts are reported.
+	TotalTokens int64 `json:"total_tokens"`
+	// CostUSD is the total provider-reported cost in US dollars, when available.
+	CostUSD float64 `json:"cost_usd,omitempty"`
+}
+
 type Execution struct {
 	Handle           ExecutionHandle `json:"handle"`
 	State            ExecutionState  `json:"state"`
@@ -149,6 +161,7 @@ type Execution struct {
 	StructuredOutput json.RawMessage `json:"structured_output,omitempty"`
 	ArtifactRefs     []ArtifactRef   `json:"artifact_refs,omitempty"`
 	Logs             []LogEntry      `json:"logs,omitempty"`
+	Usage            *Usage          `json:"usage,omitempty"`
 }
 
 type StepResult struct {
@@ -159,6 +172,7 @@ type StepResult struct {
 	StructuredOutput json.RawMessage `json:"structured_output,omitempty"`
 	ArtifactRefs     []ArtifactRef   `json:"artifact_refs,omitempty"`
 	Logs             []LogEntry      `json:"logs,omitempty"`
+	Usage            *Usage          `json:"usage,omitempty"`
 }
 
 // NormalizeResult converts an Execution into a StepResult after checking the
@@ -198,6 +212,7 @@ func NormalizeResult(request NormalizeRequest, capabilities CapabilityMatrix) (*
 		StructuredOutput: CloneJSON(request.Execution.StructuredOutput),
 		ArtifactRefs:     CloneArtifactRefs(request.Execution.ArtifactRefs),
 		Logs:             CloneLogs(request.Execution.Logs),
+		Usage:            CloneUsage(request.Execution.Usage),
 	}, nil
 }
 
@@ -256,7 +271,19 @@ func CloneExecution(execution *Execution) *Execution {
 		StructuredOutput: CloneJSON(execution.StructuredOutput),
 		ArtifactRefs:     CloneArtifactRefs(execution.ArtifactRefs),
 		Logs:             CloneLogs(execution.Logs),
+		Usage:            CloneUsage(execution.Usage),
 	}
+}
+
+// CloneUsage deep-copies usage, preserving nil.
+func CloneUsage(usage *Usage) *Usage {
+	if usage == nil {
+		return nil
+	}
+
+	cloned := *usage
+
+	return &cloned
 }
 
 // CloneJSON deep-copies a json.RawMessage, preserving nil.

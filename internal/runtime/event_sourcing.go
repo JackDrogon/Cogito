@@ -175,6 +175,9 @@ type StepTransitionParams struct {
 	// StructuredOutput carries the normalized AgentResult JSON for a succeeded
 	// agent step. It is nil for every other transition.
 	StructuredOutput json.RawMessage
+	// Usage carries provider-reported token and cost usage for terminal step
+	// transitions. It remains nil when the provider reports no usage.
+	Usage *provider.Usage
 	// Resumable records that an interrupted step keeps a resumable provider
 	// session. It is encoded into event.Data as "true" so replay and downstream
 	// readers can audit the resume intent; applyStepEvent still derives the
@@ -196,6 +199,7 @@ func (e *Engine) persistStepTransition(params StepTransitionParams) error {
 			dataSummary:           normalizeSummary(params.Summary, provider.ExecutionStateRunning),
 		},
 		StructuredOutput: params.StructuredOutput,
+		Usage:            storeUsage(params.Usage),
 	}
 
 	if params.NormalizedStatus != "" {
@@ -207,6 +211,19 @@ func (e *Engine) persistStepTransition(params StepTransitionParams) error {
 	}
 
 	return e.persistEvent(event)
+}
+
+func storeUsage(usage *provider.Usage) *store.Usage {
+	if usage == nil {
+		return nil
+	}
+
+	return &store.Usage{
+		InputTokens:  usage.InputTokens,
+		OutputTokens: usage.OutputTokens,
+		TotalTokens:  usage.TotalTokens,
+		CostUSD:      usage.CostUSD,
+	}
 }
 
 func (e *Engine) persistEvent(event store.Event) error {
@@ -256,7 +273,8 @@ func (e *Engine) allStepsSucceeded() bool {
 		return true
 	}
 
-	for _, step := range e.compiled.Steps {
+	for index := range e.compiled.Steps {
+		step := &e.compiled.Steps[index]
 		if e.snapshot.Steps[step.ID].State != StepStateSucceeded {
 			return false
 		}
@@ -273,10 +291,32 @@ type FailRunParams struct {
 	ProviderSessionID string
 	ExecutionErr      error
 	Message           string
+	SkipRetry         bool
 }
 
 func (e *Engine) failRunForExecutionError(params FailRunParams) error {
 	summary := normalizeSummary(params.ExecutionErr.Error(), provider.ExecutionStateFailed)
+	if !params.SkipRetry {
+		step, err := e.lookupStep(params.StepID)
+		if err != nil {
+			return err
+		}
+
+		retried, err := e.maybeRetryStep(stepRetryParams{
+			Step:              step,
+			AttemptID:         params.AttemptID,
+			ProviderSessionID: params.ProviderSessionID,
+			FailureSummary:    summary,
+		})
+		if err != nil {
+			return err
+		}
+
+		if retried {
+			return nil
+		}
+	}
+
 	if err := e.persistStepTransition(StepTransitionParams{
 		EventType:         store.EventStepFailed,
 		StepID:            params.StepID,
