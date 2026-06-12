@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/JackDrogon/Cogito/internal/adapters"
+	"github.com/JackDrogon/Cogito/internal/provider"
 	"github.com/JackDrogon/Cogito/internal/store"
 	"github.com/JackDrogon/Cogito/internal/workflow"
 )
@@ -155,7 +155,7 @@ func applyRunEvent(request stateMachineEventRequest) error {
 		Scope:     "run",
 		From:      string(from),
 		To:        string(to),
-		Summary:   normalizeSummary(summary, adapters.ExecutionStateRunning),
+		Summary:   normalizeSummary(summary, provider.ExecutionStateRunning),
 	})
 
 	return nil
@@ -226,7 +226,7 @@ func (f stepEventFold) commit(request stateMachineEventRequest) {
 		To:                string(f.to),
 		AttemptID:         request.Event.AttemptID,
 		ProviderSessionID: f.step.ProviderSessionID,
-		Summary:           normalizeSummary(f.step.Summary, adapters.ExecutionStateRunning),
+		Summary:           normalizeSummary(f.step.Summary, provider.ExecutionStateRunning),
 	})
 }
 

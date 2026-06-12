@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/JackDrogon/Cogito/internal/adapters"
+	"github.com/JackDrogon/Cogito/internal/provider"
 	"github.com/JackDrogon/Cogito/internal/store"
 	"github.com/JackDrogon/Cogito/internal/workflow"
 )
@@ -90,12 +90,12 @@ func isMissingRunStateError(err error) bool {
 	return errors.As(err, &storeErr) && storeErr.Code == store.ErrorCodePath && errors.Is(storeErr.Err, os.ErrNotExist)
 }
 
-func executionFromStepResult(result *adapters.StepResult) *adapters.Execution {
+func executionFromStepResult(result *provider.StepResult) *provider.Execution {
 	if result == nil {
 		return nil
 	}
 
-	return &adapters.Execution{
+	return &provider.Execution{
 		Handle:           result.Handle,
 		State:            result.Status,
 		Summary:          result.Summary,
@@ -106,14 +106,14 @@ func executionFromStepResult(result *adapters.StepResult) *adapters.Execution {
 	}
 }
 
-func cloneExecution(execution *adapters.Execution) *adapters.Execution {
+func cloneExecution(execution *provider.Execution) *provider.Execution {
 	if execution == nil {
 		return nil
 	}
 
 	cloned := *execution
-	cloned.ArtifactRefs = append([]adapters.ArtifactRef(nil), execution.ArtifactRefs...)
-	cloned.Logs = append([]adapters.LogEntry(nil), execution.Logs...)
+	cloned.ArtifactRefs = append([]provider.ArtifactRef(nil), execution.ArtifactRefs...)
+	cloned.Logs = append([]provider.LogEntry(nil), execution.Logs...)
 
 	return &cloned
 }

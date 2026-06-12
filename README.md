@@ -20,7 +20,7 @@ can relocate a run when needed.
 
 Key properties:
 - deterministic scheduling from a compiled DAG and append-only event history
-- provider-agnostic agent execution through a common adapter SPI
+- provider-agnostic agent execution through a common provider SPI
 - resumable runs through checkpoint recovery and replay
 - approval gates for explicit workflow pauses, adapter requests, and policy exceptions
 - repository locking and dirty-worktree protection for safer automation
@@ -117,7 +117,7 @@ Cogito is built around three core concerns:
 
 1. **Workflow Engine** - validates YAML, compiles the DAG, and preserves execution order
 2. **Runtime State Machine** - manages event-sourced run and step transitions
-3. **Adapter / Execution Boundary** - runs agent providers and local commands behind stable interfaces
+3. **Provider / Execution Boundary** - runs agent providers and local commands behind stable interfaces
 
 Those concerns are implemented as five cooperating layers:
 
@@ -125,7 +125,7 @@ Those concerns are implemented as five cooperating layers:
 2. **Workflow Layer** - validates YAML and compiles a static DAG
 3. **Runtime Layer** - drives the event-sourced run and step state machines
 4. **Store Layer** - persists `events.jsonl`, `checkpoint.json`, `artifacts.json`, and `workflow.json`
-5. **Execution Layer** - runs provider adapters and local command steps
+5. **Execution Layer** - runs providers and local command steps
 
 The current engine is deterministic and sequential per run: multiple steps can be
 ready at once, but one queued step is executed at a time in topological order.
@@ -134,7 +134,7 @@ ready at once, but one queued step is executed at a time in topological order.
 
 1. **Local-First** - run state is file-backed, with `<repo>/.cogito/` as the default layout
 2. **Deterministic** - ordering is reproducible from the compiled graph and event log
-3. **Provider-Agnostic** - runtime targets one adapter SPI instead of hard-coding providers
+3. **Provider-Agnostic** - runtime targets one provider SPI instead of hard-coding providers
 4. **Auditable** - meaningful transitions are persisted before checkpoint updates
 
 ## Run Layout
@@ -178,14 +178,14 @@ after it settles.
 
 ## Provider Support
 
-Built-in adapters are registered for:
+Built-in providers are registered for:
 
 - `codex`
 - `claude`
 - `opencode`
 
-These adapters wrap provider CLIs and expose machine-readable logs. All three
-built-in adapters advertise interrupt and resume capabilities: interrupt sends
+These providers wrap provider CLIs and expose machine-readable logs. All three
+built-in providers advertise interrupt and resume capabilities: interrupt sends
 SIGTERM/SIGKILL to the provider process group, and resume re-invokes the
 provider CLI with its native session-continuation flag (`--resume` for claude,
 `resume` for codex, `--session` for opencode).
@@ -196,7 +196,7 @@ provider CLI with its native session-continuation flag (`--resume` for claude,
 - [Workflow DSL](./docs/design/02-workflow-dsl.md)
 - [Storage Model](./docs/design/03-storage.md)
 - [Runtime State Machine](./docs/design/04-runtime.md)
-- [Adapter SPI](./docs/design/05-adapters.md)
+- [Provider SPI](./docs/design/05-providers.md)
 - [CLI Commands](./docs/design/06-cli.md)
 - [Approval Gates](./docs/design/07-approval.md)
 - [Error Model](./docs/design/08-errors.md)
@@ -211,7 +211,7 @@ cogito/
 │   ├── workflow/            # YAML parsing and DAG compilation
 │   ├── runtime/             # state machine, approvals, replay, locks
 │   ├── store/               # file-backed persistence
-│   ├── adapters/            # provider adapter SPI and implementations
+│   ├── provider/            # provider SPI and implementations
 │   ├── executor/            # local command supervision
 │   └── version/             # version reporting
 ├── docs/design/             # design documentation
@@ -229,7 +229,7 @@ cogito/
 
 ```bash
 just build    # Build binary
-just test     # Run tests
+just test     # Run maintained package tests
 just lint     # Run linter
 just cover    # Coverage report
 ```
@@ -237,7 +237,7 @@ just cover    # Coverage report
 ## Error Handling
 
 Subsystems expose structured errors with stable codes (`workflow`, `runtime`,
-`store`, `adapters`, `executor`). The CLI prints surfaced errors to stderr and
+`store`, `provider`, `executor`). The CLI prints surfaced errors to stderr and
 returns exit code `1` on failure.
 
 For runs that settle into the `failed` state, the app layer may surface the latest

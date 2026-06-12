@@ -10,7 +10,7 @@ diverged, the documents here were updated to describe the shipped behavior first
 - [Workflow DSL](./02-workflow-dsl.md) - YAML schema implemented by `internal/workflow`
 - [Storage Model](./03-storage.md) - Run layout, events, checkpoints, artifacts, and locks
 - [Runtime State Machine](./04-runtime.md) - Run/step state transitions and replay model
-- [Adapter SPI](./05-adapters.md) - Provider adapter lifecycle and current capabilities
+- [Provider SPI](./05-providers.md) - Provider adapter lifecycle and current capabilities
 - [CLI Commands](./06-cli.md) - Command surface implemented in `internal/app`
 - [Approval Gates](./07-approval.md) - Explicit, adapter, and policy-driven approvals
 - [Error Model](./08-errors.md) - Error codes, wrapping, and CLI surfacing rules
@@ -53,4 +53,4 @@ cogito cancel --state-dir ./.cogito/runs/run-123
 - Start with `01-architecture.md` for the system boundary.
 - Read `02-workflow-dsl.md` and `06-cli.md` for user-facing contracts.
 - Use `03-storage.md` and `04-runtime.md` when debugging resume, replay, or recovery.
-- Use `05-adapters.md` and `07-approval.md` when working on provider integration or pause/resume behavior.
+- Use `05-providers.md` and `07-approval.md` when working on provider integration or pause/resume behavior.

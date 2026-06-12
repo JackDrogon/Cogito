@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/JackDrogon/Cogito/internal/adapters"
 	"github.com/JackDrogon/Cogito/internal/gitutil"
+	"github.com/JackDrogon/Cogito/internal/provider"
 	"github.com/JackDrogon/Cogito/internal/workflow"
 )
 
@@ -20,7 +20,7 @@ type commitCheckDriver struct {
 	engine *Engine
 }
 
-func (d commitCheckDriver) Start(ctx context.Context, request stepStartRequest) (*adapters.Execution, error) {
+func (d commitCheckDriver) Start(ctx context.Context, request stepStartRequest) (*provider.Execution, error) {
 	if request.Step.CommitCheck == nil {
 		return nil, newError(ErrorCodeConfig, fmt.Sprintf("commit_check config missing for step %q", request.Step.ID))
 	}
@@ -30,7 +30,7 @@ func (d commitCheckDriver) Start(ctx context.Context, request stepStartRequest) 
 
 	result, err := readAgentResult(d.engine, spec.From)
 	if err != nil {
-		return terminalExecution(handle, adapters.ExecutionStateFailed, err.Error()), nil
+		return terminalExecution(handle, provider.ExecutionStateFailed, err.Error()), nil
 	}
 
 	workingDir := strings.TrimSpace(request.WorkingDir)
@@ -45,7 +45,7 @@ func (d commitCheckDriver) Start(ctx context.Context, request stepStartRequest) 
 	// worktree to validate, so the gate passes as an explicit no-op instead of
 	// failing on git exit 128.
 	if !git.IsRepo(ctx) {
-		return terminalExecution(handle, adapters.ExecutionStateSucceeded,
+		return terminalExecution(handle, provider.ExecutionStateSucceeded,
 			"commit_check skipped: not a git repository"), nil
 	}
 
@@ -59,12 +59,12 @@ func (d commitCheckDriver) Start(ctx context.Context, request stepStartRequest) 
 	}
 
 	if failure != "" {
-		return terminalExecution(handle, adapters.ExecutionStateFailed, failure), nil
+		return terminalExecution(handle, provider.ExecutionStateFailed, failure), nil
 	}
 
 	summary := fmt.Sprintf("commit_check passed: %d commit(s)", len(result.Commits))
 
-	return terminalExecution(handle, adapters.ExecutionStateSucceeded, summary), nil
+	return terminalExecution(handle, provider.ExecutionStateSucceeded, summary), nil
 }
 
 // commitCheckParams groups the inputs for evaluateCommitCheck so the validation

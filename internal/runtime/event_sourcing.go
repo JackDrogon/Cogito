@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/JackDrogon/Cogito/internal/adapters"
+	"github.com/JackDrogon/Cogito/internal/provider"
 	"github.com/JackDrogon/Cogito/internal/store"
 	"github.com/JackDrogon/Cogito/internal/workflow"
 )
@@ -82,7 +82,7 @@ type ApprovalRequestedParams struct {
 	ProviderSessionID string
 	Summary           string
 	Trigger           ApprovalTrigger
-	Status            adapters.ExecutionState
+	Status            provider.ExecutionState
 }
 
 func (e *Engine) persistApprovalRequested(params ApprovalRequestedParams) error {
@@ -146,7 +146,7 @@ type RunTransitionParams struct {
 }
 
 func (e *Engine) persistRunTransition(params RunTransitionParams) error {
-	summary := normalizeSummary(params.Message, adapters.ExecutionStateRunning)
+	summary := normalizeSummary(params.Message, provider.ExecutionStateRunning)
 	event := store.Event{
 		Type:    params.EventType,
 		Message: summary,
@@ -187,13 +187,13 @@ func (e *Engine) persistStepTransition(params StepTransitionParams) error {
 		Type:      params.EventType,
 		StepID:    params.StepID,
 		AttemptID: params.AttemptID,
-		Message:   normalizeSummary(params.Summary, adapters.ExecutionStateRunning),
+		Message:   normalizeSummary(params.Summary, provider.ExecutionStateRunning),
 		Data: map[string]string{
 			dataOccurredAt:        e.clock().UTC().Format(time.RFC3339Nano),
 			dataFromState:         string(params.From),
 			dataToState:           string(params.To),
 			dataProviderSessionID: params.ProviderSessionID,
-			dataSummary:           normalizeSummary(params.Summary, adapters.ExecutionStateRunning),
+			dataSummary:           normalizeSummary(params.Summary, provider.ExecutionStateRunning),
 		},
 		StructuredOutput: params.StructuredOutput,
 	}
@@ -276,7 +276,7 @@ type FailRunParams struct {
 }
 
 func (e *Engine) failRunForExecutionError(params FailRunParams) error {
-	summary := normalizeSummary(params.ExecutionErr.Error(), adapters.ExecutionStateFailed)
+	summary := normalizeSummary(params.ExecutionErr.Error(), provider.ExecutionStateFailed)
 	if err := e.persistStepTransition(StepTransitionParams{
 		EventType:         store.EventStepFailed,
 		StepID:            params.StepID,
@@ -285,7 +285,7 @@ func (e *Engine) failRunForExecutionError(params FailRunParams) error {
 		AttemptID:         params.AttemptID,
 		ProviderSessionID: params.ProviderSessionID,
 		Summary:           summary,
-		NormalizedStatus:  string(adapters.ExecutionStateFailed),
+		NormalizedStatus:  string(provider.ExecutionStateFailed),
 	}); err != nil {
 		return err
 	}
@@ -310,7 +310,7 @@ func latestEventSequence(events []store.Event) int64 {
 	return events[len(events)-1].Sequence
 }
 
-func normalizeSummary(summary string, status adapters.ExecutionState) string {
+func normalizeSummary(summary string, status provider.ExecutionState) string {
 	summary = strings.TrimSpace(summary)
 	if summary != "" {
 		return summary

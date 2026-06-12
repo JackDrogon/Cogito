@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/JackDrogon/Cogito/internal/adapters"
-	"github.com/JackDrogon/Cogito/internal/adapters/prompt"
+	"github.com/JackDrogon/Cogito/internal/prompt"
+	"github.com/JackDrogon/Cogito/internal/provider"
 	"github.com/JackDrogon/Cogito/internal/workflow"
 )
 
@@ -40,8 +40,8 @@ func readAgentResult(engine *Engine, stepID string) (prompt.AgentResult, error) 
 // syncStepHandle builds the ExecutionHandle for a synchronous local-check
 // driver. Such drivers have no provider session, so a synthetic session id is
 // minted for handle completeness.
-func syncStepHandle(engine *Engine, step workflow.CompiledStep, attemptID string) adapters.ExecutionHandle {
-	return adapters.ExecutionHandle{
+func syncStepHandle(engine *Engine, step workflow.CompiledStep, attemptID string) provider.ExecutionHandle {
+	return provider.ExecutionHandle{
 		RunID:             engine.runID,
 		StepID:            step.ID,
 		AttemptID:         attemptID,
@@ -53,11 +53,11 @@ func syncStepHandle(engine *Engine, step workflow.CompiledStep, attemptID string
 // drivers return one directly from Start because their work completes inline;
 // the engine's poll loop is skipped for Normalizable states.
 func terminalExecution(
-	handle adapters.ExecutionHandle,
-	state adapters.ExecutionState,
+	handle provider.ExecutionHandle,
+	state provider.ExecutionState,
 	summary string,
-) *adapters.Execution {
-	return &adapters.Execution{Handle: handle, State: state, Summary: summary}
+) *provider.Execution {
+	return &provider.Execution{Handle: handle, State: state, Summary: summary}
 }
 
 // syncTerminalDriver supplies the non-Start lifecycle methods shared by the
@@ -68,25 +68,25 @@ type syncTerminalDriver struct {
 	kind string
 }
 
-func (d syncTerminalDriver) Resume(_ context.Context, request stepResumeRequest) (*adapters.Execution, error) {
+func (d syncTerminalDriver) Resume(_ context.Context, request stepResumeRequest) (*provider.Execution, error) {
 	return nil, newError(ErrorCodeExecution, fmt.Sprintf("%s step %q does not support resume", d.kind, request.Step.ID))
 }
 
-func (d syncTerminalDriver) PollOrCollect(_ context.Context, _ adapters.ExecutionHandle) (*adapters.Execution, error) {
+func (d syncTerminalDriver) PollOrCollect(_ context.Context, _ provider.ExecutionHandle) (*provider.Execution, error) {
 	return nil, newError(ErrorCodeExecution, d.kind+" step does not support polling")
 }
 
-func (d syncTerminalDriver) Interrupt(_ context.Context, handle adapters.ExecutionHandle) (*adapters.Execution, error) {
-	return terminalExecution(handle, adapters.ExecutionStateInterrupted, d.kind+" interrupted"), nil
+func (d syncTerminalDriver) Interrupt(_ context.Context, handle provider.ExecutionHandle) (*provider.Execution, error) {
+	return terminalExecution(handle, provider.ExecutionStateInterrupted, d.kind+" interrupted"), nil
 }
 
 func (d syncTerminalDriver) NormalizeResult(
 	_ context.Context,
-	execution *adapters.Execution,
-) (*adapters.StepResult, error) {
+	execution *provider.Execution,
+) (*provider.StepResult, error) {
 	if execution == nil {
 		return nil, newError(ErrorCodeExecution, d.kind+" execution is required")
 	}
 
-	return &adapters.StepResult{Handle: execution.Handle, Status: execution.State, Summary: execution.Summary}, nil
+	return &provider.StepResult{Handle: execution.Handle, Status: execution.State, Summary: execution.Summary}, nil
 }

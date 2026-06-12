@@ -47,7 +47,7 @@ linters:
     - goprintffuncname
     - gosec
     # gosmopolitan intentionally disabled: agent prompt templates
-    # (internal/adapters/prompt) and Feishu domain strings are Chinese by
+    # (internal/prompt) and Feishu domain strings are Chinese by
     # design (ported from AgentLoop).
     - govet
     - grouper
@@ -358,7 +358,7 @@ linters:
       - linters:
           - gochecknoglobals
           - gochecknoinits
-        path: internal/adapters/
+        path: internal/provider/
       - linters:
           - forbidigo
           - gochecknoglobals
@@ -393,7 +393,10 @@ linters:
         path: internal/workflow/
       - linters:
           - lll
-        path: internal/adapters/
+        path: internal/provider/
+      - linters:
+          - lll
+        path: internal/prompt/
       - linters:
           - lll
         path: internal/app/

@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/JackDrogon/Cogito/internal/adapters"
+	"github.com/JackDrogon/Cogito/internal/provider"
 	"github.com/JackDrogon/Cogito/internal/store"
 	"github.com/JackDrogon/Cogito/internal/workflow"
 )
@@ -22,13 +22,13 @@ func structuredOutputFixture(t *testing.T) runtimeMachineFixture {
 		Test:           t,
 		Spec:           runtimeSpec(),
 		CommandScripts: succeedingCommandScripts(),
-		Adapter: adapters.NewFakeAdapter(adapters.FakeConfig{
-			Capabilities: adapters.CapabilityMatrix{MachineReadableLogs: true, StructuredOutput: true},
-			Scripts: map[string]adapters.FakeScript{
+		Provider: provider.NewFakeProvider(provider.FakeConfig{
+			Capabilities: provider.CapabilityMatrix{MachineReadableLogs: true, StructuredOutput: true},
+			Scripts: map[string]provider.FakeScript{
 				"attempt-review-01": {
-					Start: adapters.FakeSnapshot{State: adapters.ExecutionStateRunning, Summary: "review started"},
-					Polls: []adapters.FakeSnapshot{{
-						State:            adapters.ExecutionStateSucceeded,
+					Start: provider.FakeSnapshot{State: provider.ExecutionStateRunning, Summary: "review started"},
+					Polls: []provider.FakeSnapshot{{
+						State:            provider.ExecutionStateSucceeded,
 						Summary:          "review ok",
 						StructuredOutput: json.RawMessage(reviewStructuredOutput),
 					}},
@@ -47,12 +47,12 @@ func structuredOutputFixture(t *testing.T) runtimeMachineFixture {
 func succeedingCommandScripts() map[string]commandScript {
 	return map[string]commandScript{
 		"prepare": {
-			Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "prepare started"},
-			Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "prepare ok"}},
+			Start: snapshotSpec{State: provider.ExecutionStateRunning, Summary: "prepare started"},
+			Polls: []snapshotSpec{{State: provider.ExecutionStateSucceeded, Summary: "prepare ok"}},
 		},
 		"notify": {
-			Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "notify started"},
-			Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "notify ok"}},
+			Start: snapshotSpec{State: provider.ExecutionStateRunning, Summary: "notify started"},
+			Polls: []snapshotSpec{{State: provider.ExecutionStateSucceeded, Summary: "notify ok"}},
 		},
 	}
 }
@@ -104,9 +104,9 @@ func TestEngineStepStructuredOutputNotSucceededErrors(t *testing.T) {
 		Test:           t,
 		Spec:           runtimeSpec(),
 		CommandScripts: succeedingCommandScripts(),
-		Adapter: adapters.NewFakeAdapter(adapters.FakeConfig{
-			Capabilities: adapters.CapabilityMatrix{MachineReadableLogs: true, StructuredOutput: true},
-			Scripts:      map[string]adapters.FakeScript{},
+		Provider: provider.NewFakeProvider(provider.FakeConfig{
+			Capabilities: provider.CapabilityMatrix{MachineReadableLogs: true, StructuredOutput: true},
+			Scripts:      map[string]provider.FakeScript{},
 		}),
 	})
 
@@ -140,13 +140,13 @@ func TestEngineStructuredOutputSurvivesResume(t *testing.T) {
 		Test:           t,
 		Spec:           runtimeSpec(),
 		CommandScripts: succeedingCommandScripts(),
-		Adapter: adapters.NewFakeAdapter(adapters.FakeConfig{
-			Capabilities: adapters.CapabilityMatrix{MachineReadableLogs: true, StructuredOutput: true},
-			Scripts: map[string]adapters.FakeScript{
+		Provider: provider.NewFakeProvider(provider.FakeConfig{
+			Capabilities: provider.CapabilityMatrix{MachineReadableLogs: true, StructuredOutput: true},
+			Scripts: map[string]provider.FakeScript{
 				"attempt-review-01": {
-					Start: adapters.FakeSnapshot{State: adapters.ExecutionStateRunning, Summary: "review started"},
-					Polls: []adapters.FakeSnapshot{{
-						State:            adapters.ExecutionStateSucceeded,
+					Start: provider.FakeSnapshot{State: provider.ExecutionStateRunning, Summary: "review started"},
+					Polls: []provider.FakeSnapshot{{
+						State:            provider.ExecutionStateSucceeded,
 						Summary:          "review ok",
 						StructuredOutput: json.RawMessage(reviewStructuredOutput),
 					}},
@@ -193,7 +193,7 @@ func TestApplyStepEventFoldsStructuredOutputOnReplay(t *testing.T) {
 			To:                string(StepStateSucceeded),
 			Summary:           "review ok",
 			ProviderSessionID: "session-review-01",
-			NormalizedStatus:  string(adapters.ExecutionStateSucceeded),
+			NormalizedStatus:  string(provider.ExecutionStateSucceeded),
 		}),
 	})
 	succeeded.StructuredOutput = json.RawMessage(reviewStructuredOutput)

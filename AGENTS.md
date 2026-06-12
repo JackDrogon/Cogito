@@ -31,7 +31,7 @@ Cogito/
 | Add or change CLI commands | `cmd/cogito/main.go`, `internal/app/` | `main.go` is thin; `internal/app/` owns routing and wiring |
 | Change workflow schema or compilation | `internal/workflow/` | parse -> validate -> compile pipeline |
 | Change run execution, replay, approvals, locks | `internal/runtime/` | see local runtime guide before editing state logic |
-| Change provider integrations | `internal/adapters/` | see local adapters guide before editing SPI or providers |
+| Change provider integrations | `internal/provider/` | see local provider guide before editing SPI or providers |
 | Change persistence layout | `internal/store/`, `docs/design/03-storage.md` | runtime depends on durable event/checkpoint semantics |
 | Update design docs | `docs/design/` | keep docs code-aligned, not aspirational |
 | Navigate maintained source quickly | `internal/AGENTS.md` | package-level map for maintained implementation only |
@@ -43,9 +43,9 @@ Cogito/
 | `Run` | function | `internal/app/app.go` | central | top-level CLI router and shared flag handling |
 | `CompiledWorkflow` | struct | `internal/workflow/model.go` | central | immutable runtime-ready DAG |
 | `applyEvent` | function | `internal/runtime/state_machine.go` | central | folds persisted events into snapshot state |
-| `Register` / `Lookup` | function | `internal/adapters/registry.go` | central | process-local adapter registry for CLI wiring |
-| `BuildMain` / `BuildCommitRecovery` / `BuildDirtyWorktree` | function | `internal/adapters/prompt/prompt.go` | central | AgentLoop-ported prompt templates (main + recovery flavors) |
-| `Runner.Start` / `Runner.Session` | method/type | `internal/adapters/runner/runner.go` | central | async provider process launcher + live session handle |
+| `Register` / `Lookup` | function | `internal/provider/registry.go` | central | process-local provider registry for CLI wiring |
+| `BuildMain` / `BuildCommitRecovery` / `BuildDirtyWorktree` | function | `internal/prompt/prompt.go` | central | AgentLoop-ported prompt templates (main + recovery flavors) |
+| `StartProcess` / `Session` | method/type | `internal/provider/process.go` | central | async provider process launcher + live session handle |
 | `GitOps.IsRepo` / `GitOps.ValidateCommitRefs` | method | `internal/gitutil/gitutil.go` | central | strict repo detection + self-reported commit validation |
 | `applicationService.RunCompiledWorkflow` | method | `internal/app/application_service.go` | central | run a pre-compiled (ephemeral) workflow without a YAML file |
 | `feishuproject.BuildEphemeralSpec` | function | `internal/task/feishuproject/run.go` | central | story -> agent/verify/commit_check workflow spec |
@@ -63,13 +63,13 @@ Cogito/
 - Do not create ad hoc temp paths outside `ref/tmp/`.
 - Do not edit files under `ref/tmp/` as if they were first-party source; that tree includes downloaded upstream projects and run artifacts.
 - Do not bypass event durability when changing runtime behavior; meaningful state transitions must remain replayable from `events.jsonl`.
-- Do not add provider-specific logic directly to runtime or app wiring; keep provider behavior behind `internal/adapters`.
+- Do not add provider-specific logic directly to runtime or app wiring; keep provider behavior behind `internal/provider`.
 - Do not document aspirational behavior in `docs/design/`; keep the docs code-aligned.
 
 ## UNIQUE STYLES
-- Architecture is intentionally layered: CLI/app -> workflow/runtime -> store/adapters/executor.
+- Architecture is intentionally layered: CLI/app -> workflow/runtime -> store/provider/executor.
 - Workflow compilation preserves deterministic ordering so runtime replay stays auditable.
-- Provider adapters are capability-driven rather than feature-assumed.
+- Providers are capability-driven rather than feature-assumed.
 - Package docs and design docs carry most subsystem-specific architecture notes; use them before inferring behavior from call sites alone.
 
 ## DEVELOPMENT WORKFLOW
@@ -99,7 +99,7 @@ Linting is strict; fix all warnings before pushing.
 
 ### Test
 ```bash
-just test           # go test ./...
+just test           # go test ./cmd/... ./internal/...
 just test ./internal/runtime/...   # test a single package subtree
 just test-v         # verbose output
 just cover          # coverage report → coverage.out

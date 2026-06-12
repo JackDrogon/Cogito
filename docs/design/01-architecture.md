@@ -14,7 +14,7 @@ At a higher level, the architecture can also be read as six cooperating concerns
 - workflow parsing and compilation
 - runtime orchestration
 - storage and recovery
-- provider adapters
+- providers
 - local command supervision
 
 ```text
@@ -40,7 +40,7 @@ internal/workflow                internal/runtime
         |                                                 |
         v                                                 v
 internal/store                                      adapters / executor
-  - run layout                                        - provider adapters
+  - run layout                                        - providers
   - events.jsonl                                      - command supervision
   - checkpoint.json                                   - artifact log capture
   - artifacts.json
@@ -48,7 +48,7 @@ internal/store                                      adapters / executor
 ```
 
 The boxed "layered" view from earlier drafts was still directionally correct: the
-CLI feeds orchestration, which depends on workflow, storage, adapters, and
+CLI feeds orchestration, which depends on workflow, storage, providers, and
 execution helpers. The updated diagram above keeps that same mental model but uses
 current package boundaries and naming.
 
@@ -64,7 +64,7 @@ control to `internal/app`.
 - command registration and flag parsing
 - workflow execution, resume, replay, status, cancel, and approve flows
 - runtime dependency wiring
-- provider adapter lookup
+- provider lookup
 - command-step execution via `executor.Supervisor`
 - user-facing output formatting
 
@@ -103,7 +103,7 @@ control to `internal/app`.
 
 Cogito has two execution paths:
 
-- `internal/adapters/*` for agent/provider steps (`codex`, `claude`, `opencode`)
+- `internal/provider/*` for agent/provider steps (`codex`, `claude`, `opencode`)
 - `internal/executor` plus `internal/app/command_runner.go` for shell command steps
 
 This keeps workflow scheduling independent from provider-specific process logic.
@@ -208,5 +208,5 @@ The original high-level strategy also remains correct and useful:
 
 - Workflow graphs are static; there is no conditional branching or dynamic step generation.
 - The engine is single-run orchestration code; it is not safe for concurrent use of one instance.
-- Inner provider adapters currently behave like one-shot command wrappers and do not yet implement provider-level interrupt/resume.
+- Inner providers currently behave like one-shot command wrappers and do not yet implement provider-level interrupt/resume.
 - The CLI exposes approve, but not deny, as a first-class subcommand today.

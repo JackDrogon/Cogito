@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/JackDrogon/Cogito/internal/adapters"
+	"github.com/JackDrogon/Cogito/internal/provider"
 	"github.com/JackDrogon/Cogito/internal/store"
 	"github.com/JackDrogon/Cogito/internal/workflow"
 )
@@ -16,45 +16,45 @@ type recordingStepDriver struct {
 	runID        string
 	startCalled  bool
 	resumeCalled bool
-	resumeHandle adapters.ExecutionHandle
+	resumeHandle provider.ExecutionHandle
 }
 
-func (d *recordingStepDriver) Start(_ context.Context, request stepStartRequest) (*adapters.Execution, error) {
+func (d *recordingStepDriver) Start(_ context.Context, request stepStartRequest) (*provider.Execution, error) {
 	d.startCalled = true
 
-	return &adapters.Execution{
-		Handle: adapters.ExecutionHandle{
+	return &provider.Execution{
+		Handle: provider.ExecutionHandle{
 			RunID:             d.runID,
 			StepID:            request.Step.ID,
 			AttemptID:         request.AttemptID,
 			ProviderSessionID: "sess-start",
 		},
-		State:   adapters.ExecutionStateRunning,
+		State:   provider.ExecutionStateRunning,
 		Summary: "started",
 	}, nil
 }
 
-func (d *recordingStepDriver) Resume(_ context.Context, request stepResumeRequest) (*adapters.Execution, error) {
+func (d *recordingStepDriver) Resume(_ context.Context, request stepResumeRequest) (*provider.Execution, error) {
 	d.resumeCalled = true
 	d.resumeHandle = request.Handle
 
-	return &adapters.Execution{
+	return &provider.Execution{
 		Handle:  request.Handle,
-		State:   adapters.ExecutionStateRunning,
+		State:   provider.ExecutionStateRunning,
 		Summary: "resumed",
 	}, nil
 }
 
-func (d *recordingStepDriver) PollOrCollect(_ context.Context, handle adapters.ExecutionHandle) (*adapters.Execution, error) {
-	return &adapters.Execution{Handle: handle, State: adapters.ExecutionStateSucceeded, Summary: "ok"}, nil
+func (d *recordingStepDriver) PollOrCollect(_ context.Context, handle provider.ExecutionHandle) (*provider.Execution, error) {
+	return &provider.Execution{Handle: handle, State: provider.ExecutionStateSucceeded, Summary: "ok"}, nil
 }
 
-func (d *recordingStepDriver) Interrupt(_ context.Context, handle adapters.ExecutionHandle) (*adapters.Execution, error) {
-	return &adapters.Execution{Handle: handle, State: adapters.ExecutionStateInterrupted, Summary: "interrupted"}, nil
+func (d *recordingStepDriver) Interrupt(_ context.Context, handle provider.ExecutionHandle) (*provider.Execution, error) {
+	return &provider.Execution{Handle: handle, State: provider.ExecutionStateInterrupted, Summary: "interrupted"}, nil
 }
 
-func (d *recordingStepDriver) NormalizeResult(_ context.Context, execution *adapters.Execution) (*adapters.StepResult, error) {
-	return &adapters.StepResult{Handle: execution.Handle, Status: execution.State, Summary: execution.Summary}, nil
+func (d *recordingStepDriver) NormalizeResult(_ context.Context, execution *provider.Execution) (*provider.StepResult, error) {
+	return &provider.StepResult{Handle: execution.Handle, Status: execution.State, Summary: execution.Summary}, nil
 }
 
 func newResumeDispatchEngine(t *testing.T, driver stepDriver, step StepSnapshot) *Engine {

@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/JackDrogon/Cogito/internal/adapters"
 	"github.com/JackDrogon/Cogito/internal/gitutil"
+	"github.com/JackDrogon/Cogito/internal/provider"
 	"github.com/JackDrogon/Cogito/internal/workflow"
 )
 
@@ -146,14 +146,14 @@ func agentVerifyCommitSpec() *workflow.Spec {
 	}
 }
 
-func agentChainAdapter(structuredOutput string) adapters.Adapter {
-	return adapters.NewFakeAdapter(adapters.FakeConfig{
-		Capabilities: adapters.CapabilityMatrix{MachineReadableLogs: true, StructuredOutput: true},
-		Scripts: map[string]adapters.FakeScript{
+func agentChainAdapter(structuredOutput string) provider.Provider {
+	return provider.NewFakeProvider(provider.FakeConfig{
+		Capabilities: provider.CapabilityMatrix{MachineReadableLogs: true, StructuredOutput: true},
+		Scripts: map[string]provider.FakeScript{
 			"attempt-agent-01": {
-				Start: adapters.FakeSnapshot{State: adapters.ExecutionStateRunning, Summary: "agent started"},
-				Polls: []adapters.FakeSnapshot{{
-					State:            adapters.ExecutionStateSucceeded,
+				Start: provider.FakeSnapshot{State: provider.ExecutionStateRunning, Summary: "agent started"},
+				Polls: []provider.FakeSnapshot{{
+					State:            provider.ExecutionStateSucceeded,
 					Summary:          "agent ok",
 					StructuredOutput: json.RawMessage(structuredOutput),
 				}},
@@ -170,7 +170,7 @@ func TestAgentVerifyCommitCheckChainSucceeds(t *testing.T) {
 		Test:       t,
 		Spec:       agentVerifyCommitSpec(),
 		WorkingDir: root,
-		Adapter:    agentChainAdapter(structured),
+		Provider:   agentChainAdapter(structured),
 	})
 
 	if err := fixture.engine.ExecuteAll(t.Context()); err != nil {
@@ -196,7 +196,7 @@ func TestAgentVerifyCommitCheckChainFailsOnInvalidCommit(t *testing.T) {
 		Test:       t,
 		Spec:       agentVerifyCommitSpec(),
 		WorkingDir: root,
-		Adapter:    agentChainAdapter(structured),
+		Provider:   agentChainAdapter(structured),
 	})
 
 	if err := fixture.engine.ExecuteAll(t.Context()); err != nil {
@@ -225,7 +225,7 @@ func TestAgentVerifyCommitCheckChainSucceedsInNonGitDirectory(t *testing.T) {
 		Test:       t,
 		Spec:       agentVerifyCommitSpec(),
 		WorkingDir: root,
-		Adapter:    agentChainAdapter(structured),
+		Provider:   agentChainAdapter(structured),
 	})
 
 	if err := fixture.engine.ExecuteAll(t.Context()); err != nil {
@@ -251,7 +251,7 @@ func TestStepDriverRegistryResolvesAllStepKinds(t *testing.T) {
 		Test:       t,
 		Spec:       agentVerifyCommitSpec(),
 		WorkingDir: root,
-		Adapter:    agentChainAdapter(structured),
+		Provider:   agentChainAdapter(structured),
 	})
 
 	registry := NewStepDriverRegistry()

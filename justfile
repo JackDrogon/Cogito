@@ -51,7 +51,7 @@ clean:
 # Run golangci-lint
 [group('quality')]
 lint:
-    golangci-lint run
+    golangci-lint run ./cmd/... ./internal/...
 
 # Format all Go code
 [group('quality')]
@@ -69,12 +69,12 @@ tidy:
 
 # Run tests
 [group('test')]
-test pkg='./...':
+test pkg='./cmd/... ./internal/...':
     go test {{pkg}}
 
 # Run tests with verbose output
 [group('test')]
-test-v pkg='./...':
+test-v pkg='./cmd/... ./internal/...':
     go test -v {{pkg}}
 
 # Generate coverage report

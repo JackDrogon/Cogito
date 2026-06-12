@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/JackDrogon/Cogito/internal/adapters"
 	"github.com/JackDrogon/Cogito/internal/executor"
+	"github.com/JackDrogon/Cogito/internal/provider"
 	"github.com/JackDrogon/Cogito/internal/runtime"
 	"github.com/JackDrogon/Cogito/internal/store"
 )
@@ -36,19 +36,19 @@ type commandSession struct {
 
 	mu      sync.Mutex
 	settled bool
-	result  *adapters.Execution
+	result  *provider.Execution
 	err     error
 	stdout  string
 	stderr  string
 }
 
 type commandSessionResult struct {
-	result *adapters.Execution
+	result *provider.Execution
 	err    error
 }
 
 type commandExecutionParams struct {
-	Handle      adapters.ExecutionHandle
+	Handle      provider.ExecutionHandle
 	CommandSpec executor.CommandSpec
 	StepID      string
 	StdoutPath  string
@@ -66,7 +66,7 @@ func newSupervisorCommandRunner(runStore *store.Store, workingDir string, timeou
 	}
 }
 
-func (r *supervisorCommandRunner) Start(ctx context.Context, request runtime.CommandRequest) (*adapters.Execution, error) {
+func (r *supervisorCommandRunner) Start(ctx context.Context, request runtime.CommandRequest) (*provider.Execution, error) {
 	if strings.TrimSpace(request.RunID) == "" {
 		return nil, errors.New("supervisorCommandRunner.Start: run id is required")
 	}
@@ -88,7 +88,7 @@ func (r *supervisorCommandRunner) Start(ctx context.Context, request runtime.Com
 		return nil, err
 	}
 
-	handle := adapters.ExecutionHandle{
+	handle := provider.ExecutionHandle{
 		RunID:             request.RunID,
 		StepID:            request.StepID,
 		AttemptID:         request.AttemptID,
@@ -124,10 +124,10 @@ func (r *supervisorCommandRunner) Start(ctx context.Context, request runtime.Com
 		session.complete(result, err)
 	}()
 
-	return &adapters.Execution{Handle: handle, State: adapters.ExecutionStateRunning, Summary: "command started"}, nil
+	return &provider.Execution{Handle: handle, State: provider.ExecutionStateRunning, Summary: "command started"}, nil
 }
 
-func (r *supervisorCommandRunner) PollOrCollect(_ context.Context, handle adapters.ExecutionHandle) (*adapters.Execution, error) {
+func (r *supervisorCommandRunner) PollOrCollect(_ context.Context, handle provider.ExecutionHandle) (*provider.Execution, error) {
 	session, err := r.lookupSession(handle)
 	if err != nil {
 		return nil, err
@@ -136,7 +136,7 @@ func (r *supervisorCommandRunner) PollOrCollect(_ context.Context, handle adapte
 	return session.await()
 }
 
-func (r *supervisorCommandRunner) Interrupt(_ context.Context, handle adapters.ExecutionHandle) (*adapters.Execution, error) {
+func (r *supervisorCommandRunner) Interrupt(_ context.Context, handle provider.ExecutionHandle) (*provider.Execution, error) {
 	session, err := r.lookupSession(handle)
 	if err != nil {
 		return nil, err
@@ -147,7 +147,7 @@ func (r *supervisorCommandRunner) Interrupt(_ context.Context, handle adapters.E
 	return session.await()
 }
 
-func (r *supervisorCommandRunner) NormalizeResult(_ context.Context, execution *adapters.Execution) (*adapters.StepResult, error) {
+func (r *supervisorCommandRunner) NormalizeResult(_ context.Context, execution *provider.Execution) (*provider.StepResult, error) {
 	if execution == nil {
 		return nil, errors.New("supervisorCommandRunner.NormalizeResult: execution is required")
 	}
@@ -156,7 +156,7 @@ func (r *supervisorCommandRunner) NormalizeResult(_ context.Context, execution *
 		return nil, fmt.Errorf("supervisorCommandRunner.NormalizeResult: execution state %s cannot be normalized", execution.State)
 	}
 
-	return &adapters.StepResult{
+	return &provider.StepResult{
 		Handle:           execution.Handle,
 		Status:           execution.State,
 		Summary:          execution.Summary,
@@ -167,7 +167,7 @@ func (r *supervisorCommandRunner) NormalizeResult(_ context.Context, execution *
 	}, nil
 }
 
-func (r *supervisorCommandRunner) runCommand(ctx context.Context, params commandExecutionParams) (*adapters.Execution, error) {
+func (r *supervisorCommandRunner) runCommand(ctx context.Context, params commandExecutionParams) (*provider.Execution, error) {
 	result, err := r.supervisor.Run(ctx, executor.RunRequest{
 		Handle:     params.Handle,
 		Command:    params.CommandSpec,
@@ -238,7 +238,7 @@ func (r *supervisorCommandRunner) saveArtifacts(stepID, stdoutPath, stderrPath s
 	return r.store.SaveArtifacts(records)
 }
 
-func (r *supervisorCommandRunner) lookupSession(handle adapters.ExecutionHandle) (*commandSession, error) {
+func (r *supervisorCommandRunner) lookupSession(handle provider.ExecutionHandle) (*commandSession, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -250,11 +250,11 @@ func (r *supervisorCommandRunner) lookupSession(handle adapters.ExecutionHandle)
 	return session, nil
 }
 
-func (s *commandSession) complete(result *adapters.Execution, err error) {
+func (s *commandSession) complete(result *provider.Execution, err error) {
 	s.resultCh <- commandSessionResult{result: cloneExecution(result), err: err}
 }
 
-func (s *commandSession) await() (*adapters.Execution, error) {
+func (s *commandSession) await() (*provider.Execution, error) {
 	s.mu.Lock()
 	if s.settled {
 		result := cloneExecution(s.result)

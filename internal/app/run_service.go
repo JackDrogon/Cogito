@@ -47,7 +47,7 @@ func (runService) newRunEngine(input newRunEngineInput) (*engineBuildResult, err
 	engine, err := runtime.NewEngine(input.RunID, input.Compiled, runtime.MachineDependencies{
 		Store:          input.RunStore,
 		ApprovalPolicy: input.ApprovalPolicy,
-		LookupAdapter:  wiring.LookupAdapter,
+		LookupProvider: wiring.LookupProvider,
 		CommandRunner:  wiring.CommandRunner,
 		RepoPath:       wiring.RepoPath,
 		WorkingDir:     wiring.WorkingDir,

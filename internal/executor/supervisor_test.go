@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/JackDrogon/Cogito/internal/adapters"
+	"github.com/JackDrogon/Cogito/internal/provider"
 )
 
 const helperProcessEnv = "EXECUTOR_HELPER_PROCESS"
@@ -46,8 +46,8 @@ func TestProcessTimeoutKillsChildren(t *testing.T) {
 		t.Fatalf("Run() error = %v", err)
 	}
 
-	if result.Status != adapters.ExecutionStateFailed {
-		t.Fatalf("Run().Status = %q, want %q", result.Status, adapters.ExecutionStateFailed)
+	if result.Status != provider.ExecutionStateFailed {
+		t.Fatalf("Run().Status = %q, want %q", result.Status, provider.ExecutionStateFailed)
 	}
 
 	if !strings.Contains(result.Summary, "child process terminated") {
@@ -131,7 +131,7 @@ func TestInterruptStopsRunningProcess(t *testing.T) {
 	defer cancel()
 
 	type runResult struct {
-		result *adapters.StepResult
+		result *provider.StepResult
 		err    error
 	}
 
@@ -168,8 +168,8 @@ func TestInterruptStopsRunningProcess(t *testing.T) {
 			t.Fatal("Run() result = nil, want interrupted result")
 		}
 
-		if got.result.Status != adapters.ExecutionStateInterrupted {
-			t.Fatalf("Run().Status = %q, want %q", got.result.Status, adapters.ExecutionStateInterrupted)
+		if got.result.Status != provider.ExecutionStateInterrupted {
+			t.Fatalf("Run().Status = %q, want %q", got.result.Status, provider.ExecutionStateInterrupted)
 		}
 
 		if !strings.Contains(got.result.Summary, "child process terminated") {
@@ -259,8 +259,8 @@ func waitForSignalAndExit(terminatedPath string) {
 	}
 }
 
-func newHandle(stepID, sessionID string) adapters.ExecutionHandle {
-	return adapters.ExecutionHandle{
+func newHandle(stepID, sessionID string) provider.ExecutionHandle {
+	return provider.ExecutionHandle{
 		RunID:             "run-123",
 		StepID:            stepID,
 		AttemptID:         "attempt-1",

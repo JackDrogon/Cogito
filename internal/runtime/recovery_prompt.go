@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/JackDrogon/Cogito/internal/adapters/prompt"
 	"github.com/JackDrogon/Cogito/internal/gitutil"
+	"github.com/JackDrogon/Cogito/internal/prompt"
 	"github.com/JackDrogon/Cogito/internal/workflow"
 )
 

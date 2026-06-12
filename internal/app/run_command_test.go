@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/JackDrogon/Cogito/internal/adapters"
 	"github.com/JackDrogon/Cogito/internal/executor"
+	"github.com/JackDrogon/Cogito/internal/provider"
 	"github.com/JackDrogon/Cogito/internal/runtime"
 	"github.com/JackDrogon/Cogito/internal/store"
 )
@@ -34,8 +34,8 @@ func TestSupervisorCommandRunnerWritesLogsAndArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PollOrCollect() error = %v", err)
 	}
-	if collected.State != adapters.ExecutionStateSucceeded {
-		t.Fatalf("collected.State = %q, want %q", collected.State, adapters.ExecutionStateSucceeded)
+	if collected.State != provider.ExecutionStateSucceeded {
+		t.Fatalf("collected.State = %q, want %q", collected.State, provider.ExecutionStateSucceeded)
 	}
 
 	result, err := runner.NormalizeResult(t.Context(), collected)
@@ -93,16 +93,16 @@ func TestSupervisorCommandRunnerInterruptsRunningCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Interrupt() error = %v", err)
 	}
-	if interrupted.State != adapters.ExecutionStateInterrupted {
-		t.Fatalf("interrupted.State = %q, want %q", interrupted.State, adapters.ExecutionStateInterrupted)
+	if interrupted.State != provider.ExecutionStateInterrupted {
+		t.Fatalf("interrupted.State = %q, want %q", interrupted.State, provider.ExecutionStateInterrupted)
 	}
 
 	result, err := runner.NormalizeResult(t.Context(), interrupted)
 	if err != nil {
 		t.Fatalf("NormalizeResult() error = %v", err)
 	}
-	if result.Status != adapters.ExecutionStateInterrupted {
-		t.Fatalf("result.Status = %q, want %q", result.Status, adapters.ExecutionStateInterrupted)
+	if result.Status != provider.ExecutionStateInterrupted {
+		t.Fatalf("result.Status = %q, want %q", result.Status, provider.ExecutionStateInterrupted)
 	}
 }
 
@@ -124,8 +124,8 @@ func TestSupervisorCommandRunnerHonorsTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PollOrCollect() error = %v", err)
 	}
-	if collected.State != adapters.ExecutionStateFailed {
-		t.Fatalf("collected.State = %q, want %q", collected.State, adapters.ExecutionStateFailed)
+	if collected.State != provider.ExecutionStateFailed {
+		t.Fatalf("collected.State = %q, want %q", collected.State, provider.ExecutionStateFailed)
 	}
 	if !strings.Contains(collected.Summary, "timeout") {
 		t.Fatalf("collected.Summary = %q, want timeout", collected.Summary)

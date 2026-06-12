@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/JackDrogon/Cogito/internal/adapters"
+	"github.com/JackDrogon/Cogito/internal/provider"
 	"github.com/JackDrogon/Cogito/internal/store"
 	"github.com/JackDrogon/Cogito/internal/workflow"
 )
@@ -56,7 +56,7 @@ type ApprovalRequestParams struct {
 	ProviderSessionID string
 	Summary           string
 	Trigger           ApprovalTrigger
-	Status            adapters.ExecutionState
+	Status            provider.ExecutionState
 	Decision          ApprovalDecisionResult
 }
 
@@ -89,7 +89,7 @@ type ApprovalGateRequest struct {
 	AttemptID         string
 	ProviderSessionID string
 	Summary           string
-	Status            adapters.ExecutionState
+	Status            provider.ExecutionState
 }
 
 // ApprovalExceptionRequest carries the context passed to
@@ -100,7 +100,7 @@ type ApprovalExceptionRequest struct {
 	Snapshot  Snapshot
 	AttemptID string
 	Summary   string
-	Status    adapters.ExecutionState
+	Status    provider.ExecutionState
 }
 
 // ApprovalPolicy decides how the engine handles approval gates and policy
@@ -132,8 +132,8 @@ func (e *Engine) requestExceptionalApproval(
 		Step:      step,
 		Snapshot:  e.Snapshot(),
 		AttemptID: attemptID,
-		Summary:   normalizeSummary("approval required by policy", adapters.ExecutionStateWaitingApproval),
-		Status:    adapters.ExecutionStateWaitingApproval,
+		Summary:   normalizeSummary("approval required by policy", provider.ExecutionStateWaitingApproval),
+		Status:    provider.ExecutionStateWaitingApproval,
 	})
 	if err != nil {
 		if errors.Is(err, errNoApprovalException) {
@@ -173,7 +173,7 @@ func (e *Engine) requestExceptionalApproval(
 		ProviderSessionID: providerSessionID,
 		Summary:           summary,
 		Trigger:           ApprovalTriggerPolicy,
-		Status:            adapters.ExecutionStateWaitingApproval,
+		Status:            provider.ExecutionStateWaitingApproval,
 		Decision:          *decision,
 	})
 }
@@ -275,7 +275,7 @@ func (e *Engine) continueApprovedStep(ctx context.Context, pending pendingApprov
 		})
 	}
 
-	handle := adapters.ExecutionHandle{
+	handle := provider.ExecutionHandle{
 		RunID:             e.runID,
 		StepID:            pending.Step.ID,
 		AttemptID:         pending.AttemptID,
@@ -424,7 +424,7 @@ func (p approvalModePolicy) DecideGate(_ context.Context, request ApprovalGateRe
 
 	summary := strings.TrimSpace(request.Summary)
 	if summary == "" {
-		summary = defaultApprovalSummary(request.Step, adapters.ExecutionStateWaitingApproval)
+		summary = defaultApprovalSummary(request.Step, provider.ExecutionStateWaitingApproval)
 	}
 
 	if decision != ApprovalDecisionWait {
@@ -441,7 +441,7 @@ func (approvalModePolicy) EvaluateException(
 	return nil, errNoApprovalException
 }
 
-func defaultApprovalSummary(step workflow.CompiledStep, status adapters.ExecutionState) string {
+func defaultApprovalSummary(step workflow.CompiledStep, status provider.ExecutionState) string {
 	if step.Approval != nil && strings.TrimSpace(step.Approval.Message) != "" {
 		return step.Approval.Message
 	}
@@ -466,7 +466,7 @@ func approvalDecisionSummary(decision ApprovalDecision, step workflow.CompiledSt
 	case ApprovalDecisionTimeout:
 		return "approval timed out"
 	default:
-		return defaultApprovalSummary(step, adapters.ExecutionStateWaitingApproval)
+		return defaultApprovalSummary(step, provider.ExecutionStateWaitingApproval)
 	}
 }
 

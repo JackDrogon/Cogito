@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/JackDrogon/Cogito/internal/adapters"
+	"github.com/JackDrogon/Cogito/internal/provider"
 )
 
 const defaultTerminationGracePeriod = 250 * time.Millisecond
@@ -25,7 +25,7 @@ type CommandSpec struct {
 }
 
 type NormalizerInput struct {
-	Handle      adapters.ExecutionHandle
+	Handle      provider.ExecutionHandle
 	ExitCode    int
 	StdoutPath  string
 	StderrPath  string
@@ -36,17 +36,17 @@ type NormalizerInput struct {
 }
 
 type ResultNormalizer interface {
-	Normalize(ctx context.Context, input NormalizerInput) (*adapters.StepResult, error)
+	Normalize(ctx context.Context, input NormalizerInput) (*provider.StepResult, error)
 }
 
-type ResultNormalizerFunc func(ctx context.Context, input NormalizerInput) (*adapters.StepResult, error)
+type ResultNormalizerFunc func(ctx context.Context, input NormalizerInput) (*provider.StepResult, error)
 
-func (f ResultNormalizerFunc) Normalize(ctx context.Context, input NormalizerInput) (*adapters.StepResult, error) {
+func (f ResultNormalizerFunc) Normalize(ctx context.Context, input NormalizerInput) (*provider.StepResult, error) {
 	return f(ctx, input)
 }
 
 type RunRequest struct {
-	Handle     adapters.ExecutionHandle
+	Handle     provider.ExecutionHandle
 	Command    CommandSpec
 	Timeout    time.Duration
 	StdoutPath string
@@ -96,7 +96,7 @@ func (s *Supervisor) SetTerminationGracePeriod(duration time.Duration) {
 	s.terminationGracePeriod = duration
 }
 
-func (s *Supervisor) Run(ctx context.Context, request RunRequest) (*adapters.StepResult, error) {
+func (s *Supervisor) Run(ctx context.Context, request RunRequest) (*provider.StepResult, error) {
 	if err := validateRunRequest(request); err != nil {
 		return nil, err
 	}
@@ -232,7 +232,7 @@ func (s *Supervisor) collectOutput(params collectOutputParams) (NormalizerInput,
 	}, nil
 }
 
-func (s *Supervisor) Interrupt(handle adapters.ExecutionHandle) error {
+func (s *Supervisor) Interrupt(handle provider.ExecutionHandle) error {
 	if err := validateHandle(handle); err != nil {
 		return wrapError(ErrorCodeRequest, "interrupt provider command", err)
 	}
@@ -249,15 +249,15 @@ func (s *Supervisor) Interrupt(handle adapters.ExecutionHandle) error {
 }
 
 func DefaultNormalizer() ResultNormalizer {
-	return ResultNormalizerFunc(func(_ context.Context, input NormalizerInput) (*adapters.StepResult, error) {
+	return ResultNormalizerFunc(func(_ context.Context, input NormalizerInput) (*provider.StepResult, error) {
 		status, summary := statusAndSummary(input)
 
-		return &adapters.StepResult{
+		return &provider.StepResult{
 			Handle:     input.Handle,
 			Status:     status,
 			Summary:    summary,
 			OutputText: selectOutputText(input.Stdout, input.Stderr),
-			Logs: []adapters.LogEntry{
+			Logs: []provider.LogEntry{
 				{Level: "info", Message: "stdout captured", Fields: map[string]string{"path": input.StdoutPath}},
 				{Level: "info", Message: "stderr captured", Fields: map[string]string{"path": input.StderrPath}},
 			},
@@ -365,24 +365,24 @@ func exitCode(err error) int {
 	return -1
 }
 
-func statusAndSummary(input NormalizerInput) (adapters.ExecutionState, string) {
+func statusAndSummary(input NormalizerInput) (provider.ExecutionState, string) {
 	if input.TimedOut {
-		return adapters.ExecutionStateFailed, "child process terminated after timeout"
+		return provider.ExecutionStateFailed, "child process terminated after timeout"
 	}
 
 	if input.Interrupted {
-		return adapters.ExecutionStateInterrupted, "child process terminated after interrupt"
+		return provider.ExecutionStateInterrupted, "child process terminated after interrupt"
 	}
 
 	if input.ExitCode == 0 {
-		return adapters.ExecutionStateSucceeded, "command succeeded"
+		return provider.ExecutionStateSucceeded, "command succeeded"
 	}
 
 	if input.ExitCode > 0 {
-		return adapters.ExecutionStateFailed, fmt.Sprintf("command exited with code %d", input.ExitCode)
+		return provider.ExecutionStateFailed, fmt.Sprintf("command exited with code %d", input.ExitCode)
 	}
 
-	return adapters.ExecutionStateFailed, "command failed"
+	return provider.ExecutionStateFailed, "command failed"
 }
 
 func selectOutputText(stdout, stderr []byte) string {
@@ -398,7 +398,7 @@ func isMissingProcess(err error) bool {
 	return errors.Is(err, syscall.ESRCH)
 }
 
-func validateHandle(handle adapters.ExecutionHandle) error {
+func validateHandle(handle provider.ExecutionHandle) error {
 	if strings.TrimSpace(handle.RunID) == "" {
 		return newError(ErrorCodeRequest, "run id is required")
 	}

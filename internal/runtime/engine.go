@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/JackDrogon/Cogito/internal/adapters"
+	"github.com/JackDrogon/Cogito/internal/provider"
 	"github.com/JackDrogon/Cogito/internal/store"
 	"github.com/JackDrogon/Cogito/internal/workflow"
 )
@@ -45,10 +45,10 @@ type IDGenerator interface {
 	NewApprovalID(stepID string) string
 }
 
-// AdapterLookup resolves the provider adapter for an agent step. It is called
+// ProviderLookup resolves the provider adapter for an agent step. It is called
 // once per step execution and must return an error for unknown or misconfigured
 // providers.
-type AdapterLookup func(step workflow.CompiledStep) (adapters.Adapter, error)
+type ProviderLookup func(step workflow.CompiledStep) (provider.Provider, error)
 
 // CommandRequest carries the parameters needed to start a local command step.
 type CommandRequest struct {
@@ -63,10 +63,10 @@ type CommandRequest struct {
 // PollOrCollect waits for or collects its result; Interrupt signals it to stop;
 // NormalizeResult converts the raw execution into a structured StepResult.
 type CommandRunner interface {
-	Start(ctx context.Context, request CommandRequest) (*adapters.Execution, error)
-	PollOrCollect(ctx context.Context, handle adapters.ExecutionHandle) (*adapters.Execution, error)
-	Interrupt(ctx context.Context, handle adapters.ExecutionHandle) (*adapters.Execution, error)
-	NormalizeResult(ctx context.Context, execution *adapters.Execution) (*adapters.StepResult, error)
+	Start(ctx context.Context, request CommandRequest) (*provider.Execution, error)
+	PollOrCollect(ctx context.Context, handle provider.ExecutionHandle) (*provider.Execution, error)
+	Interrupt(ctx context.Context, handle provider.ExecutionHandle) (*provider.Execution, error)
+	NormalizeResult(ctx context.Context, execution *provider.Execution) (*provider.StepResult, error)
 }
 
 // MachineDependencies bundles collaborators required by Engine.
@@ -84,7 +84,7 @@ type MachineDependencies struct {
 	Clock          func() time.Time
 	IDGen          IDGenerator
 	Store          EventStore
-	LookupAdapter  AdapterLookup
+	LookupProvider ProviderLookup
 	DriverFactory  StepDriverFactory
 	ApprovalPolicy ApprovalPolicy
 	CommandRunner  CommandRunner
@@ -114,7 +114,7 @@ type Engine struct {
 	clock          func() time.Time
 	idGen          IDGenerator
 	store          EventStore
-	lookupAdapter  AdapterLookup
+	lookupProvider ProviderLookup
 	driverFactory  StepDriverFactory
 	approvalPolicy ApprovalPolicy
 	commandRunner  CommandRunner
@@ -163,7 +163,7 @@ func NewEngine(runID string, compiled *workflow.CompiledWorkflow, deps MachineDe
 		clock:          clock,
 		idGen:          ids,
 		store:          deps.Store,
-		lookupAdapter:  deps.LookupAdapter,
+		lookupProvider: deps.LookupProvider,
 		driverFactory:  deps.DriverFactory,
 		approvalPolicy: policy,
 		commandRunner:  deps.CommandRunner,

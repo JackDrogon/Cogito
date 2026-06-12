@@ -3,7 +3,7 @@ Package feishuproject pulls work items (stories) from a Feishu/Lark Project
 (Meegle) project space.
 
 This package is part of Cogito's task-management surface, not the AI provider
-adapter layer. It does not implement adapters.Adapter; runtime and workflow
+adapter layer. It does not implement provider.Provider; runtime and workflow
 packages never import it. Higher CLI layers in internal/app wire it behind a
 dedicated `cogito feishu` subcommand group.
 

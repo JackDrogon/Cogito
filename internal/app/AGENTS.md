@@ -21,7 +21,7 @@
 - Keep presentation concerns in presenter types and execution concerns in services/wiring.
 
 ## ANTI-PATTERNS
-- Do not import provider subpackages here except for wiring-time blank imports that populate the adapter registry.
+- Do not import provider subpackages here except for wiring-time blank imports that populate the provider registry.
 - Do not move runtime transition logic into CLI commands or presenters.
 - Do not parse raw workflow YAML directly in command handlers when `workflow.LoadFile` or resolved-file helpers already own that contract.
 - Do not bypass repo locking when starting runs from CLI flows.
@@ -29,4 +29,4 @@
 
 ## NOTES
 - `application_service.go` and `run_service.go` are the best entry points for end-to-end command behavior.
-- `wiring.go` resolves repo path, working directory, command runner, adapter lookup, and repo lock roots; read it before changing execution context behavior.
+- `wiring.go` resolves repo path, working directory, command runner, provider lookup, and repo lock roots; read it before changing execution context behavior.

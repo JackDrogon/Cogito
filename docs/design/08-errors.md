@@ -128,7 +128,7 @@ store checkpoint error: load checkpoint: checkpoint not found
 store artifacts error: validate artifact path: path escapes run directory
 ```
 
-### `internal/adapters`
+### `internal/provider`
 
 ```go
 type Error struct {
@@ -153,14 +153,14 @@ Typical use:
 - provider binary lookup or subprocess execution failures
 - provider JSON parsing / normalization failures
 
-The adapter error is slightly richer than the others because capability failures
+The provider error is slightly richer than the others because capability failures
 also record the missing capability.
 
 Rendered form:
 
 ```text
-adapter capability error: capability unsupported (resume)
-adapter execution error: codex binary not found: executable file not found in $PATH
+provider capability error: capability unsupported (resume)
+provider execution error: codex binary not found: executable file not found in $PATH
 ```
 
 ### `internal/executor`
@@ -295,7 +295,7 @@ strings are the stable CLI contract today.
 
 The implemented translation strategy can be summarized like this:
 
-- **workflow / runtime / store / adapter / executor**: keep typed context near the source
+- **workflow / runtime / store / provider / executor**: keep typed context near the source
 - **app layer**: only translate when it materially improves UX
 - **CLI layer**: print the final error string verbatim
 
@@ -319,7 +319,7 @@ package quickly.
 - **YAML or DAG invalid** -> `workflow`
 - **repo root, git, lock, state machine, replay** -> `runtime`
 - **missing run files, checkpoint corruption, artifact path issues** -> `store`
-- **provider binary missing, provider output invalid, capability unsupported** -> `adapters`
+- **provider binary missing, provider output invalid, capability unsupported** -> `provider`
 - **local command parsing or subprocess supervision** -> `executor`
 - **state-dir parsing, user-facing translation, command routing** -> `app`
 

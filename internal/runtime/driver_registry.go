@@ -41,11 +41,11 @@ func NewStepDriverRegistry() *StepDriverRegistry {
 	registry.Register(
 		workflow.StepKindAgent,
 		StepDriverFactoryFunc(func(engine *Engine, step workflow.CompiledStep) (stepDriver, error) {
-			if engine.lookupAdapter == nil {
+			if engine.lookupProvider == nil {
 				return nil, newError(ErrorCodeConfig, "adapter lookup is required for agent steps")
 			}
 
-			adapter, err := engine.lookupAdapter(step)
+			adapter, err := engine.lookupProvider(step)
 			if err != nil {
 				return nil, err
 			}

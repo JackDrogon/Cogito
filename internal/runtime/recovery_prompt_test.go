@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/JackDrogon/Cogito/internal/adapters"
-	"github.com/JackDrogon/Cogito/internal/adapters/prompt"
+	"github.com/JackDrogon/Cogito/internal/prompt"
+	"github.com/JackDrogon/Cogito/internal/provider"
 	"github.com/JackDrogon/Cogito/internal/store"
 	"github.com/JackDrogon/Cogito/internal/workflow"
 )
@@ -147,30 +147,30 @@ type recordingResumeAdapter struct {
 	resumePrompt string
 }
 
-func (a *recordingResumeAdapter) DescribeCapabilities() adapters.CapabilityMatrix {
-	return adapters.CapabilityMatrix{Resume: true, Interrupt: true}
+func (a *recordingResumeAdapter) DescribeCapabilities() provider.CapabilityMatrix {
+	return provider.CapabilityMatrix{Resume: true, Interrupt: true}
 }
 
-func (a *recordingResumeAdapter) Start(_ context.Context, _ adapters.StartRequest) (*adapters.Execution, error) {
+func (a *recordingResumeAdapter) Start(_ context.Context, _ provider.StartRequest) (*provider.Execution, error) {
 	return nil, newError(ErrorCodeExecution, "start not used")
 }
 
-func (a *recordingResumeAdapter) PollOrCollect(_ context.Context, handle adapters.ExecutionHandle) (*adapters.Execution, error) {
-	return &adapters.Execution{Handle: handle, State: adapters.ExecutionStateSucceeded}, nil
+func (a *recordingResumeAdapter) PollOrCollect(_ context.Context, handle provider.ExecutionHandle) (*provider.Execution, error) {
+	return &provider.Execution{Handle: handle, State: provider.ExecutionStateSucceeded}, nil
 }
 
-func (a *recordingResumeAdapter) Interrupt(_ context.Context, handle adapters.ExecutionHandle) (*adapters.Execution, error) {
-	return &adapters.Execution{Handle: handle, State: adapters.ExecutionStateInterrupted}, nil
+func (a *recordingResumeAdapter) Interrupt(_ context.Context, handle provider.ExecutionHandle) (*provider.Execution, error) {
+	return &provider.Execution{Handle: handle, State: provider.ExecutionStateInterrupted}, nil
 }
 
-func (a *recordingResumeAdapter) Resume(_ context.Context, request adapters.ResumeRequest) (*adapters.Execution, error) {
+func (a *recordingResumeAdapter) Resume(_ context.Context, request provider.ResumeRequest) (*provider.Execution, error) {
 	a.resumePrompt = request.Prompt
 
-	return &adapters.Execution{Handle: request.Handle, State: adapters.ExecutionStateRunning, Summary: "resumed"}, nil
+	return &provider.Execution{Handle: request.Handle, State: provider.ExecutionStateRunning, Summary: "resumed"}, nil
 }
 
-func (a *recordingResumeAdapter) NormalizeResult(_ context.Context, request adapters.NormalizeRequest) (*adapters.StepResult, error) {
-	return &adapters.StepResult{Handle: request.Execution.Handle, Status: request.Execution.State}, nil
+func (a *recordingResumeAdapter) NormalizeResult(_ context.Context, request provider.NormalizeRequest) (*provider.StepResult, error) {
+	return &provider.StepResult{Handle: request.Execution.Handle, Status: request.Execution.State}, nil
 }
 
 // TestAgentDriverResumeUsesRecoveryPrompt confirms the recovery override flows
@@ -187,7 +187,7 @@ func TestAgentDriverResumeUsesRecoveryPrompt(t *testing.T) {
 
 	if _, err := driver.Resume(t.Context(), stepResumeRequest{
 		Step:           step,
-		Handle:         adapters.ExecutionHandle{ProviderSessionID: "sess"},
+		Handle:         provider.ExecutionHandle{ProviderSessionID: "sess"},
 		RecoveryPrompt: "recovery prompt",
 	}); err != nil {
 		t.Fatalf("Resume() error = %v", err)
@@ -212,7 +212,7 @@ func TestAgentDriverResumeFallsBackToMainPrompt(t *testing.T) {
 
 	if _, err := driver.Resume(t.Context(), stepResumeRequest{
 		Step:   step,
-		Handle: adapters.ExecutionHandle{ProviderSessionID: "sess"},
+		Handle: provider.ExecutionHandle{ProviderSessionID: "sess"},
 	}); err != nil {
 		t.Fatalf("Resume() error = %v", err)
 	}

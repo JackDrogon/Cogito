@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/JackDrogon/Cogito/internal/adapters"
+	"github.com/JackDrogon/Cogito/internal/provider"
 )
 
 const (
@@ -33,7 +33,7 @@ type verifyDriver struct {
 	engine *Engine
 }
 
-func (d verifyDriver) Start(ctx context.Context, request stepStartRequest) (*adapters.Execution, error) {
+func (d verifyDriver) Start(ctx context.Context, request stepStartRequest) (*provider.Execution, error) {
 	if request.Step.Verify == nil {
 		return nil, newError(ErrorCodeConfig, fmt.Sprintf("verify config missing for step %q", request.Step.ID))
 	}
@@ -51,7 +51,7 @@ func (d verifyDriver) Start(ctx context.Context, request stepStartRequest) (*ada
 
 		result, err := readAgentResult(d.engine, spec.From)
 		if err != nil {
-			return terminalExecution(handle, adapters.ExecutionStateFailed, err.Error()), nil
+			return terminalExecution(handle, provider.ExecutionStateFailed, err.Error()), nil
 		}
 
 		commands = result.Verification
@@ -62,7 +62,7 @@ func (d verifyDriver) Start(ctx context.Context, request stepStartRequest) (*ada
 		// would let the gate trivially pass with zero commands run. (v1 has no
 		// allow_empty DSL escape hatch.)
 		if countNonEmpty(commands) == 0 {
-			return terminalExecution(handle, adapters.ExecutionStateFailed,
+			return terminalExecution(handle, provider.ExecutionStateFailed,
 				fmt.Sprintf("no verification commands reported by step %q", spec.From)), nil
 		}
 	}
@@ -73,12 +73,12 @@ func (d verifyDriver) Start(ctx context.Context, request stepStartRequest) (*ada
 	}
 
 	if failure := runVerifyCommands(ctx, workingDir, commands); failure != "" {
-		return terminalExecution(handle, adapters.ExecutionStateFailed, failure), nil
+		return terminalExecution(handle, provider.ExecutionStateFailed, failure), nil
 	}
 
 	summary := fmt.Sprintf("verify passed: %d command(s)", countNonEmpty(commands))
 
-	return terminalExecution(handle, adapters.ExecutionStateSucceeded, summary), nil
+	return terminalExecution(handle, provider.ExecutionStateSucceeded, summary), nil
 }
 
 // runVerifyCommands replays each command with `bash -lc` in workingDir, stopping

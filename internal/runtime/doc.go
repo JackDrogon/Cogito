@@ -3,7 +3,7 @@ Package runtime executes compiled workflows through an event-sourced state
 machine.
 
 This package is the orchestration layer between static workflow definitions,
-provider adapters, command execution, approval policy, and persistent run state.
+providers, command execution, approval policy, and persistent run state.
 It does not parse workflows and it does not own on-disk storage formats; instead
 it coordinates those collaborators through narrow interfaces.
 
@@ -20,7 +20,7 @@ and advances it by recording durable events and rebuilding an in-memory Snapshot
 	    +-------+--------+
 	    |                |
 	    ↓                ↓
-	EventStore       Adapter/CommandRunner
+	EventStore       Provider/CommandRunner
 	    |
 	    ↓
 	events + checkpoint
@@ -56,7 +56,7 @@ silently corrupting execution history.
 At a high level Engine performs the following loop:
 
  1. Identify steps whose dependencies are satisfied.
- 2. Queue and start eligible work through either an Adapter or CommandRunner.
+ 2. Queue and start eligible work through either a Provider or CommandRunner.
  3. Poll executions until they succeed, fail, or request approval.
  4. Persist every transition as an event.
  5. Save checkpoints so interrupted runs can resume without recomputing state
@@ -72,7 +72,7 @@ time out.
 # Dependency injection boundary
 
 MachineDependencies bundles the small set of collaborators that runtime needs:
-clock, ID generation, event storage, adapter lookup, approval policy, command
+clock, ID generation, event storage, provider lookup, approval policy, command
 runner, and repository/working-directory paths. That boundary keeps the state
 machine testable while avoiding direct imports of CLI-specific wiring.
 
@@ -86,7 +86,7 @@ recovery, and repository coordination remain separable concerns.
 
 The Engine itself is single-run orchestration code and should be driven by one
 caller at a time. Persisted events and explicit transition matrices provide the
-determinism needed for resume and replay, even when underlying adapters are
+determinism needed for resume and replay, even when underlying providers are
 asynchronous.
 */
 package runtime

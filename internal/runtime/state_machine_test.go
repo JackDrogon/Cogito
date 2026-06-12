@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/JackDrogon/Cogito/internal/adapters"
+	"github.com/JackDrogon/Cogito/internal/provider"
 	"github.com/JackDrogon/Cogito/internal/store"
 	"github.com/JackDrogon/Cogito/internal/workflow"
 )
@@ -87,18 +87,18 @@ func TestTransitionMatrix(t *testing.T) {
 func TestDeterministicTransitions(t *testing.T) {
 	fixture := newRuntimeMachineFixture(runtimeMachineFixtureParams{Test: t, Spec: runtimeSpec(), CommandScripts: map[string]commandScript{
 		"prepare": {
-			Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "prepare started"},
-			Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "prepare ok"}},
+			Start: snapshotSpec{State: provider.ExecutionStateRunning, Summary: "prepare started"},
+			Polls: []snapshotSpec{{State: provider.ExecutionStateSucceeded, Summary: "prepare ok"}},
 		},
 		"notify": {
-			Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "notify started"},
-			Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "notify ok"}},
+			Start: snapshotSpec{State: provider.ExecutionStateRunning, Summary: "notify started"},
+			Polls: []snapshotSpec{{State: provider.ExecutionStateSucceeded, Summary: "notify ok"}},
 		},
-	}, Adapter: adapters.NewFakeAdapter(adapters.FakeConfig{
-		Scripts: map[string]adapters.FakeScript{
+	}, Provider: provider.NewFakeProvider(provider.FakeConfig{
+		Scripts: map[string]provider.FakeScript{
 			"attempt-review-01": {
-				Start: adapters.FakeSnapshot{State: adapters.ExecutionStateRunning, Summary: "review started"},
-				Polls: []adapters.FakeSnapshot{{State: adapters.ExecutionStateSucceeded, Summary: "review ok"}},
+				Start: provider.FakeSnapshot{State: provider.ExecutionStateRunning, Summary: "review started"},
+				Polls: []provider.FakeSnapshot{{State: provider.ExecutionStateSucceeded, Summary: "review ok"}},
 			},
 		},
 	})})
@@ -165,18 +165,18 @@ func TestDeterministicTransitions(t *testing.T) {
 func TestReplayProducesSameTransitions(t *testing.T) {
 	fixture := newRuntimeMachineFixture(runtimeMachineFixtureParams{Test: t, Spec: runtimeSpec(), CommandScripts: map[string]commandScript{
 		"prepare": {
-			Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "prepare started"},
-			Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "prepare ok"}},
+			Start: snapshotSpec{State: provider.ExecutionStateRunning, Summary: "prepare started"},
+			Polls: []snapshotSpec{{State: provider.ExecutionStateSucceeded, Summary: "prepare ok"}},
 		},
 		"notify": {
-			Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "notify started"},
-			Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "notify ok"}},
+			Start: snapshotSpec{State: provider.ExecutionStateRunning, Summary: "notify started"},
+			Polls: []snapshotSpec{{State: provider.ExecutionStateSucceeded, Summary: "notify ok"}},
 		},
-	}, Adapter: adapters.NewFakeAdapter(adapters.FakeConfig{
-		Scripts: map[string]adapters.FakeScript{
+	}, Provider: provider.NewFakeProvider(provider.FakeConfig{
+		Scripts: map[string]provider.FakeScript{
 			"attempt-review-01": {
-				Start: adapters.FakeSnapshot{State: adapters.ExecutionStateRunning, Summary: "review started"},
-				Polls: []adapters.FakeSnapshot{{State: adapters.ExecutionStateSucceeded, Summary: "review ok"}},
+				Start: provider.FakeSnapshot{State: provider.ExecutionStateRunning, Summary: "review started"},
+				Polls: []provider.FakeSnapshot{{State: provider.ExecutionStateSucceeded, Summary: "review ok"}},
 			},
 		},
 	})})
@@ -207,8 +207,8 @@ func TestReplayProducesSameTransitions(t *testing.T) {
 func TestDuplicateResumeRejected(t *testing.T) {
 	fixture := newRuntimeMachineFixture(runtimeMachineFixtureParams{Test: t, Spec: runtimeSpec(), CommandScripts: map[string]commandScript{
 		"prepare": {
-			Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "prepare started"},
-			Polls: []snapshotSpec{{State: adapters.ExecutionStateInterrupted, Summary: "prepare interrupted"}},
+			Start: snapshotSpec{State: provider.ExecutionStateRunning, Summary: "prepare started"},
+			Polls: []snapshotSpec{{State: provider.ExecutionStateInterrupted, Summary: "prepare interrupted"}},
 		},
 	}})
 
@@ -249,16 +249,16 @@ func TestDuplicateResumeRejected(t *testing.T) {
 func TestTopologicalSchedulingRespectsDependencies(t *testing.T) {
 	fixture := newRuntimeMachineFixture(runtimeMachineFixtureParams{Test: t, Spec: dependencySpec(), CommandScripts: map[string]commandScript{
 		"build": {
-			Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "build started"},
-			Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "build ok"}},
+			Start: snapshotSpec{State: provider.ExecutionStateRunning, Summary: "build started"},
+			Polls: []snapshotSpec{{State: provider.ExecutionStateSucceeded, Summary: "build ok"}},
 		},
 		"docs": {
-			Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "docs started"},
-			Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "docs ok"}},
+			Start: snapshotSpec{State: provider.ExecutionStateRunning, Summary: "docs started"},
+			Polls: []snapshotSpec{{State: provider.ExecutionStateSucceeded, Summary: "docs ok"}},
 		},
 		"release": {
-			Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "release started"},
-			Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "release ok"}},
+			Start: snapshotSpec{State: provider.ExecutionStateRunning, Summary: "release started"},
+			Polls: []snapshotSpec{{State: provider.ExecutionStateSucceeded, Summary: "release ok"}},
 		},
 	}})
 
@@ -315,12 +315,12 @@ func TestReplayRejectsInvalidTransitionOrder(t *testing.T) {
 func TestResumeAfterApproval(t *testing.T) {
 	commandScripts := map[string]commandScript{
 		"draft": {
-			Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "draft started"},
-			Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "draft ok"}},
+			Start: snapshotSpec{State: provider.ExecutionStateRunning, Summary: "draft started"},
+			Polls: []snapshotSpec{{State: provider.ExecutionStateSucceeded, Summary: "draft ok"}},
 		},
 		"publish": {
-			Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "publish started"},
-			Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "publish ok"}},
+			Start: snapshotSpec{State: provider.ExecutionStateRunning, Summary: "publish started"},
+			Polls: []snapshotSpec{{State: provider.ExecutionStateSucceeded, Summary: "publish ok"}},
 		},
 	}
 	fixture := newRuntimeMachineFixtureWithPolicy(runtimeMachineFixtureParams{Test: t, Spec: approvalWorkflowSpec(), CommandScripts: commandScripts, ApprovalPolicy: NewApprovalModePolicy(ApprovalModeAuto)})
@@ -388,12 +388,12 @@ func TestResumeAfterApproval(t *testing.T) {
 func TestApprovalDenialStopsSideEffects(t *testing.T) {
 	fixture := newRuntimeMachineFixtureWithPolicy(runtimeMachineFixtureParams{Test: t, Spec: approvalWorkflowSpec(), CommandScripts: map[string]commandScript{
 		"draft": {
-			Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "draft started"},
-			Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "draft ok"}},
+			Start: snapshotSpec{State: provider.ExecutionStateRunning, Summary: "draft started"},
+			Polls: []snapshotSpec{{State: provider.ExecutionStateSucceeded, Summary: "draft ok"}},
 		},
 		"publish": {
-			Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "publish started"},
-			Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "publish ok"}},
+			Start: snapshotSpec{State: provider.ExecutionStateRunning, Summary: "publish started"},
+			Polls: []snapshotSpec{{State: provider.ExecutionStateSucceeded, Summary: "publish ok"}},
 		},
 	}, ApprovalPolicy: NewApprovalModePolicy(ApprovalModeDeny)})
 
@@ -477,12 +477,12 @@ func TestApprovalResolutionBranches(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fixture := newRuntimeMachineFixtureWithPolicy(runtimeMachineFixtureParams{Test: t, Spec: approvalWorkflowSpec(), CommandScripts: map[string]commandScript{
 				"draft": {
-					Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "draft started"},
-					Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "draft ok"}},
+					Start: snapshotSpec{State: provider.ExecutionStateRunning, Summary: "draft started"},
+					Polls: []snapshotSpec{{State: provider.ExecutionStateSucceeded, Summary: "draft ok"}},
 				},
 				"publish": {
-					Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "publish started"},
-					Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "publish ok"}},
+					Start: snapshotSpec{State: provider.ExecutionStateRunning, Summary: "publish started"},
+					Polls: []snapshotSpec{{State: provider.ExecutionStateSucceeded, Summary: "publish ok"}},
 				},
 			}, ApprovalPolicy: NewApprovalModePolicy(ApprovalModeAuto)})
 
@@ -533,12 +533,12 @@ func TestApprovalTriggerSources(t *testing.T) {
 				t.Helper()
 				return newRuntimeMachineFixtureWithPolicy(runtimeMachineFixtureParams{Test: t, Spec: approvalWorkflowSpec(), CommandScripts: map[string]commandScript{
 					"draft": {
-						Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "draft started"},
-						Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "draft ok"}},
+						Start: snapshotSpec{State: provider.ExecutionStateRunning, Summary: "draft started"},
+						Polls: []snapshotSpec{{State: provider.ExecutionStateSucceeded, Summary: "draft ok"}},
 					},
 					"publish": {
-						Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "publish started"},
-						Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "publish ok"}},
+						Start: snapshotSpec{State: provider.ExecutionStateRunning, Summary: "publish started"},
+						Polls: []snapshotSpec{{State: provider.ExecutionStateSucceeded, Summary: "publish ok"}},
 					},
 				}, ApprovalPolicy: NewApprovalModePolicy(ApprovalModeAuto)})
 			},
@@ -549,14 +549,14 @@ func TestApprovalTriggerSources(t *testing.T) {
 			name: "adapter requested",
 			fixture: func(t *testing.T) runtimeMachineFixture {
 				t.Helper()
-				return newRuntimeMachineFixtureWithPolicy(runtimeMachineFixtureParams{Test: t, Spec: adapterApprovalWorkflowSpec(), Adapter: adapters.NewFakeAdapter(adapters.FakeConfig{
-					Capabilities: adapters.CapabilityMatrix{Resume: true},
-					Scripts: map[string]adapters.FakeScript{
+				return newRuntimeMachineFixtureWithPolicy(runtimeMachineFixtureParams{Test: t, Spec: adapterApprovalWorkflowSpec(), Provider: provider.NewFakeProvider(provider.FakeConfig{
+					Capabilities: provider.CapabilityMatrix{Resume: true},
+					Scripts: map[string]provider.FakeScript{
 						"attempt-review-01": {
-							Start:       adapters.FakeSnapshot{State: adapters.ExecutionStateRunning, Summary: "review started"},
-							Polls:       []adapters.FakeSnapshot{{State: adapters.ExecutionStateWaitingApproval, Summary: "approval required"}},
-							Resume:      &adapters.FakeSnapshot{State: adapters.ExecutionStateRunning, Summary: "review resumed"},
-							ResumePolls: []adapters.FakeSnapshot{{State: adapters.ExecutionStateSucceeded, Summary: "review ok"}},
+							Start:       provider.FakeSnapshot{State: provider.ExecutionStateRunning, Summary: "review started"},
+							Polls:       []provider.FakeSnapshot{{State: provider.ExecutionStateWaitingApproval, Summary: "approval required"}},
+							Resume:      &provider.FakeSnapshot{State: provider.ExecutionStateRunning, Summary: "review resumed"},
+							ResumePolls: []provider.FakeSnapshot{{State: provider.ExecutionStateSucceeded, Summary: "review ok"}},
 						},
 					},
 				}), ApprovalPolicy: NewApprovalModePolicy(ApprovalModeAuto)})
@@ -570,8 +570,8 @@ func TestApprovalTriggerSources(t *testing.T) {
 				t.Helper()
 				return newRuntimeMachineFixtureWithPolicy(runtimeMachineFixtureParams{Test: t, Spec: policyApprovalWorkflowSpec(), CommandScripts: map[string]commandScript{
 					"ship": {
-						Start: snapshotSpec{State: adapters.ExecutionStateRunning, Summary: "ship started"},
-						Polls: []snapshotSpec{{State: adapters.ExecutionStateSucceeded, Summary: "ship ok"}},
+						Start: snapshotSpec{State: provider.ExecutionStateRunning, Summary: "ship started"},
+						Polls: []snapshotSpec{{State: provider.ExecutionStateSucceeded, Summary: "ship ok"}},
 					},
 				}, ApprovalPolicy: testApprovalPolicy{
 					decideGate: func(_ context.Context, request ApprovalGateRequest) (ApprovalDecisionResult, error) {
@@ -912,7 +912,7 @@ type runtimeMachineFixtureParams struct {
 	Test           *testing.T
 	Spec           *workflow.Spec
 	CommandScripts map[string]commandScript
-	Adapter        adapters.Adapter
+	Provider       provider.Provider
 	ApprovalPolicy ApprovalPolicy
 	WorkingDir     string
 }
@@ -961,12 +961,12 @@ func newRuntimeMachineFixtureWithPolicy(params runtimeMachineFixtureParams) runt
 		ApprovalPolicy: params.ApprovalPolicy,
 		CommandRunner:  runner,
 		WorkingDir:     params.WorkingDir,
-		LookupAdapter: func(step workflow.CompiledStep) (adapters.Adapter, error) {
-			if params.Adapter == nil {
+		LookupProvider: func(step workflow.CompiledStep) (provider.Provider, error) {
+			if params.Provider == nil {
 				return nil, fmt.Errorf("unexpected agent step %s", step.ID)
 			}
 
-			return params.Adapter, nil
+			return params.Provider, nil
 		},
 	})
 	if err != nil {
@@ -998,7 +998,7 @@ func TestNewEngineUsesInjectedDriverFactory(t *testing.T) {
 	}
 
 	runner := newTestCommandRunner(map[string]commandScript{
-		"prepare": {Start: snapshotSpec{State: adapters.ExecutionStateSucceeded, Summary: "done"}},
+		"prepare": {Start: snapshotSpec{State: provider.ExecutionStateSucceeded, Summary: "done"}},
 	})
 
 	buildCount := 0
@@ -1048,12 +1048,12 @@ func reloadRuntimeMachineFixtureWithPolicy(params runtimeMachineFixtureParams, f
 		ApprovalPolicy: params.ApprovalPolicy,
 		CommandRunner:  runner,
 		WorkingDir:     params.WorkingDir,
-		LookupAdapter: func(step workflow.CompiledStep) (adapters.Adapter, error) {
-			if params.Adapter == nil {
+		LookupProvider: func(step workflow.CompiledStep) (provider.Provider, error) {
+			if params.Provider == nil {
 				return nil, fmt.Errorf("unexpected agent step %s", step.ID)
 			}
 
-			return params.Adapter, nil
+			return params.Provider, nil
 		},
 	})
 	if err != nil {
@@ -1178,7 +1178,7 @@ func (g *testIDGenerator) next(prefix, stepID string, bucket map[string]int) str
 }
 
 type snapshotSpec struct {
-	State   adapters.ExecutionState
+	State   provider.ExecutionState
 	Summary string
 }
 
@@ -1210,7 +1210,7 @@ type commandScript struct {
 }
 
 type commandSession struct {
-	handle adapters.ExecutionHandle
+	handle provider.ExecutionHandle
 	script commandScript
 	index  int
 	state  snapshotSpec
@@ -1237,7 +1237,7 @@ func newTestCommandRunner(scripts map[string]commandScript) *testCommandRunner {
 	}
 }
 
-func (r *testCommandRunner) Start(_ context.Context, request CommandRequest) (*adapters.Execution, error) {
+func (r *testCommandRunner) Start(_ context.Context, request CommandRequest) (*provider.Execution, error) {
 	script, ok := r.scripts[request.StepID]
 	if !ok {
 		return nil, fmt.Errorf("command script not found for %s", request.StepID)
@@ -1246,7 +1246,7 @@ func (r *testCommandRunner) Start(_ context.Context, request CommandRequest) (*a
 	r.startCount[request.StepID]++
 	r.providerIndex[request.StepID]++
 	providerSessionID := fmt.Sprintf("command-%s-%02d", request.StepID, r.providerIndex[request.StepID])
-	handle := adapters.ExecutionHandle{
+	handle := provider.ExecutionHandle{
 		RunID:             request.RunID,
 		StepID:            request.StepID,
 		AttemptID:         request.AttemptID,
@@ -1258,7 +1258,7 @@ func (r *testCommandRunner) Start(_ context.Context, request CommandRequest) (*a
 	return buildCommandExecution(handle, script.Start), nil
 }
 
-func (r *testCommandRunner) PollOrCollect(_ context.Context, handle adapters.ExecutionHandle) (*adapters.Execution, error) {
+func (r *testCommandRunner) PollOrCollect(_ context.Context, handle provider.ExecutionHandle) (*provider.Execution, error) {
 	session, ok := r.sessions[handle.ProviderSessionID]
 	if !ok {
 		return nil, fmt.Errorf("command session not found for %s", handle.ProviderSessionID)
@@ -1272,13 +1272,13 @@ func (r *testCommandRunner) PollOrCollect(_ context.Context, handle adapters.Exe
 	return buildCommandExecution(session.handle, session.state), nil
 }
 
-func (r *testCommandRunner) Interrupt(_ context.Context, handle adapters.ExecutionHandle) (*adapters.Execution, error) {
+func (r *testCommandRunner) Interrupt(_ context.Context, handle provider.ExecutionHandle) (*provider.Execution, error) {
 	session, ok := r.sessions[handle.ProviderSessionID]
 	if !ok {
 		return nil, fmt.Errorf("command session not found for %s", handle.ProviderSessionID)
 	}
 
-	snapshot := snapshotSpec{State: adapters.ExecutionStateInterrupted, Summary: "interrupted"}
+	snapshot := snapshotSpec{State: provider.ExecutionStateInterrupted, Summary: "interrupted"}
 	if session.script.Interrupt.State != "" {
 		snapshot = session.script.Interrupt
 	}
@@ -1287,12 +1287,12 @@ func (r *testCommandRunner) Interrupt(_ context.Context, handle adapters.Executi
 	return buildCommandExecution(session.handle, session.state), nil
 }
 
-func (r *testCommandRunner) NormalizeResult(_ context.Context, execution *adapters.Execution) (*adapters.StepResult, error) {
+func (r *testCommandRunner) NormalizeResult(_ context.Context, execution *provider.Execution) (*provider.StepResult, error) {
 	if execution == nil {
 		return nil, errors.New("execution is required")
 	}
 
-	return &adapters.StepResult{
+	return &provider.StepResult{
 		Handle:  execution.Handle,
 		Status:  execution.State,
 		Summary: execution.Summary,
@@ -1303,8 +1303,8 @@ func (r *testCommandRunner) StartCount(stepID string) int {
 	return r.startCount[stepID]
 }
 
-func buildCommandExecution(handle adapters.ExecutionHandle, snapshot snapshotSpec) *adapters.Execution {
-	return &adapters.Execution{
+func buildCommandExecution(handle provider.ExecutionHandle, snapshot snapshotSpec) *provider.Execution {
+	return &provider.Execution{
 		Handle:  handle,
 		State:   snapshot.State,
 		Summary: snapshot.Summary,
@@ -1313,20 +1313,20 @@ func buildCommandExecution(handle adapters.ExecutionHandle, snapshot snapshotSpe
 
 type interruptRecordingCommandRunner struct {
 	store                 *store.Store
-	handle                adapters.ExecutionHandle
+	handle                provider.ExecutionHandle
 	interrupted           bool
 	eventTypesAtInterrupt []store.EventType
 }
 
-func (r *interruptRecordingCommandRunner) Start(_ context.Context, request CommandRequest) (*adapters.Execution, error) {
-	return &adapters.Execution{Handle: adapters.ExecutionHandle{RunID: request.RunID, StepID: request.StepID, AttemptID: request.AttemptID, ProviderSessionID: "command-start"}, State: adapters.ExecutionStateRunning, Summary: "started"}, nil
+func (r *interruptRecordingCommandRunner) Start(_ context.Context, request CommandRequest) (*provider.Execution, error) {
+	return &provider.Execution{Handle: provider.ExecutionHandle{RunID: request.RunID, StepID: request.StepID, AttemptID: request.AttemptID, ProviderSessionID: "command-start"}, State: provider.ExecutionStateRunning, Summary: "started"}, nil
 }
 
-func (r *interruptRecordingCommandRunner) PollOrCollect(_ context.Context, handle adapters.ExecutionHandle) (*adapters.Execution, error) {
-	return &adapters.Execution{Handle: handle, State: adapters.ExecutionStateRunning, Summary: "running"}, nil
+func (r *interruptRecordingCommandRunner) PollOrCollect(_ context.Context, handle provider.ExecutionHandle) (*provider.Execution, error) {
+	return &provider.Execution{Handle: handle, State: provider.ExecutionStateRunning, Summary: "running"}, nil
 }
 
-func (r *interruptRecordingCommandRunner) Interrupt(_ context.Context, handle adapters.ExecutionHandle) (*adapters.Execution, error) {
+func (r *interruptRecordingCommandRunner) Interrupt(_ context.Context, handle provider.ExecutionHandle) (*provider.Execution, error) {
 	r.interrupted = true
 	r.handle = handle
 
@@ -1340,15 +1340,15 @@ func (r *interruptRecordingCommandRunner) Interrupt(_ context.Context, handle ad
 		r.eventTypesAtInterrupt = append(r.eventTypesAtInterrupt, event.Type)
 	}
 
-	return &adapters.Execution{Handle: handle, State: adapters.ExecutionStateInterrupted, Summary: "interrupted"}, nil
+	return &provider.Execution{Handle: handle, State: provider.ExecutionStateInterrupted, Summary: "interrupted"}, nil
 }
 
-func (r *interruptRecordingCommandRunner) NormalizeResult(_ context.Context, execution *adapters.Execution) (*adapters.StepResult, error) {
+func (r *interruptRecordingCommandRunner) NormalizeResult(_ context.Context, execution *provider.Execution) (*provider.StepResult, error) {
 	if execution == nil {
 		return nil, errors.New("execution is required")
 	}
 
-	return &adapters.StepResult{Handle: execution.Handle, Status: execution.State, Summary: execution.Summary}, nil
+	return &provider.StepResult{Handle: execution.Handle, Status: execution.State, Summary: execution.Summary}, nil
 }
 
 func interruptReplayEvents(lastType store.EventType) []store.Event {

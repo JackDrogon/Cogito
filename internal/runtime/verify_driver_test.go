@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/JackDrogon/Cogito/internal/adapters"
+	"github.com/JackDrogon/Cogito/internal/provider"
 	"github.com/JackDrogon/Cogito/internal/workflow"
 )
 
@@ -84,13 +84,13 @@ func TestVerifyDriverPullsCommandsFromUpstreamAgent(t *testing.T) {
 	fixture := newRuntimeMachineFixture(runtimeMachineFixtureParams{
 		Test: t,
 		Spec: spec,
-		Adapter: adapters.NewFakeAdapter(adapters.FakeConfig{
-			Capabilities: adapters.CapabilityMatrix{MachineReadableLogs: true, StructuredOutput: true},
-			Scripts: map[string]adapters.FakeScript{
+		Provider: provider.NewFakeProvider(provider.FakeConfig{
+			Capabilities: provider.CapabilityMatrix{MachineReadableLogs: true, StructuredOutput: true},
+			Scripts: map[string]provider.FakeScript{
 				"attempt-agent-01": {
-					Start: adapters.FakeSnapshot{State: adapters.ExecutionStateRunning, Summary: "agent started"},
-					Polls: []adapters.FakeSnapshot{{
-						State:            adapters.ExecutionStateSucceeded,
+					Start: provider.FakeSnapshot{State: provider.ExecutionStateRunning, Summary: "agent started"},
+					Polls: []provider.FakeSnapshot{{
+						State:            provider.ExecutionStateSucceeded,
 						Summary:          "agent ok",
 						StructuredOutput: json.RawMessage(`{"commits":[],"verification":["true"],"summary":"done"}`),
 					}},
@@ -128,13 +128,13 @@ func TestVerifyDriverFailsWhenUpstreamHasNoStructuredOutput(t *testing.T) {
 	fixture := newRuntimeMachineFixture(runtimeMachineFixtureParams{
 		Test: t,
 		Spec: agentVerifySpec(),
-		Adapter: adapters.NewFakeAdapter(adapters.FakeConfig{
-			Capabilities: adapters.CapabilityMatrix{MachineReadableLogs: true, StructuredOutput: true},
-			Scripts: map[string]adapters.FakeScript{
+		Provider: provider.NewFakeProvider(provider.FakeConfig{
+			Capabilities: provider.CapabilityMatrix{MachineReadableLogs: true, StructuredOutput: true},
+			Scripts: map[string]provider.FakeScript{
 				"attempt-agent-01": {
-					Start: adapters.FakeSnapshot{State: adapters.ExecutionStateRunning, Summary: "agent started"},
-					Polls: []adapters.FakeSnapshot{{
-						State:   adapters.ExecutionStateSucceeded,
+					Start: provider.FakeSnapshot{State: provider.ExecutionStateRunning, Summary: "agent started"},
+					Polls: []provider.FakeSnapshot{{
+						State:   provider.ExecutionStateSucceeded,
 						Summary: "agent ok",
 						// No StructuredOutput: the agent forgot the marker line.
 					}},
@@ -168,13 +168,13 @@ func TestVerifyDriverFailsWhenUpstreamReportsNoCommands(t *testing.T) {
 	fixture := newRuntimeMachineFixture(runtimeMachineFixtureParams{
 		Test: t,
 		Spec: agentVerifySpec(),
-		Adapter: adapters.NewFakeAdapter(adapters.FakeConfig{
-			Capabilities: adapters.CapabilityMatrix{MachineReadableLogs: true, StructuredOutput: true},
-			Scripts: map[string]adapters.FakeScript{
+		Provider: provider.NewFakeProvider(provider.FakeConfig{
+			Capabilities: provider.CapabilityMatrix{MachineReadableLogs: true, StructuredOutput: true},
+			Scripts: map[string]provider.FakeScript{
 				"attempt-agent-01": {
-					Start: adapters.FakeSnapshot{State: adapters.ExecutionStateRunning, Summary: "agent started"},
-					Polls: []adapters.FakeSnapshot{{
-						State:            adapters.ExecutionStateSucceeded,
+					Start: provider.FakeSnapshot{State: provider.ExecutionStateRunning, Summary: "agent started"},
+					Polls: []provider.FakeSnapshot{{
+						State:            provider.ExecutionStateSucceeded,
 						Summary:          "agent ok",
 						StructuredOutput: json.RawMessage(`{"commits":[],"verification":[],"summary":"done"}`),
 					}},

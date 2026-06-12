@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/JackDrogon/Cogito/internal/adapters/prompt"
+	"github.com/JackDrogon/Cogito/internal/prompt"
 	"github.com/JackDrogon/Cogito/internal/task/agentflow"
 	"github.com/JackDrogon/Cogito/internal/workflow"
 )

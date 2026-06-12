@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/JackDrogon/Cogito/internal/adapters/prompt"
+	"github.com/JackDrogon/Cogito/internal/prompt"
 )
 
 func TestBuildSpecRequiresTasks(t *testing.T) {

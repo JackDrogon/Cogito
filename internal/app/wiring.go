@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	_ "github.com/JackDrogon/Cogito/internal/adapters/claude"
-	_ "github.com/JackDrogon/Cogito/internal/adapters/codex"
-	_ "github.com/JackDrogon/Cogito/internal/adapters/opencode"
+	_ "github.com/JackDrogon/Cogito/internal/provider/claude"
+	_ "github.com/JackDrogon/Cogito/internal/provider/codex"
+	_ "github.com/JackDrogon/Cogito/internal/provider/opencode"
 	"github.com/JackDrogon/Cogito/internal/runtime"
 	"github.com/JackDrogon/Cogito/internal/store"
 )
@@ -22,10 +22,10 @@ import (
 const codexSandboxEnv = "CODEX_SANDBOX"
 
 type runtimeWiring struct {
-	LookupAdapter runtime.AdapterLookup
-	CommandRunner runtime.CommandRunner
-	RepoPath      string
-	WorkingDir    string
+	LookupProvider runtime.ProviderLookup
+	CommandRunner  runtime.CommandRunner
+	RepoPath       string
+	WorkingDir     string
 }
 
 type executionContext struct {
@@ -44,7 +44,7 @@ func buildRuntimeWiring(runStore *store.Store, flags *sharedFlags) (runtimeWirin
 	}
 
 	return runtimeWiring{
-		LookupAdapter: defaultAdapterLookup(adapterOptionDefaults{
+		LookupProvider: defaultProviderLookup(providerOptionDefaults{
 			Sandbox:    codexSandbox(),
 			Model:      "",
 			LogDirRoot: runStore.Layout().RunDir,

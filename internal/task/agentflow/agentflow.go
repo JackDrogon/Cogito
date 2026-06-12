@@ -10,7 +10,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/JackDrogon/Cogito/internal/adapters/prompt"
+	"github.com/JackDrogon/Cogito/internal/prompt"
 	"github.com/JackDrogon/Cogito/internal/workflow"
 )
 
@@ -28,7 +28,7 @@ const (
 )
 
 // validAgentNames is the closed set of code agents an ephemeral workflow may
-// delegate to. It matches the adapters registered in internal/adapters.
+// delegate to. It matches the adapters registered in internal/provider.
 var validAgentNames = map[string]struct{}{
 	"codex":    {},
 	"claude":   {},

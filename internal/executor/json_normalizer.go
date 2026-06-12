@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/JackDrogon/Cogito/internal/adapters"
+	"github.com/JackDrogon/Cogito/internal/provider"
 )
 
 func JSONOutputNormalizer() ResultNormalizer {
 	base := DefaultNormalizer()
 
-	return ResultNormalizerFunc(func(ctx context.Context, input NormalizerInput) (*adapters.StepResult, error) {
+	return ResultNormalizerFunc(func(ctx context.Context, input NormalizerInput) (*provider.StepResult, error) {
 		result, err := base.Normalize(ctx, input)
 		if err != nil {
 			return nil, err
