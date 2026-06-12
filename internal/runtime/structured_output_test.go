@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/JackDrogon/Cogito/internal/provider"
@@ -135,6 +136,48 @@ func TestEngineStructuredOutputEventAndCheckpointRoundTrip(t *testing.T) {
 	}
 }
 
+func TestEngineRedactsSecretsBeforePersistingEvents(t *testing.T) {
+	const secret = "supersecret123456"
+
+	t.Setenv("COGITO_TEST_API_KEY", secret)
+
+	structuredOutput := json.RawMessage(`{"summary":"saw supersecret123456","commits":["abc1234"]}`)
+	fixture := newRuntimeMachineFixture(runtimeMachineFixtureParams{
+		Test:           t,
+		Spec:           runtimeSpec(),
+		CommandScripts: succeedingCommandScripts(),
+		Provider: provider.NewFakeProvider(provider.FakeConfig{
+			Capabilities: provider.CapabilityMatrix{MachineReadableLogs: true, StructuredOutput: true},
+			Scripts: map[string]provider.FakeScript{
+				"attempt-review-01": {
+					Start: provider.FakeSnapshot{State: provider.ExecutionStateRunning, Summary: "review started " + secret},
+					Polls: []provider.FakeSnapshot{{
+						State:            provider.ExecutionStateSucceeded,
+						Summary:          "review ok " + secret,
+						StructuredOutput: structuredOutput,
+					}},
+				},
+			},
+		}),
+	})
+
+	if err := fixture.engine.ExecuteAll(t.Context()); err != nil {
+		t.Fatalf("ExecuteAll() error = %v", err)
+	}
+
+	encodedEvents, err := json.Marshal(mustReadEvents(t, fixture.store))
+	if err != nil {
+		t.Fatalf("Marshal(events) error = %v", err)
+	}
+	assertRedactedDurableText(t, string(encodedEvents), secret)
+
+	got := string(fixture.engine.Snapshot().Steps["review"].StructuredOutput)
+	assertRedactedDurableText(t, got, secret)
+	if !strings.Contains(got, `"summary":"saw ***REDACTED***"`) {
+		t.Fatalf("snapshot StructuredOutput = %s, want redacted JSON string", got)
+	}
+}
+
 func TestEngineStructuredOutputSurvivesResume(t *testing.T) {
 	params := runtimeMachineFixtureParams{
 		Test:           t,
@@ -253,6 +296,17 @@ func assertStateError(t *testing.T, err error) {
 
 	if runtimeErr.Code != ErrorCodeState {
 		t.Fatalf("error code = %q, want %q", runtimeErr.Code, ErrorCodeState)
+	}
+}
+
+func assertRedactedDurableText(t *testing.T, text, secret string) {
+	t.Helper()
+
+	if strings.Contains(text, secret) {
+		t.Fatalf("durable text = %s, must not contain raw secret", text)
+	}
+	if !strings.Contains(text, "***REDACTED***") {
+		t.Fatalf("durable text = %s, want redaction marker", text)
 	}
 }
 

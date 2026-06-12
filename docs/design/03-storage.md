@@ -123,6 +123,14 @@ Terminal step events may also carry provider usage when the adapter reported it:
 token or cost data. Runtime replay treats the field as audit metadata; it is not
 folded into `checkpoint.json`.
 
+Before runtime appends any event, it redacts environment-derived secret values
+from event messages, summaries, and structured output payloads. Secret values are
+collected from variables whose names contain `TOKEN`, `SECRET`, `PASSWORD`,
+`PASSWD`, `CREDENTIAL`, `API_KEY`, `APIKEY`, `PRIVATE_KEY`, or `AUTH`
+(case-insensitive) when the value is at least 8 bytes. Matches are replaced with
+`***REDACTED***`; checkpoint state inherits this cleanliness because checkpoints
+fold from the already-redacted event stream.
+
 ### Event categories used by runtime
 
 - run lifecycle: `RunCreated`, `RunStarted`, `RunPaused`, `RunWaitingApproval`, `RunSucceeded`, `RunFailed`, `RunCanceled`
@@ -192,7 +200,9 @@ full event replay.
 
 `artifacts.json` tracks files created by execution. In the current implementation,
 command steps append stdout/stderr log files under `provider-logs/` and store them
-as artifact records.
+as artifact records. Command stdout/stderr bytes are redacted using the same
+environment-name heuristics before they reach durable log files, so later event
+summaries normalized from those files are redacted as well.
 
 ### Artifact shape
 

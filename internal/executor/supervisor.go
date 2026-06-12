@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -79,6 +80,8 @@ type collectOutputParams struct {
 	Interrupted bool
 	StdoutFile  *os.File
 	StderrFile  *os.File
+	StdoutLog   io.Closer
+	StderrLog   io.Closer
 }
 
 func NewSupervisor() *Supervisor {
@@ -113,7 +116,14 @@ func (s *Supervisor) Run(ctx context.Context, request RunRequest) (*provider.Ste
 	}
 	defer stderrFile.Close()
 
-	setup, err := s.setupCommand(request, stdoutFile, stderrFile)
+	secretValues := provider.CollectEnvSecrets()
+	stdoutLog := provider.NewRedactingWriter(stdoutFile, secretValues)
+	stderrLog := provider.NewRedactingWriter(stderrFile, secretValues)
+
+	defer stdoutLog.Close()
+	defer stderrLog.Close()
+
+	setup, err := s.setupCommand(request, stdoutLog, stderrLog)
 	if err != nil {
 		return nil, err
 	}
@@ -133,6 +143,8 @@ func (s *Supervisor) Run(ctx context.Context, request RunRequest) (*provider.Ste
 		Interrupted: monitorResult.interrupted,
 		StdoutFile:  stdoutFile,
 		StderrFile:  stderrFile,
+		StdoutLog:   stdoutLog,
+		StderrLog:   stderrLog,
 	})
 	if err != nil {
 		return nil, err
@@ -141,7 +153,7 @@ func (s *Supervisor) Run(ctx context.Context, request RunRequest) (*provider.Ste
 	return request.Normalizer.Normalize(ctx, input)
 }
 
-func (s *Supervisor) setupCommand(request RunRequest, stdoutFile, stderrFile *os.File) (*commandSetup, error) {
+func (s *Supervisor) setupCommand(request RunRequest, stdoutLog, stderrLog io.Writer) (*commandSetup, error) {
 	// Intentionally NOT exec.CommandContext: the monitor goroutine owns
 	// cancellation and SIGKILLs the whole -pgid tree; CommandContext would
 	// only kill the direct child behind the monitor's back.
@@ -149,8 +161,8 @@ func (s *Supervisor) setupCommand(request RunRequest, stdoutFile, stderrFile *os
 	cmd := exec.Command(request.Command.Path, request.Command.Args...)
 	cmd.Dir = request.Command.Dir
 	cmd.Env = append(os.Environ(), request.Command.Env...)
-	cmd.Stdout = stdoutFile
-	cmd.Stderr = stderrFile
+	cmd.Stdout = stdoutLog
+	cmd.Stderr = stderrLog
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {
@@ -202,6 +214,14 @@ func (s *Supervisor) monitorProcess(
 }
 
 func (s *Supervisor) collectOutput(params collectOutputParams) (NormalizerInput, error) {
+	if closeErr := params.StdoutLog.Close(); closeErr != nil {
+		return NormalizerInput{}, wrapError(ErrorCodeExecution, "flush stdout log", closeErr)
+	}
+
+	if closeErr := params.StderrLog.Close(); closeErr != nil {
+		return NormalizerInput{}, wrapError(ErrorCodeExecution, "flush stderr log", closeErr)
+	}
+
 	if syncErr := params.StdoutFile.Sync(); syncErr != nil {
 		return NormalizerInput{}, wrapError(ErrorCodeExecution, "sync stdout log", syncErr)
 	}

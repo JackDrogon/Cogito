@@ -228,6 +228,8 @@ func storeUsage(usage *provider.Usage) *store.Usage {
 
 func (e *Engine) persistEvent(event store.Event) error {
 	event.RunID = e.runID
+	redactEventPayload(&event)
+
 	previewSnapshot := cloneSnapshot(e.snapshot)
 	previewEvent := cloneEvent(event)
 	previewEvent.Sequence = previewSnapshot.LastSequence + 1
@@ -257,6 +259,19 @@ func (e *Engine) persistEvent(event store.Event) error {
 	}
 
 	return e.store.SaveCheckpoint(checkpointFromSnapshot(e.snapshot, e.executionContext()))
+}
+
+func redactEventPayload(event *store.Event) {
+	event.Message = provider.RedactSecretString(event.Message)
+	if event.Data != nil {
+		event.Data[dataSummary] = provider.RedactSecretString(event.Data[dataSummary])
+	}
+
+	if event.StructuredOutput != nil {
+		// JSON strings that contain typical environment secret values stay valid
+		// because the replacement marker contains no JSON-special bytes.
+		event.StructuredOutput = json.RawMessage(provider.RedactSecretBytes(event.StructuredOutput))
+	}
 }
 
 func (e *Engine) lookupStep(stepID string) (workflow.CompiledStep, error) {

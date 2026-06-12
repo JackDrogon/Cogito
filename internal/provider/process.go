@@ -204,7 +204,7 @@ func StartProcess(parentCtx context.Context, req ProcessRequest) (*Session, erro
 	}
 
 	settings := applyDefaults(req)
-	secretValues := collectSecretEnvValues(os.Environ())
+	secretValues := CollectEnvSecrets()
 
 	var logFile *os.File
 
@@ -671,7 +671,7 @@ func redactingLogWriter(logFile *os.File, logMu *sync.Mutex, secrets []string) i
 		return nil
 	}
 
-	return newRedactingWriter(lockedWriter{Writer: logFile, Mu: logMu}, secrets)
+	return NewRedactingWriter(lockedWriter{Writer: logFile, Mu: logMu}, secrets)
 }
 
 func redactingSinkWriter(sink io.Writer, secrets []string) io.WriteCloser {
@@ -679,7 +679,7 @@ func redactingSinkWriter(sink io.Writer, secrets []string) io.WriteCloser {
 		return nil
 	}
 
-	return newRedactingWriter(sink, secrets)
+	return NewRedactingWriter(sink, secrets)
 }
 
 func closeRedactor(writer io.WriteCloser) {

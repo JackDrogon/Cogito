@@ -183,6 +183,45 @@ func TestInterruptStopsRunningProcess(t *testing.T) {
 	assertFileExists(t, stderrPath)
 }
 
+func TestCommandOutputRedactedBeforeDurableReadback(t *testing.T) {
+	const secret = "supersecret123456"
+
+	t.Setenv("COGITO_TEST_API_KEY", secret)
+
+	tempDir := t.TempDir()
+	stdoutPath := filepath.Join(tempDir, "stdout.log")
+	stderrPath := filepath.Join(tempDir, "stderr.log")
+
+	var captured NormalizerInput
+	supervisor := NewSupervisor()
+	result, err := supervisor.Run(t.Context(), RunRequest{
+		Handle: newHandle("redact-step", "redact-session"),
+		Command: CommandSpec{
+			Path: "/bin/bash",
+			Args: []string{"-c", "echo $COGITO_TEST_API_KEY"},
+		},
+		Timeout:    time.Second,
+		StdoutPath: stdoutPath,
+		StderrPath: stderrPath,
+		Normalizer: ResultNormalizerFunc(func(ctx context.Context, input NormalizerInput) (*provider.StepResult, error) {
+			captured = input
+			return DefaultNormalizer().Normalize(ctx, input)
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	stdoutData, err := os.ReadFile(stdoutPath)
+	if err != nil {
+		t.Fatalf("ReadFile(stdoutPath) error = %v", err)
+	}
+
+	assertExecutorRedactedOutput(t, string(stdoutData), secret)
+	assertExecutorRedactedOutput(t, string(captured.Stdout), secret)
+	assertExecutorRedactedOutput(t, result.OutputText, secret)
+}
+
 func TestHelperProcess(t *testing.T) {
 	if os.Getenv(helperProcessEnv) != "1" {
 		return
@@ -314,5 +353,16 @@ func assertFileExists(t *testing.T, path string) {
 	t.Helper()
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("Stat(%s) error = %v", path, err)
+	}
+}
+
+func assertExecutorRedactedOutput(t *testing.T, output, secret string) {
+	t.Helper()
+
+	if strings.Contains(output, secret) {
+		t.Fatalf("output = %q, must not contain raw secret", output)
+	}
+	if !strings.Contains(output, "***REDACTED***") {
+		t.Fatalf("output = %q, want redaction marker", output)
 	}
 }

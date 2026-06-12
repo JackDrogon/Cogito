@@ -83,6 +83,41 @@ func TestCollectSecretEnvValuesSortsLongestFirst(t *testing.T) {
 	}
 }
 
+func TestRedactSecretStringCollectsEnvironmentPerCall(t *testing.T) {
+	const secret = "envsecret123456"
+
+	t.Setenv("COGITO_TEST_API_KEY", secret)
+
+	got := RedactSecretString("value=" + secret)
+	if got != "value="+redactionMarker {
+		t.Fatalf("RedactSecretString() = %q", got)
+	}
+}
+
+func TestRedactSecretBytesCollectsEnvironmentPerCall(t *testing.T) {
+	const secret = "envsecret654321"
+
+	t.Setenv("COGITO_TEST_TOKEN", secret)
+
+	got := string(RedactSecretBytes([]byte("bytes=" + secret)))
+	if got != "bytes="+redactionMarker {
+		t.Fatalf("RedactSecretBytes() = %q", got)
+	}
+}
+
+func TestNewRedactingWriterUsesExportedConstructor(t *testing.T) {
+	t.Parallel()
+
+	got, err := writeRedacted(t, []string{"exportedsecret"}, []string{"exportedsecret"})
+	if err != nil {
+		t.Fatalf("redacting write: %v", err)
+	}
+
+	if got != redactionMarker {
+		t.Fatalf("redacted output = %q", got)
+	}
+}
+
 func TestStartProcessRedactsLogAndExtraSinkOnly(t *testing.T) {
 	const secret = "supersecretvalue123"
 
@@ -122,7 +157,7 @@ func writeRedacted(t *testing.T, secrets, chunks []string) (string, error) {
 	t.Helper()
 
 	var buf bytes.Buffer
-	writer := newRedactingWriter(&buf, secrets)
+	writer := NewRedactingWriter(&buf, secrets)
 	for _, chunk := range chunks {
 		if _, err := writer.Write([]byte(chunk)); err != nil {
 			return "", err

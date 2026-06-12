@@ -3,6 +3,7 @@ package provider
 import (
 	"bytes"
 	"io"
+	"os"
 	"sort"
 	"strings"
 )
@@ -19,6 +20,31 @@ var secretEnvNameMarkers = []string{
 	"APIKEY",
 	"PRIVATE_KEY",
 	"AUTH",
+}
+
+// CollectEnvSecrets returns secret-looking environment values sorted longest
+// first so overlapping values redact deterministically.
+func CollectEnvSecrets() []string {
+	return collectSecretEnvValues(os.Environ())
+}
+
+// RedactSecretBytes replaces environment-derived secret values in data.
+func RedactSecretBytes(data []byte) []byte {
+	redacted := bytes.Clone(data)
+	for _, secret := range CollectEnvSecrets() {
+		redacted = bytes.ReplaceAll(redacted, []byte(secret), []byte(redactionMarker))
+	}
+
+	return redacted
+}
+
+// RedactSecretString replaces environment-derived secret values in s.
+func RedactSecretString(s string) string {
+	for _, secret := range CollectEnvSecrets() {
+		s = strings.ReplaceAll(s, secret, redactionMarker)
+	}
+
+	return s
 }
 
 func collectSecretEnvValues(environ []string) []string {
@@ -69,7 +95,9 @@ type redactingWriter struct {
 	closed  bool
 }
 
-func newRedactingWriter(target io.Writer, secrets []string) io.WriteCloser {
+// NewRedactingWriter returns a streaming writer that replaces the provided
+// secret values before forwarding bytes to target.
+func NewRedactingWriter(target io.Writer, secrets []string) io.WriteCloser {
 	writer := &redactingWriter{target: target}
 
 	for _, secret := range secrets {

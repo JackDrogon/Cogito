@@ -139,8 +139,10 @@ All three providers currently:
 - expose `structured_output`, `resume`, `interrupt`, and `machine_readable_logs`
 
 Provider process logs are redacted before they reach provider log files or the
-live `ExtraSink` console stream. At `StartProcess` time, the supervisor snapshots
-the parent environment and treats values of variables whose names contain
+live `ExtraSink` console stream. Runtime event persistence and command-step
+stdout/stderr artifacts use the same secret heuristics before writing durable
+audit records. At redaction time, Cogito reads the parent environment and treats
+values of variables whose names contain
 `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `CREDENTIAL`, `API_KEY`, `APIKEY`,
 `PRIVATE_KEY`, or `AUTH` (case-insensitive) as secrets when the value is at least
 8 bytes. Matching output bytes are replaced with `***REDACTED***`, including
