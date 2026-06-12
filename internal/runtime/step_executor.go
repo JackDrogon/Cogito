@@ -377,6 +377,7 @@ func (e *Engine) applyResult(ctx context.Context, request executionResultRequest
 			AttemptID:         request.AttemptID,
 			ProviderSessionID: providerSessionID,
 			FailureSummary:    summary,
+			Usage:             request.Result.Usage,
 		})
 		if err != nil {
 			return err
@@ -451,6 +452,11 @@ type stepRetryParams struct {
 	AttemptID         string
 	ProviderSessionID string
 	FailureSummary    string
+	// Usage carries the failed attempt's provider-reported token/cost so the
+	// retried attempt stays auditable: without it, only the final
+	// StepSucceeded/StepFailed event would carry usage and every retried
+	// attempt's spend would vanish from the event log.
+	Usage *provider.Usage
 }
 
 func (e *Engine) maybeRetryStep(params stepRetryParams) (bool, error) {
@@ -480,6 +486,7 @@ func (e *Engine) maybeRetryStep(params stepRetryParams) (bool, error) {
 		ProviderSessionID: params.ProviderSessionID,
 		Summary:           summary,
 		NormalizedStatus:  string(provider.ExecutionStateFailed),
+		Usage:             params.Usage,
 	}); err != nil {
 		return false, err
 	}

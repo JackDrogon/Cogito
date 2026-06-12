@@ -148,7 +148,9 @@ Executable steps (`agent`, `command`, `verify`, and `commit_check`) can declare
 
 Retry decisions are event-sourced. When a running step fails and its folded
 `attempts` count is still within budget, runtime persists `StepRetried` from
-`running` to `queued` and does not emit any run-level event. The next engine tick
+`running` to `queued` and does not emit any run-level event. The `StepRetried`
+event records the failed attempt's summary and, when the provider reported it,
+its token/cost `usage`, so retried attempts remain fully auditable. The next engine tick
 selects that queued step again in the normal scheduler path and starts a fresh
 attempt. There is no backoff, sleep, or error-code classification beyond driver
 setup failures, which are treated as deterministic configuration errors and are

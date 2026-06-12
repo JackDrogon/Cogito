@@ -205,9 +205,10 @@ func TestReplayProducesSameTransitions(t *testing.T) {
 }
 
 func TestStepRetrySucceedsOnSecondAttempt(t *testing.T) {
+	failedUsage := &provider.Usage{InputTokens: 120, OutputTokens: 34, TotalTokens: 154, CostUSD: 0.0042}
 	fixture := newRuntimeMachineFixture(runtimeMachineFixtureParams{Test: t, Spec: retrySpec(1), Provider: provider.NewFakeProvider(provider.FakeConfig{
 		Scripts: map[string]provider.FakeScript{
-			"attempt-review-01": {Start: provider.FakeSnapshot{State: provider.ExecutionStateFailed, Summary: "first failed"}},
+			"attempt-review-01": {Start: provider.FakeSnapshot{State: provider.ExecutionStateFailed, Summary: "first failed", Usage: failedUsage}},
 			"attempt-review-02": {Start: provider.FakeSnapshot{State: provider.ExecutionStateSucceeded, Summary: "second ok"}},
 		},
 	})})
@@ -224,7 +225,24 @@ func TestStepRetrySucceedsOnSecondAttempt(t *testing.T) {
 		t.Fatalf("review Attempts = %d, want 2", got)
 	}
 
-	assertEventTypeCount(t, mustReadEvents(t, fixture.store), store.EventStepRetried, 1)
+	events := mustReadEvents(t, fixture.store)
+	assertEventTypeCount(t, events, store.EventStepRetried, 1)
+
+	// The retried attempt's spend must stay auditable: the StepRetried event
+	// carries the failed attempt's provider-reported usage.
+	for _, event := range events {
+		if event.Type != store.EventStepRetried {
+			continue
+		}
+
+		if event.Usage == nil {
+			t.Fatal("StepRetried event Usage = nil, want failed attempt usage")
+		}
+
+		if event.Usage.TotalTokens != failedUsage.TotalTokens || event.Usage.CostUSD != failedUsage.CostUSD {
+			t.Fatalf("StepRetried event Usage = %+v, want %+v", event.Usage, failedUsage)
+		}
+	}
 }
 
 func TestStepRetryExhaustionFailsRun(t *testing.T) {

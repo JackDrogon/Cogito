@@ -127,8 +127,11 @@ Terminal step events may also carry provider usage when the adapter reported it:
 ```
 
 `usage` is optional and omitted for old logs and providers that do not report
-token or cost data. Runtime replay treats the field as audit metadata; it is not
-folded into `checkpoint.json`.
+token or cost data. It appears on `StepSucceeded` and `StepFailed` events, and
+on `StepRetried` events carrying the failed attempt's spend — so every attempt
+(including retried ones) stays auditable, not just the final outcome. Runtime
+replay treats the field as audit metadata; it is not folded into
+`checkpoint.json`.
 
 Before runtime appends any event, it redacts environment-derived secret values
 from the human-facing event fields: messages and summaries. Secret values are
