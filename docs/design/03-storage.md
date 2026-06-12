@@ -131,12 +131,19 @@ token or cost data. Runtime replay treats the field as audit metadata; it is not
 folded into `checkpoint.json`.
 
 Before runtime appends any event, it redacts environment-derived secret values
-from event messages, summaries, and structured output payloads. Secret values are
+from the human-facing event fields: messages and summaries. Secret values are
 collected from variables whose names contain `TOKEN`, `SECRET`, `PASSWORD`,
-`PASSWD`, `CREDENTIAL`, `API_KEY`, `APIKEY`, `PRIVATE_KEY`, or `AUTH`
-(case-insensitive) when the value is at least 8 bytes. Matches are replaced with
-`***REDACTED***`; checkpoint state inherits this cleanliness because checkpoints
-fold from the already-redacted event stream.
+`PASSWD`, `CREDENTIAL`, `API_KEY`, `APIKEY`, or `PRIVATE_KEY`
+(case-insensitive) when the value is at least 8 bytes. Matches are replaced
+with `***REDACTED***`; checkpoint summaries inherit this cleanliness because
+checkpoints fold from the already-redacted event stream.
+
+`structured_output` is deliberately NOT redacted: it is the machine channel —
+verify and commit_check consume the agent's normalized result straight from
+the event log, and rewriting those bytes would silently change later step
+behavior whenever a value merely looks secret-shaped. The human-readable
+copies of the same output (provider log files, the live `-v` stream,
+summaries) remain redacted.
 
 ### Event categories used by runtime
 

@@ -136,7 +136,12 @@ func TestEngineStructuredOutputEventAndCheckpointRoundTrip(t *testing.T) {
 	}
 }
 
-func TestEngineRedactsSecretsBeforePersistingEvents(t *testing.T) {
+// TestEngineRedactsSummariesButPreservesStructuredOutput locks the redaction
+// split: human-facing event fields (summaries) are scrubbed, while
+// StructuredOutput — the machine channel consumed by verify/commit_check — is
+// persisted byte-for-byte so secret-shaped values never silently change later
+// step behavior.
+func TestEngineRedactsSummariesButPreservesStructuredOutput(t *testing.T) {
 	const secret = "supersecret123456"
 
 	t.Setenv("COGITO_TEST_API_KEY", secret)
@@ -165,16 +170,32 @@ func TestEngineRedactsSecretsBeforePersistingEvents(t *testing.T) {
 		t.Fatalf("ExecuteAll() error = %v", err)
 	}
 
-	encodedEvents, err := json.Marshal(mustReadEvents(t, fixture.store))
-	if err != nil {
-		t.Fatalf("Marshal(events) error = %v", err)
+	events := mustReadEvents(t, fixture.store)
+	succeeded := findStepSucceededEvent(t, events, "review")
+
+	// Human channel: persisted messages and summaries never carry the raw
+	// secret; the ones that referenced it carry the marker instead.
+	for _, event := range events {
+		if strings.Contains(event.Message, secret) {
+			t.Fatalf("event Message = %q, must not contain raw secret", event.Message)
+		}
+
+		if strings.Contains(event.Data["summary"], secret) {
+			t.Fatalf("event summary = %q, must not contain raw secret", event.Data["summary"])
+		}
 	}
-	assertRedactedDurableText(t, string(encodedEvents), secret)
+
+	assertRedactedDurableText(t, succeeded.Data["summary"], secret)
+
+	// Machine channel: StructuredOutput is preserved byte-for-byte, secret
+	// included, in both the event log and the folded snapshot.
+	if !equalJSON(t, succeeded.StructuredOutput, structuredOutput) {
+		t.Fatalf("StepSucceeded StructuredOutput = %s, want original %s", string(succeeded.StructuredOutput), structuredOutput)
+	}
 
 	got := string(fixture.engine.Snapshot().Steps["review"].StructuredOutput)
-	assertRedactedDurableText(t, got, secret)
-	if !strings.Contains(got, `"summary":"saw ***REDACTED***"`) {
-		t.Fatalf("snapshot StructuredOutput = %s, want redacted JSON string", got)
+	if !strings.Contains(got, `"summary":"saw `+secret+`"`) {
+		t.Fatalf("snapshot StructuredOutput = %s, want original agent bytes", got)
 	}
 }
 

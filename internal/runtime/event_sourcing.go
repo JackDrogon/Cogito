@@ -261,16 +261,17 @@ func (e *Engine) persistEvent(event store.Event) error {
 	return e.store.SaveCheckpoint(checkpointFromSnapshot(e.snapshot, e.executionContext()))
 }
 
+// redactEventPayload scrubs the human-facing event fields (Message, summary)
+// before they become durable. StructuredOutput is deliberately NOT redacted:
+// it is the machine channel — verify and commit_check consume the agent's
+// normalized result (commits, verification commands) straight from the event
+// log, and rewriting those bytes would silently change later step behavior
+// whenever a value merely looks secret-shaped. The human-readable copies of
+// the same output (provider log files, live sink, summaries) remain redacted.
 func redactEventPayload(event *store.Event) {
 	event.Message = provider.RedactSecretString(event.Message)
 	if event.Data != nil {
 		event.Data[dataSummary] = provider.RedactSecretString(event.Data[dataSummary])
-	}
-
-	if event.StructuredOutput != nil {
-		// JSON strings that contain typical environment secret values stay valid
-		// because the replacement marker contains no JSON-special bytes.
-		event.StructuredOutput = json.RawMessage(provider.RedactSecretBytes(event.StructuredOutput))
 	}
 }
 
