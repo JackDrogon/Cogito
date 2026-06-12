@@ -225,6 +225,42 @@ session exists, while adapter-triggered approval happens during provider executi
 - If the run is actively `running`, runtime first attempts to interrupt the active step.
 - `RunCanceled` also marks all non-terminal steps as `canceled` when events are folded.
 
+## Crash recovery
+
+A restored snapshot with `run=Running` and a step still `Running` can only be
+the residue of a crashed Cogito process. A graceful interrupt always persists
+`StepInterrupted` + `RunPaused` before the process exits, so if neither event
+is present the process must have died without a clean shutdown.
+
+`Engine.NeedsCrashRecovery` detects this condition: it returns `true` when the
+snapshot state is `Running` and at least one step is still `Running` in the
+restored snapshot (meaning no live execution exists for it in the current
+engine).
+
+`Engine.RecoverFromCrash(evidence)` durably parks the orphaned step and pauses
+the run so the normal `resume` / `cancel` flows become operable again. It
+synthesizes the exact transitions a graceful interrupt would have produced:
+
+- **Agent steps with a real provider session id** (non-synthetic, i.e. not
+  prefixed `session-`) are parked resumable via `StepInterrupted` with
+  `Resumable=true`, preserving `attempt_id` and `provider_session_id` so a
+  later `resume` re-attaches to the same provider session.
+- **All other steps** — commands, approvals, verify/commit_check, and agent
+  steps that never reported a real session (synthetic `session-...` ids) — are
+  requeued for a clean restart via `StepRetried`, which clears `attempt_id`,
+  `provider_session_id`, and `resumable`.
+
+After parking the step, `RecoverFromCrash` persists `RunPaused` with a
+`"run paused for crash recovery: <evidence>"` message. The `evidence` string
+records what happened to the orphaned provider process (e.g. which PIDs were
+terminated) and lands in the durable event summaries.
+
+`RecoverFromCrash` is called by the app layer (`recoverCrashedRun`) as part of
+`resume` and `cancel` handling, after orphan provider processes have been reaped
+(see `05-providers.md`, "Orphan process pidfiles"). The reap outcome becomes the
+`evidence` argument so the durable recovery events carry a complete record of
+what was cleaned up.
+
 ## Snapshot Contents
 
 The in-memory `Snapshot` stores:

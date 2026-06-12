@@ -454,6 +454,93 @@ func (e *Engine) Pause(message string) error {
 	}
 }
 
+// NeedsCrashRecovery reports whether the restored snapshot describes a run
+// that died mid-execution: the run is still Running with a step still
+// Running, yet this engine holds no live execution for it. A graceful
+// interrupt always persists StepInterrupted + RunPaused before the process
+// exits, so this state can only be the residue of a crashed cogito process.
+func (e *Engine) NeedsCrashRecovery() bool {
+	if e.snapshot.State != RunStateRunning {
+		return false
+	}
+
+	return e.firstRunningStepID() != ""
+}
+
+func (e *Engine) firstRunningStepID() string {
+	for _, stepID := range e.compiled.TopologicalOrder {
+		if e.snapshot.Steps[stepID].State == StepStateRunning {
+			return stepID
+		}
+	}
+
+	return ""
+}
+
+// RecoverFromCrash parks the crashed step durably and pauses the run, so a
+// post-crash run becomes operable again through the normal resume/cancel
+// flows. It synthesizes the exact transitions a graceful interrupt would have
+// produced: agent steps with a real provider session are parked resumable
+// (StepInterrupted) so resume re-attaches, while every other step — commands,
+// approvals, verify/commit_check, and agent steps that never reported a real
+// session (synthetic "session-..." ids) — is requeued for a clean restart
+// (StepRetried). The evidence string records what happened to the orphaned
+// provider process and lands in the durable summaries.
+func (e *Engine) RecoverFromCrash(evidence string) error {
+	if err := e.ensureInitialized(); err != nil {
+		return err
+	}
+
+	if !e.NeedsCrashRecovery() {
+		return newError(ErrorCodeState, fmt.Sprintf("no crash recovery needed from run state %q", e.snapshot.State))
+	}
+
+	stepID := e.firstRunningStepID()
+
+	step, err := e.lookupStep(stepID)
+	if err != nil {
+		return err
+	}
+
+	evidence = strings.TrimSpace(evidence)
+	if evidence == "" {
+		evidence = "no live provider process found"
+	}
+
+	stepSnapshot := e.snapshot.Steps[stepID]
+	resumable := step.Kind == workflow.StepKindAgent &&
+		strings.TrimSpace(stepSnapshot.AttemptID) != "" &&
+		strings.TrimSpace(stepSnapshot.ProviderSessionID) != "" &&
+		!strings.HasPrefix(stepSnapshot.ProviderSessionID, "session-")
+
+	transition := StepTransitionParams{
+		EventType:         store.EventStepRetried,
+		StepID:            stepID,
+		From:              StepStateRunning,
+		To:                StepStateQueued,
+		AttemptID:         stepSnapshot.AttemptID,
+		ProviderSessionID: stepSnapshot.ProviderSessionID,
+		Summary:           fmt.Sprintf("recovered after crash: %s; restarting step", evidence),
+		NormalizedStatus:  string(provider.ExecutionStateInterrupted),
+	}
+	if resumable {
+		transition.EventType = store.EventStepInterrupted
+		transition.Summary = fmt.Sprintf("recovered after crash: %s; provider session preserved for resume", evidence)
+		transition.Resumable = true
+	}
+
+	if err := e.persistStepTransition(transition); err != nil {
+		return err
+	}
+
+	return e.persistRunTransition(RunTransitionParams{
+		EventType: store.EventRunPaused,
+		From:      RunStateRunning,
+		To:        RunStatePaused,
+		Message:   "run paused for crash recovery: " + evidence,
+	})
+}
+
 // Resume transitions the run from paused to running and re-queues any steps
 // that were ready before the pause. An empty message defaults to "run resumed".
 func (e *Engine) Resume(message string) error {

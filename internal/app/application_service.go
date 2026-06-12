@@ -228,7 +228,7 @@ func (s applicationService) ResumeRun(ctx context.Context, input ResumeRunInput)
 		return ResumeRunOutput{}, err
 	}
 
-	reapReport, err := provider.ReapOrphans(session.store.Layout().RunDir)
+	reapReport, err := recoverCrashedRun(session)
 	if err != nil {
 		return ResumeRunOutput{}, err
 	}
@@ -276,7 +276,7 @@ func (s applicationService) CancelRun(ctx context.Context, input CancelRunInput)
 		return CancelRunOutput{}, err
 	}
 
-	reapReport, err := provider.ReapOrphans(session.store.Layout().RunDir)
+	reapReport, err := recoverCrashedRun(session)
 	if err != nil {
 		return CancelRunOutput{}, err
 	}
@@ -286,6 +286,46 @@ func (s applicationService) CancelRun(ctx context.Context, input CancelRunInput)
 	}
 
 	return CancelRunOutput{Message: renderRunMessage(reapReport, "run canceled")}, nil
+}
+
+// recoverCrashedRun prepares a run for resume/cancel. Orphan reaping is
+// unconditional defense in depth: no engine action may proceed while a stray
+// provider process from an earlier attempt is still mutating the repository
+// (resume would otherwise re-attach and run TWO agents concurrently). When
+// the snapshot shows a crashed run (step still Running with no live engine),
+// the reap outcome is additionally recorded through the engine's durable
+// RecoverFromCrash transitions (StepInterrupted/StepRetried + RunPaused) so
+// the recovery never bypasses the event log and the run becomes operable
+// again.
+func recoverCrashedRun(session existingRunSession) (provider.ReapReport, error) {
+	report, err := provider.ReapOrphans(session.store.Layout().RunDir)
+	if err != nil {
+		return provider.ReapReport{}, err
+	}
+
+	if !session.engine.NeedsCrashRecovery() {
+		return report, nil
+	}
+
+	if err := session.engine.RecoverFromCrash(crashEvidence(report)); err != nil {
+		return provider.ReapReport{}, err
+	}
+
+	return report, nil
+}
+
+// crashEvidence summarizes the reap outcome for the durable recovery events.
+func crashEvidence(report provider.ReapReport) string {
+	if len(report.Reaped) == 0 {
+		return ""
+	}
+
+	parts := make([]string, 0, len(report.Reaped))
+	for _, orphan := range report.Reaped {
+		parts = append(parts, fmt.Sprintf("terminated orphan provider process pid %d (step %s)", orphan.Record.PID, orphan.StepID))
+	}
+
+	return strings.Join(parts, "; ")
 }
 
 func renderRunMessage(report provider.ReapReport, final string) string {

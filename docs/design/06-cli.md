@@ -117,6 +117,12 @@ Behavior:
 
 - opens the existing run session
 - reaps any confirmed orphan provider processes recorded under the run dir
+  (unconditional defense in depth — see `05-providers.md`)
+- when the restored snapshot shows a crashed run (run still `Running` with a
+  step still `Running`), persists the durable crash recovery transitions
+  (`StepInterrupted` or `StepRetried` + `RunPaused`) via
+  `engine.RecoverFromCrash` before resuming; the reap outcome is recorded as
+  evidence in those events (see `04-runtime.md`, "Crash recovery")
 - calls `engine.Resume("")`
 - continues execution until the run settles again
 
@@ -151,6 +157,12 @@ Behavior:
 
 - opens the existing run session
 - reaps any confirmed orphan provider processes recorded under the run dir
+  (unconditional defense in depth — see `05-providers.md`)
+- when the restored snapshot shows a crashed run (run still `Running` with a
+  step still `Running`), persists the durable crash recovery transitions
+  (`StepInterrupted` or `StepRetried` + `RunPaused`) via
+  `engine.RecoverFromCrash` before canceling; the reap outcome is recorded as
+  evidence in those events (see `04-runtime.md`, "Crash recovery")
 - asks runtime to cancel the run
 - if a step is actively running, runtime first attempts interruption
 

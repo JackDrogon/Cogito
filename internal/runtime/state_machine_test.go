@@ -1917,3 +1917,295 @@ func findApprovalRequestedEvent(t *testing.T, events []store.Event, stepID strin
 	t.Fatalf("approval requested event for %s not found", stepID)
 	return store.Event{}
 }
+
+// TestRecoverFromCrashParksResumableAgentStep verifies that an agent step with
+// a real (non-synthetic) provider session is parked resumable via
+// EventStepInterrupted, and the run is paused via EventRunPaused.
+func TestRecoverFromCrashParksResumableAgentStep(t *testing.T) {
+	compiled := compileSpec(t, &workflow.Spec{
+		Metadata: workflow.Metadata{Name: "crash-recovery-agent"},
+		Steps: []workflow.StepSpec{{
+			ID:    "review",
+			Kind:  workflow.StepKindAgent,
+			Agent: &workflow.AgentStepSpec{Agent: "fake", Prompt: "p"},
+		}},
+	})
+
+	runStore, err := store.Open(filepath.Join(t.TempDir(), "runs"), "run-crash-agent")
+	if err != nil {
+		t.Fatalf("store.Open() error = %v", err)
+	}
+
+	const realSessionID = "9f4d2c1a-aaaa-bbbb-cccc-111122223333"
+	const attemptID = "attempt-review-01"
+
+	for _, event := range []store.Event{
+		buildTestEvent(testEventParams{Sequence: 1, EventType: store.EventRunCreated, RunID: "run-crash-agent", Data: eventData(eventDataParams{From: "", To: string(RunStatePending), Summary: "run created"})}),
+		buildTestEvent(testEventParams{Sequence: 2, EventType: store.EventRunStarted, RunID: "run-crash-agent", Data: eventData(eventDataParams{From: string(RunStatePending), To: string(RunStateRunning), Summary: "run started"})}),
+		buildTestEvent(testEventParams{Sequence: 3, EventType: store.EventStepQueued, RunID: "run-crash-agent", StepID: "review", Data: eventData(eventDataParams{From: string(StepStatePending), To: string(StepStateQueued), Summary: "step ready"})}),
+		buildTestEvent(testEventParams{Sequence: 4, EventType: store.EventStepStarted, RunID: "run-crash-agent", StepID: "review", AttemptID: attemptID, Data: eventData(eventDataParams{From: string(StepStateQueued), To: string(StepStateRunning), Summary: "review started", ProviderSessionID: realSessionID})}),
+	} {
+		if _, err := runStore.AppendEvent(event); err != nil {
+			t.Fatalf("AppendEvent() error = %v", err)
+		}
+	}
+
+	engine, err := NewEngine("run-crash-agent", compiled, MachineDependencies{Store: runStore})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+
+	if !engine.NeedsCrashRecovery() {
+		t.Fatal("NeedsCrashRecovery() = false, want true for running step in running run")
+	}
+
+	evidence := "terminated orphan provider process pid 4242 (step review)"
+	if err := engine.RecoverFromCrash(evidence); err != nil {
+		t.Fatalf("RecoverFromCrash() error = %v", err)
+	}
+
+	snap := engine.Snapshot()
+	if snap.State != RunStatePaused {
+		t.Fatalf("Snapshot().State = %q, want %q", snap.State, RunStatePaused)
+	}
+
+	review := snap.Steps["review"]
+	if review.State != StepStateQueued {
+		t.Fatalf("review.State = %q, want %q", review.State, StepStateQueued)
+	}
+	if !review.Resumable {
+		t.Fatal("review.Resumable = false, want true (real session preserved)")
+	}
+	if review.AttemptID != attemptID {
+		t.Fatalf("review.AttemptID = %q, want %q", review.AttemptID, attemptID)
+	}
+	if review.ProviderSessionID != realSessionID {
+		t.Fatalf("review.ProviderSessionID = %q, want %q", review.ProviderSessionID, realSessionID)
+	}
+
+	events := mustReadEvents(t, runStore)
+	n := len(events)
+	if n < 2 {
+		t.Fatalf("expected at least 2 events after recovery, got %d", n)
+	}
+	if got := events[n-2].Type; got != store.EventStepInterrupted {
+		t.Fatalf("second-to-last event = %q, want %q", got, store.EventStepInterrupted)
+	}
+	if got := events[n-1].Type; got != store.EventRunPaused {
+		t.Fatalf("last event = %q, want %q", got, store.EventRunPaused)
+	}
+
+	interruptedEvent := events[n-2]
+	summary := interruptedEvent.Data[dataSummary]
+	if !strings.Contains(summary, "recovered after crash") {
+		t.Fatalf("StepInterrupted summary = %q, want to contain %q", summary, "recovered after crash")
+	}
+	if !strings.Contains(summary, "pid 4242") {
+		t.Fatalf("StepInterrupted summary = %q, want to contain pid text", summary)
+	}
+}
+
+// TestRecoverFromCrashRequeuesCommandStepFresh verifies that a command step is
+// requeued via EventStepRetried (not Interrupted), clearing AttemptID and
+// ProviderSessionID.
+func TestRecoverFromCrashRequeuesCommandStepFresh(t *testing.T) {
+	compiled := compileSpec(t, &workflow.Spec{
+		Metadata: workflow.Metadata{Name: "crash-recovery-command"},
+		Steps: []workflow.StepSpec{{
+			ID:      "prepare",
+			Kind:    workflow.StepKindCommand,
+			Command: &workflow.CommandStepSpec{Command: "echo prepare"},
+		}},
+	})
+
+	runStore, err := store.Open(filepath.Join(t.TempDir(), "runs"), "run-crash-cmd")
+	if err != nil {
+		t.Fatalf("store.Open() error = %v", err)
+	}
+
+	for _, event := range []store.Event{
+		buildTestEvent(testEventParams{Sequence: 1, EventType: store.EventRunCreated, RunID: "run-crash-cmd", Data: eventData(eventDataParams{From: "", To: string(RunStatePending), Summary: "run created"})}),
+		buildTestEvent(testEventParams{Sequence: 2, EventType: store.EventRunStarted, RunID: "run-crash-cmd", Data: eventData(eventDataParams{From: string(RunStatePending), To: string(RunStateRunning), Summary: "run started"})}),
+		buildTestEvent(testEventParams{Sequence: 3, EventType: store.EventStepQueued, RunID: "run-crash-cmd", StepID: "prepare", Data: eventData(eventDataParams{From: string(StepStatePending), To: string(StepStateQueued), Summary: "step ready"})}),
+		buildTestEvent(testEventParams{Sequence: 4, EventType: store.EventStepStarted, RunID: "run-crash-cmd", StepID: "prepare", AttemptID: "attempt-prepare-01", Data: eventData(eventDataParams{From: string(StepStateQueued), To: string(StepStateRunning), Summary: "prepare started", ProviderSessionID: "command-prepare-01"})}),
+	} {
+		if _, err := runStore.AppendEvent(event); err != nil {
+			t.Fatalf("AppendEvent() error = %v", err)
+		}
+	}
+
+	engine, err := NewEngine("run-crash-cmd", compiled, MachineDependencies{Store: runStore})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+
+	if !engine.NeedsCrashRecovery() {
+		t.Fatal("NeedsCrashRecovery() = false, want true")
+	}
+
+	if err := engine.RecoverFromCrash("orphaned command process"); err != nil {
+		t.Fatalf("RecoverFromCrash() error = %v", err)
+	}
+
+	snap := engine.Snapshot()
+	if snap.State != RunStatePaused {
+		t.Fatalf("Snapshot().State = %q, want %q", snap.State, RunStatePaused)
+	}
+
+	prepare := snap.Steps["prepare"]
+	if prepare.State != StepStateQueued {
+		t.Fatalf("prepare.State = %q, want %q", prepare.State, StepStateQueued)
+	}
+	if prepare.Resumable {
+		t.Fatal("prepare.Resumable = true, want false for command step")
+	}
+	if prepare.AttemptID != "" {
+		t.Fatalf("prepare.AttemptID = %q, want empty after StepRetried", prepare.AttemptID)
+	}
+	if prepare.ProviderSessionID != "" {
+		t.Fatalf("prepare.ProviderSessionID = %q, want empty after StepRetried", prepare.ProviderSessionID)
+	}
+
+	events := mustReadEvents(t, runStore)
+	n := len(events)
+	if n < 2 {
+		t.Fatalf("expected at least 2 events after recovery, got %d", n)
+	}
+	if got := events[n-2].Type; got != store.EventStepRetried {
+		t.Fatalf("second-to-last event = %q, want %q", got, store.EventStepRetried)
+	}
+	if got := events[n-1].Type; got != store.EventRunPaused {
+		t.Fatalf("last event = %q, want %q", got, store.EventRunPaused)
+	}
+}
+
+// TestRecoverFromCrashRequeuesAgentStepWithSyntheticSession verifies that an
+// agent step whose ProviderSessionID has the synthetic "session-" prefix is
+// treated as non-resumable and requeued via EventStepRetried.
+func TestRecoverFromCrashRequeuesAgentStepWithSyntheticSession(t *testing.T) {
+	compiled := compileSpec(t, &workflow.Spec{
+		Metadata: workflow.Metadata{Name: "crash-recovery-synthetic"},
+		Steps: []workflow.StepSpec{{
+			ID:    "review",
+			Kind:  workflow.StepKindAgent,
+			Agent: &workflow.AgentStepSpec{Agent: "fake", Prompt: "p"},
+		}},
+	})
+
+	runStore, err := store.Open(filepath.Join(t.TempDir(), "runs"), "run-crash-synthetic")
+	if err != nil {
+		t.Fatalf("store.Open() error = %v", err)
+	}
+
+	for _, event := range []store.Event{
+		buildTestEvent(testEventParams{Sequence: 1, EventType: store.EventRunCreated, RunID: "run-crash-synthetic", Data: eventData(eventDataParams{From: "", To: string(RunStatePending), Summary: "run created"})}),
+		buildTestEvent(testEventParams{Sequence: 2, EventType: store.EventRunStarted, RunID: "run-crash-synthetic", Data: eventData(eventDataParams{From: string(RunStatePending), To: string(RunStateRunning), Summary: "run started"})}),
+		buildTestEvent(testEventParams{Sequence: 3, EventType: store.EventStepQueued, RunID: "run-crash-synthetic", StepID: "review", Data: eventData(eventDataParams{From: string(StepStatePending), To: string(StepStateQueued), Summary: "step ready"})}),
+		buildTestEvent(testEventParams{Sequence: 4, EventType: store.EventStepStarted, RunID: "run-crash-synthetic", StepID: "review", AttemptID: "attempt-review-01", Data: eventData(eventDataParams{From: string(StepStateQueued), To: string(StepStateRunning), Summary: "review started", ProviderSessionID: "session-review-01"})}),
+	} {
+		if _, err := runStore.AppendEvent(event); err != nil {
+			t.Fatalf("AppendEvent() error = %v", err)
+		}
+	}
+
+	engine, err := NewEngine("run-crash-synthetic", compiled, MachineDependencies{Store: runStore})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+
+	if !engine.NeedsCrashRecovery() {
+		t.Fatal("NeedsCrashRecovery() = false, want true")
+	}
+
+	if err := engine.RecoverFromCrash("orphaned agent with synthetic session"); err != nil {
+		t.Fatalf("RecoverFromCrash() error = %v", err)
+	}
+
+	snap := engine.Snapshot()
+	if snap.State != RunStatePaused {
+		t.Fatalf("Snapshot().State = %q, want %q", snap.State, RunStatePaused)
+	}
+
+	review := snap.Steps["review"]
+	if review.State != StepStateQueued {
+		t.Fatalf("review.State = %q, want %q", review.State, StepStateQueued)
+	}
+	if review.Resumable {
+		t.Fatal("review.Resumable = true, want false for synthetic session")
+	}
+	if review.AttemptID != "" {
+		t.Fatalf("review.AttemptID = %q, want empty after StepRetried", review.AttemptID)
+	}
+	if review.ProviderSessionID != "" {
+		t.Fatalf("review.ProviderSessionID = %q, want empty after StepRetried", review.ProviderSessionID)
+	}
+
+	events := mustReadEvents(t, runStore)
+	n := len(events)
+	if n < 2 {
+		t.Fatalf("expected at least 2 events after recovery, got %d", n)
+	}
+	if got := events[n-2].Type; got != store.EventStepRetried {
+		t.Fatalf("second-to-last event = %q, want %q", got, store.EventStepRetried)
+	}
+	if got := events[n-1].Type; got != store.EventRunPaused {
+		t.Fatalf("last event = %q, want %q", got, store.EventRunPaused)
+	}
+}
+
+// TestRecoverFromCrashRejectsHealthyRun verifies that NeedsCrashRecovery
+// returns false and RecoverFromCrash returns an ErrorCodeState error when the
+// run is already paused (healthy, no crash).
+func TestRecoverFromCrashRejectsHealthyRun(t *testing.T) {
+	compiled := compileSpec(t, &workflow.Spec{
+		Metadata: workflow.Metadata{Name: "crash-recovery-healthy"},
+		Steps: []workflow.StepSpec{{
+			ID:    "review",
+			Kind:  workflow.StepKindAgent,
+			Agent: &workflow.AgentStepSpec{Agent: "fake", Prompt: "p"},
+		}},
+	})
+
+	runStore, err := store.Open(filepath.Join(t.TempDir(), "runs"), "run-crash-healthy")
+	if err != nil {
+		t.Fatalf("store.Open() error = %v", err)
+	}
+
+	// Seed a gracefully-paused run: RunCreated → RunStarted → StepQueued →
+	// StepStarted → StepInterrupted → RunPaused.
+	for _, event := range []store.Event{
+		buildTestEvent(testEventParams{Sequence: 1, EventType: store.EventRunCreated, RunID: "run-crash-healthy", Data: eventData(eventDataParams{From: "", To: string(RunStatePending), Summary: "run created"})}),
+		buildTestEvent(testEventParams{Sequence: 2, EventType: store.EventRunStarted, RunID: "run-crash-healthy", Data: eventData(eventDataParams{From: string(RunStatePending), To: string(RunStateRunning), Summary: "run started"})}),
+		buildTestEvent(testEventParams{Sequence: 3, EventType: store.EventStepQueued, RunID: "run-crash-healthy", StepID: "review", Data: eventData(eventDataParams{From: string(StepStatePending), To: string(StepStateQueued), Summary: "step ready"})}),
+		buildTestEvent(testEventParams{Sequence: 4, EventType: store.EventStepStarted, RunID: "run-crash-healthy", StepID: "review", AttemptID: "attempt-review-01", Data: eventData(eventDataParams{From: string(StepStateQueued), To: string(StepStateRunning), Summary: "review started", ProviderSessionID: "session-review-01"})}),
+		buildTestEvent(testEventParams{Sequence: 5, EventType: store.EventStepInterrupted, RunID: "run-crash-healthy", StepID: "review", AttemptID: "attempt-review-01", Data: eventData(eventDataParams{From: string(StepStateRunning), To: string(StepStateQueued), Summary: "graceful interrupt", ProviderSessionID: "session-review-01"})}),
+		buildTestEvent(testEventParams{Sequence: 6, EventType: store.EventRunPaused, RunID: "run-crash-healthy", Data: eventData(eventDataParams{From: string(RunStateRunning), To: string(RunStatePaused), Summary: "run paused"})}),
+	} {
+		if _, err := runStore.AppendEvent(event); err != nil {
+			t.Fatalf("AppendEvent() error = %v", err)
+		}
+	}
+
+	engine, err := NewEngine("run-crash-healthy", compiled, MachineDependencies{Store: runStore})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+
+	if engine.NeedsCrashRecovery() {
+		t.Fatal("NeedsCrashRecovery() = true, want false for gracefully-paused run")
+	}
+
+	recoverErr := engine.RecoverFromCrash("x")
+	if recoverErr == nil {
+		t.Fatal("RecoverFromCrash() error = nil, want ErrorCodeState error")
+	}
+
+	var runtimeErr *Error
+	if !errors.As(recoverErr, &runtimeErr) {
+		t.Fatalf("error type = %T, want *runtime.Error", recoverErr)
+	}
+
+	if runtimeErr.Code != ErrorCodeState {
+		t.Fatalf("error code = %q, want %q", runtimeErr.Code, ErrorCodeState)
+	}
+}

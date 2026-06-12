@@ -173,8 +173,19 @@ not events, checkpoints, or artifacts. `StartProcess` writes them after
 them on every normal completion path, including cancellation.
 
 On a later `cogito resume` or `cogito cancel`, the app calls
-`provider.ReapOrphans(runDir)` before continuing runtime work. Reaping first
-classifies each pidfile:
+`provider.ReapOrphans(runDir)` unconditionally before any runtime action.
+Reaping is defense in depth: no engine operation may proceed while a stray
+provider process from an earlier attempt is still mutating the repository.
+When the restored snapshot additionally shows a crashed run (run still
+`Running` with a step still `Running`), the reap outcome is passed as evidence
+to `engine.RecoverFromCrash`, which records it in durable `StepInterrupted` /
+`StepRetried` + `RunPaused` events so the recovery is auditable and the run
+becomes operable again through the normal resume/cancel flows (see
+`04-runtime.md`, "Crash recovery"). `cogito status` uses
+`provider.FindOrphans(runDir)` and is read-only: it reports alive,
+identity-matched orphans without reaping or recording anything.
+
+Reaping first classifies each pidfile:
 
 | Process state | Identity check | Action |
 |---------------|----------------|--------|
