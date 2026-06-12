@@ -167,6 +167,50 @@ func TestStartLogPathReceivesStreamedOutput(t *testing.T) {
 	}
 }
 
+func TestStartLogPathCapDoesNotCapResultStdout(t *testing.T) {
+	t.Parallel()
+
+	const (
+		maxLogBytes = int64(4096)
+		outputBytes = 8192
+	)
+
+	logPath := filepath.Join(t.TempDir(), "stream.log")
+	session, err := StartProcess(context.Background(), ProcessRequest{
+		Binary:      "/bin/bash",
+		Args:        []string{"-c", "yes x | head -c 8192"},
+		LogPath:     logPath,
+		MaxLogBytes: maxLogBytes,
+	})
+	if err != nil {
+		t.Fatalf("StartProcess returned error: %v", err)
+	}
+
+	result := awaitResult(t, session, 2*time.Second)
+	if result.Err != nil {
+		t.Fatalf("ProcessResult.Err = %v, want nil", result.Err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0", result.ExitCode)
+	}
+	if got := len(result.Stdout); got != outputBytes {
+		t.Fatalf("len(ProcessResult.Stdout) = %d, want %d", got, outputBytes)
+	}
+
+	contents, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log file: %v", err)
+	}
+
+	marker := truncationMarker(maxLogBytes)
+	if got, want := len(contents), int(maxLogBytes)+len(marker); got != want {
+		t.Fatalf("log size = %d, want %d", got, want)
+	}
+	if !strings.HasSuffix(string(contents), marker) {
+		t.Fatalf("log suffix = %q, want truncation marker", string(contents[len(contents)-len(marker):]))
+	}
+}
+
 func TestStartPIDFileExistsWhileRunningAndRemovedAfterDone(t *testing.T) {
 	t.Parallel()
 

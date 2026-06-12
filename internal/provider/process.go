@@ -86,6 +86,12 @@ type ProcessRequest struct {
 	// process runs. Parent directories are created with 0o700 if missing.
 	LogPath string
 
+	// MaxLogBytes caps the durable LogPath artifact after redaction. Values <= 0
+	// use DefaultMaxLogBytes; there is intentionally no unlimited mode. ExtraSink
+	// and ProcessResult stdout/stderr buffers are not capped so live output,
+	// session-id scanning, and structured result parsing still see full bytes.
+	MaxLogBytes int64
+
 	// PIDFile, when non-empty, receives a machine-local pid record for orphan
 	// detection. Write/remove failures are warn-only and never affect execution.
 	PIDFile string
@@ -249,6 +255,7 @@ func StartProcess(parentCtx context.Context, req ProcessRequest) (*Session, erro
 		Stdout:      pipes.stdout,
 		Stderr:      pipes.stderr,
 		LogFile:     logFile,
+		MaxLogBytes: settings.maxLogBytes,
 		LogPath:     req.LogPath,
 		PIDFile:     req.PIDFile,
 		ExtraSink:   req.ExtraSink,
@@ -268,9 +275,10 @@ func StartProcess(parentCtx context.Context, req ProcessRequest) (*Session, erro
 }
 
 type startSettings struct {
-	pattern   *regexp.Regexp
-	exitGrace time.Duration
-	killGrace time.Duration
+	pattern     *regexp.Regexp
+	exitGrace   time.Duration
+	killGrace   time.Duration
+	maxLogBytes int64
 }
 
 func applyDefaults(req ProcessRequest) startSettings {
@@ -289,7 +297,12 @@ func applyDefaults(req ProcessRequest) startSettings {
 		killGrace = DefaultKillGrace
 	}
 
-	return startSettings{pattern: pattern, exitGrace: exitGrace, killGrace: killGrace}
+	maxLogBytes := req.MaxLogBytes
+	if maxLogBytes <= 0 {
+		maxLogBytes = DefaultMaxLogBytes
+	}
+
+	return startSettings{pattern: pattern, exitGrace: exitGrace, killGrace: killGrace, maxLogBytes: maxLogBytes}
 }
 
 func openLogFile(logPath string) (*os.File, error) {
@@ -447,6 +460,7 @@ type superviseParams struct {
 	Stdout      io.ReadCloser
 	Stderr      io.ReadCloser
 	LogFile     *os.File
+	MaxLogBytes int64
 	LogPath     string
 	PIDFile     string
 	ExtraSink   io.Writer
@@ -470,6 +484,8 @@ func supervise(params superviseParams) {
 		lastOutput atomic.Int64
 	)
 
+	logWriter := cappedLogWriter(params.LogFile, &logMu, params.MaxLogBytes)
+
 	lastOutput.Store(time.Now().UnixNano())
 
 	if params.Stdin != nil {
@@ -485,8 +501,7 @@ func supervise(params superviseParams) {
 
 		teeAndScan(params.Stdout, teeParams{
 			Buffer:     &stdoutBuf,
-			LogFile:    params.LogFile,
-			LogMu:      &logMu,
+			LogWriter:  logWriter,
 			ExtraSink:  params.ExtraSink,
 			Secrets:    params.Secrets,
 			Pattern:    params.Pattern,
@@ -500,8 +515,7 @@ func supervise(params superviseParams) {
 
 		teeAndScan(params.Stderr, teeParams{
 			Buffer:     &stderrBuf,
-			LogFile:    params.LogFile,
-			LogMu:      &logMu,
+			LogWriter:  logWriter,
 			ExtraSink:  params.ExtraSink,
 			Secrets:    params.Secrets,
 			Session:    params.Session,
@@ -528,7 +542,7 @@ func supervise(params superviseParams) {
 			KillGrace:   params.KillGrace,
 			ReadersDone: readersDone,
 			Interrupted: &interrupted,
-			WarnStuck:   func() { warnKillTimeout(params.LogFile, &logMu, params.WarningSink) },
+			WarnStuck:   func() { warnKillTimeout(logWriter, params.WarningSink) },
 		})
 
 		startWatchdog(watchdogParams{
@@ -599,12 +613,11 @@ func writePrompt(stdin io.WriteCloser, prompt string) {
 }
 
 // teeParams groups the per-stream destinations for teeAndScan. Stdout and
-// stderr each get their own Buffer but share LogFile/LogMu/ExtraSink; only the
+// stderr each get their own Buffer but share LogWriter/ExtraSink; only the
 // stdout stream carries a Pattern for session-id scraping.
 type teeParams struct {
 	Buffer     *bytes.Buffer
-	LogFile    *os.File
-	LogMu      *sync.Mutex
+	LogWriter  io.Writer
 	ExtraSink  io.Writer
 	Secrets    []string
 	Pattern    *regexp.Regexp
@@ -612,13 +625,13 @@ type teeParams struct {
 	LastOutput *atomic.Int64
 }
 
-// teeAndScan reads src in 4KB chunks, appends to Buf, LogFile (under LogMu),
+// teeAndScan reads src in 4KB chunks, appends to Buf, LogWriter (under LogMu),
 // and ExtraSink (live output, errors ignored), and matches against Pattern
 // (when non-nil) to update Session.sessionID. Returns when src returns any
 // error including io.EOF.
 func teeAndScan(src io.Reader, params teeParams) {
 	buf, pattern, session := params.Buffer, params.Pattern, params.Session
-	logWriter := redactingLogWriter(params.LogFile, params.LogMu, params.Secrets)
+	logWriter := redactingLogWriter(params.LogWriter, params.Secrets)
 	sinkWriter := redactingSinkWriter(params.ExtraSink, params.Secrets)
 	chunk := make([]byte, teeChunkSize)
 
@@ -637,7 +650,7 @@ func teeAndScan(src io.Reader, params teeParams) {
 			data := chunk[:bytesRead]
 			buf.Write(data)
 
-			if params.LogFile != nil {
+			if params.LogWriter != nil {
 				_, _ = logWriter.Write(data)
 			}
 
@@ -666,12 +679,20 @@ func teeAndScan(src io.Reader, params teeParams) {
 	}
 }
 
-func redactingLogWriter(logFile *os.File, logMu *sync.Mutex, secrets []string) io.WriteCloser {
+func cappedLogWriter(logFile *os.File, logMu *sync.Mutex, maxLogBytes int64) io.Writer {
 	if logFile == nil {
 		return nil
 	}
 
-	return NewRedactingWriter(lockedWriter{Writer: logFile, Mu: logMu}, secrets)
+	return lockedWriter{Writer: NewCappedWriter(logFile, maxLogBytes), Mu: logMu}
+}
+
+func redactingLogWriter(target io.Writer, secrets []string) io.WriteCloser {
+	if target == nil {
+		return nil
+	}
+
+	return NewRedactingWriter(target, secrets)
 }
 
 func redactingSinkWriter(sink io.Writer, secrets []string) io.WriteCloser {
@@ -881,21 +902,19 @@ func signalOnCancel(params signalParams) {
 }
 
 // warnKillTimeout records that a process survived the post-SIGKILL grace window.
-// When a log file is present it writes there under logMu (the same lock the IO
-// tee goroutines use); the file is guaranteed open because supervise closes it
-// only after the IO pipes drain, which cannot happen until the process exits.
+// When a log writer is present it writes there through the same capped writer
+// the IO tee goroutines use; the file is guaranteed open because supervise
+// closes it only after the IO pipes drain, which cannot happen until the process
+// exits.
 //
 // When there is no log file the warning is routed to the caller-provided sink,
 // and when that is also nil it falls back to stderr — so a stuck process is
 // never silently ignored just because the caller passed an empty LogPath.
-func warnKillTimeout(logFile *os.File, logMu *sync.Mutex, sink func(string)) {
+func warnKillTimeout(logWriter io.Writer, sink func(string)) {
 	const message = "[runner] WARNING: process did not exit after SIGKILL grace; giving up"
 
-	if logFile != nil {
-		logMu.Lock()
-		defer logMu.Unlock()
-
-		_, _ = logFile.WriteString("\n" + message + "\n")
+	if logWriter != nil {
+		_, _ = io.WriteString(logWriter, "\n"+message+"\n")
 
 		return
 	}

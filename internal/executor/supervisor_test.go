@@ -222,6 +222,56 @@ func TestCommandOutputRedactedBeforeDurableReadback(t *testing.T) {
 	assertExecutorRedactedOutput(t, result.OutputText, secret)
 }
 
+func TestCommandOutputDurableFilesAreCappedBeforeReadback(t *testing.T) {
+	t.Parallel()
+
+	const maxLogBytes = int64(4096)
+
+	tempDir := t.TempDir()
+	stdoutPath := filepath.Join(tempDir, "stdout.log")
+	stderrPath := filepath.Join(tempDir, "stderr.log")
+
+	var captured NormalizerInput
+	supervisor := NewSupervisor()
+	result, err := supervisor.Run(t.Context(), RunRequest{
+		Handle: newHandle("capped-step", "capped-session"),
+		Command: CommandSpec{
+			Path: "/bin/bash",
+			Args: []string{"-c", "yes x | head -c 8192"},
+		},
+		Timeout:     time.Second,
+		StdoutPath:  stdoutPath,
+		StderrPath:  stderrPath,
+		MaxLogBytes: maxLogBytes,
+		Normalizer: ResultNormalizerFunc(func(ctx context.Context, input NormalizerInput) (*provider.StepResult, error) {
+			captured = input
+			return DefaultNormalizer().Normalize(ctx, input)
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Status != provider.ExecutionStateSucceeded {
+		t.Fatalf("Run().Status = %q, want %q", result.Status, provider.ExecutionStateSucceeded)
+	}
+
+	stdoutData, err := os.ReadFile(stdoutPath)
+	if err != nil {
+		t.Fatalf("ReadFile(stdoutPath) error = %v", err)
+	}
+
+	marker := fmt.Sprintf("\n[runner] log truncated: %d-byte cap reached; further output omitted\n", maxLogBytes)
+	if got, want := len(stdoutData), int(maxLogBytes)+len(marker); got != want {
+		t.Fatalf("stdout log size = %d, want %d", got, want)
+	}
+	if !strings.HasSuffix(string(stdoutData), marker) {
+		t.Fatalf("stdout log = %q, want truncation marker suffix", string(stdoutData))
+	}
+	if !strings.HasSuffix(string(captured.Stdout), marker) {
+		t.Fatalf("NormalizerInput.Stdout = %q, want capped durable readback", string(captured.Stdout))
+	}
+}
+
 func TestHelperProcess(t *testing.T) {
 	if os.Getenv(helperProcessEnv) != "1" {
 		return

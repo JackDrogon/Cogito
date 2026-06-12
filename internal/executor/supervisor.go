@@ -52,7 +52,11 @@ type RunRequest struct {
 	Timeout    time.Duration
 	StdoutPath string
 	StderrPath string
-	Normalizer ResultNormalizer
+	// MaxLogBytes caps each durable stdout/stderr artifact. Values <= 0 use
+	// provider.DefaultMaxLogBytes; workflow and CLI callers do not expose this as
+	// user configuration.
+	MaxLogBytes int64
+	Normalizer  ResultNormalizer
 }
 
 type Supervisor struct {
@@ -117,8 +121,8 @@ func (s *Supervisor) Run(ctx context.Context, request RunRequest) (*provider.Ste
 	defer stderrFile.Close()
 
 	secretValues := provider.CollectEnvSecrets()
-	stdoutLog := provider.NewRedactingWriter(stdoutFile, secretValues)
-	stderrLog := provider.NewRedactingWriter(stderrFile, secretValues)
+	stdoutLog := provider.NewRedactingWriter(provider.NewCappedWriter(stdoutFile, request.MaxLogBytes), secretValues)
+	stderrLog := provider.NewRedactingWriter(provider.NewCappedWriter(stderrFile, request.MaxLogBytes), secretValues)
 
 	defer stdoutLog.Close()
 	defer stderrLog.Close()
@@ -230,6 +234,8 @@ func (s *Supervisor) collectOutput(params collectOutputParams) (NormalizerInput,
 		return NormalizerInput{}, wrapError(ErrorCodeExecution, "sync stderr log", syncErr)
 	}
 
+	// Normalization intentionally reads the durable, capped artifacts so command
+	// output cannot grow events or summaries without bound.
 	stdout, err := os.ReadFile(params.Request.StdoutPath)
 	if err != nil {
 		return NormalizerInput{}, wrapError(ErrorCodeExecution, "read stdout log", err)

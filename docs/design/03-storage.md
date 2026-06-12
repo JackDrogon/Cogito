@@ -41,6 +41,13 @@ exit or in-process cancellation. It is intentionally excluded from `events.jsonl
 `cogito status` can report the still-running process and `cogito resume` / `cogito
 cancel` can reap it safely before proceeding.
 
+Provider log files and command-step stdout/stderr artifacts are capped at 64 MiB
+by default as a disk-safety guard. When a file reaches the cap, Cogito appends one
+line of the form
+`[runner] log truncated: 67108864-byte cap reached; further output omitted` and
+silently drops later bytes for that file while leaving the child process and other
+output sinks running normally.
+
 The `.cogito/` state root also carries an auto-written `.gitignore` containing
 `*`, so run state inside a git repository never shows up as untracked changes
 (which would otherwise trip the dirty-worktree gate on the next run). An
@@ -202,7 +209,9 @@ full event replay.
 command steps append stdout/stderr log files under `provider-logs/` and store them
 as artifact records. Command stdout/stderr bytes are redacted using the same
 environment-name heuristics before they reach durable log files, so later event
-summaries normalized from those files are redacted as well.
+summaries normalized from those files are redacted as well. These stdout/stderr
+artifacts use the same 64 MiB cap and truncation marker as provider logs; command
+normalization reads back the capped durable files by design.
 
 ### Artifact shape
 

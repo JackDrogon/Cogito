@@ -129,6 +129,10 @@ All three providers currently:
 - honor optional `ProcessRequest.Timeout` wall-clock and `IdleTimeout`
   no-output watchdogs when the app passes `--agent-timeout` or
   `--agent-idle-timeout`; both default to `0` / disabled
+- cap the durable provider log at `ProcessRequest.MaxLogBytes`, defaulting to
+  `provider.DefaultMaxLogBytes` (64 MiB) when `MaxLogBytes <= 0`; there is no
+  unlimited mode, and truncation appends one marker line before later file writes
+  are omitted
 - ask the shared process supervisor to write `<attempt>.pid.json` beside the
   provider log while a child process is alive; the supervisor removes that file
   just before delivering `ProcessResult`, so naturally-finished processes leave
@@ -148,7 +152,10 @@ values of variables whose names contain
 8 bytes. Matching output bytes are replaced with `***REDACTED***`, including
 matches split across stream chunks. The in-memory stdout/stderr buffers remain
 raw so session-id scraping and `AGENT_RESULT_JSON` parsing continue to operate on
-the provider's original output.
+the provider's original output. The durable log cap is applied only to the
+post-redaction provider log file; `ExtraSink` and the in-memory stdout/stderr
+buffers are deliberately not capped, so live console output, idle-output tracking,
+session-id scanning, and structured result parsing continue to see full output.
 
 ### Orphan process pidfiles
 
