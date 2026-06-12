@@ -155,7 +155,8 @@ ready at once, but one queued step is executed at a time in topological order.
         └── provider-logs/
             └── <step-id>/
                 ├── <attempt>-stdout.log
-                └── <attempt>-stderr.log
+                ├── <attempt>-stderr.log
+                └── <attempt>.pid.json   # present only while a provider child is running
 ```
 
 ## CLI Commands

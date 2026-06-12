@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 )
@@ -120,6 +121,20 @@ func SanitizeID(value string) string {
 	value = strings.ReplaceAll(value, "/", "-")
 
 	return value
+}
+
+// PIDFilePath returns the per-attempt pidfile path beside provider logs.
+func PIDFilePath(logDir string, request StartRequest) string {
+	if strings.TrimSpace(logDir) == "" {
+		return ""
+	}
+
+	return filepath.Join(logDir, SanitizeID(request.AttemptID)+".pid.json")
+}
+
+// ProcessLabel formats run context for machine-local pidfile records.
+func ProcessLabel(request StartRequest) string {
+	return fmt.Sprintf("run=%s step=%s attempt=%s", request.RunID, request.StepID, request.AttemptID)
 }
 
 // FirstLine returns the trimmed first line of value.

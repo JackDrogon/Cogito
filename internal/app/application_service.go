@@ -3,7 +3,10 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
+	"github.com/JackDrogon/Cogito/internal/provider"
 	"github.com/JackDrogon/Cogito/internal/runtime"
 	"github.com/JackDrogon/Cogito/internal/store"
 	"github.com/JackDrogon/Cogito/internal/workflow"
@@ -40,6 +43,7 @@ type StatusRunInput struct {
 type StatusRunOutput struct {
 	StateDir string
 	View     runtime.RunStatusView
+	Orphans  []provider.OrphanProcess
 }
 
 type ResumeRunInput struct {
@@ -202,9 +206,15 @@ func (s applicationService) StatusRun(_ context.Context, input StatusRunInput) (
 	snapshot := session.engine.Snapshot()
 	statusView := runtime.BuildRunStatusView(session.compiled, snapshot)
 
+	orphans, err := provider.FindOrphans(session.store.Layout().RunDir)
+	if err != nil {
+		return StatusRunOutput{}, err
+	}
+
 	return StatusRunOutput{
 		StateDir: session.store.Layout().RunDir,
 		View:     statusView,
+		Orphans:  orphans,
 	}, nil
 }
 
@@ -218,12 +228,17 @@ func (s applicationService) ResumeRun(ctx context.Context, input ResumeRunInput)
 		return ResumeRunOutput{}, err
 	}
 
+	reapReport, err := provider.ReapOrphans(session.store.Layout().RunDir)
+	if err != nil {
+		return ResumeRunOutput{}, err
+	}
+
 	// Resuming a run that already settled successfully is a no-op, not an
 	// error: the user asked to make progress and there is none left to make.
 	// Failed/canceled runs still fall through to engine.Resume, which reports
 	// the appropriate "cannot resume from <state>" error.
 	if session.engine.Snapshot().State == runtime.RunStateSucceeded {
-		return ResumeRunOutput{Message: "run already succeeded"}, nil
+		return ResumeRunOutput{Message: renderRunMessage(reapReport, "run already succeeded")}, nil
 	}
 
 	if err := session.engine.Resume(""); err != nil {
@@ -238,7 +253,7 @@ func (s applicationService) ResumeRun(ctx context.Context, input ResumeRunInput)
 		return ResumeRunOutput{}, latestRunFailure(session.store)
 	}
 
-	return ResumeRunOutput{Message: "run resumed"}, nil
+	return ResumeRunOutput{Message: renderRunMessage(reapReport, "run resumed")}, nil
 }
 
 func (applicationService) ReplayRun(_ context.Context, input ReplayRunInput) (ReplayRunOutput, error) {
@@ -261,11 +276,27 @@ func (s applicationService) CancelRun(ctx context.Context, input CancelRunInput)
 		return CancelRunOutput{}, err
 	}
 
+	reapReport, err := provider.ReapOrphans(session.store.Layout().RunDir)
+	if err != nil {
+		return CancelRunOutput{}, err
+	}
+
 	if err := session.engine.Cancel(ctx, ""); err != nil {
 		return CancelRunOutput{}, err
 	}
 
-	return CancelRunOutput{Message: "run canceled"}, nil
+	return CancelRunOutput{Message: renderRunMessage(reapReport, "run canceled")}, nil
+}
+
+func renderRunMessage(report provider.ReapReport, final string) string {
+	lines := make([]string, 0, len(report.Reaped)+1)
+	for _, orphan := range report.Reaped {
+		lines = append(lines, fmt.Sprintf("reaped orphan provider process pid %d (step %s)", orphan.Record.PID, orphan.StepID))
+	}
+
+	lines = append(lines, final)
+
+	return strings.Join(lines, "\n")
 }
 
 func (s applicationService) ApproveRun(ctx context.Context, input ApproveRunInput) (ApproveRunOutput, error) {

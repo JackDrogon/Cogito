@@ -22,7 +22,8 @@ Each run is represented by `store.Layout` and defaults to:
 └── provider-logs/
     └── <step-id>/
         ├── <attempt>-stdout.log
-        └── <attempt>-stderr.log
+        ├── <attempt>-stderr.log
+        └── <attempt>.pid.json # ephemeral provider process identity
 ```
 
 At the repository level, Cogito also writes:
@@ -32,6 +33,13 @@ At the repository level, Cogito also writes:
 ```
 
 This file prevents concurrent runs from mutating the same repository.
+
+`<attempt>.pid.json` is machine-local ephemeral OS state, not replay state. It is
+written only while a provider adapter process is running and removed on natural
+exit or in-process cancellation. It is intentionally excluded from `events.jsonl`,
+`checkpoint.json`, and `artifacts.json`; if Cogito is killed before cleanup,
+`cogito status` can report the still-running process and `cogito resume` / `cogito
+cancel` can reap it safely before proceeding.
 
 The `.cogito/` state root also carries an auto-written `.gitignore` containing
 `*`, so run state inside a git repository never shows up as untracked changes

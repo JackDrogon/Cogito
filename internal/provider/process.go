@@ -23,6 +23,7 @@ package provider
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -84,6 +85,13 @@ type ProcessRequest struct {
 	// LogPath, when non-empty, receives a stdout+stderr merged copy as the
 	// process runs. Parent directories are created with 0o700 if missing.
 	LogPath string
+
+	// PIDFile, when non-empty, receives a machine-local pid record for orphan
+	// detection. Write/remove failures are warn-only and never affect execution.
+	PIDFile string
+
+	// Label is optional free-form context copied into PIDFile for operator output.
+	Label string
 
 	// ExtraSink, when non-nil, receives the same stdout+stderr byte stream as
 	// LogPath in real time (AgentLoop-style live output). The runner writes
@@ -227,6 +235,8 @@ func StartProcess(parentCtx context.Context, req ProcessRequest) (*Session, erro
 		return nil, fmt.Errorf("provider.StartProcess: exec: %w", err)
 	}
 
+	writePIDFile(req, cmd)
+
 	done := make(chan ProcessResult, 1)
 	session := &Session{Done: done, cancel: cancel}
 	session.sessionID.Store("")
@@ -240,6 +250,7 @@ func StartProcess(parentCtx context.Context, req ProcessRequest) (*Session, erro
 		Stderr:      pipes.stderr,
 		LogFile:     logFile,
 		LogPath:     req.LogPath,
+		PIDFile:     req.PIDFile,
 		ExtraSink:   req.ExtraSink,
 		Secrets:     secretValues,
 		Prompt:      req.Prompt,
@@ -300,6 +311,55 @@ func closeLogFile(logFile *os.File) {
 	}
 
 	_ = logFile.Close()
+}
+
+func writePIDFile(req ProcessRequest, cmd *exec.Cmd) {
+	pidFile := strings.TrimSpace(req.PIDFile)
+	if pidFile == "" || cmd == nil || cmd.Process == nil {
+		return
+	}
+
+	pgid, err := syscall.Getpgid(cmd.Process.Pid)
+	if err != nil {
+		slog.Warn("runner: pidfile pgid lookup failed", "path", pidFile, "pid", cmd.Process.Pid, "err", err)
+		pgid = cmd.Process.Pid
+	}
+
+	record := PIDRecord{
+		PID:       cmd.Process.Pid,
+		PGID:      pgid,
+		Binary:    req.Binary,
+		StartedAt: time.Now().UTC().Format(time.RFC3339),
+		Label:     req.Label,
+	}
+
+	data, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		slog.Warn("runner: pidfile encode failed", "path", pidFile, "err", err)
+
+		return
+	}
+
+	if err := os.MkdirAll(filepath.Dir(pidFile), 0o700); err != nil {
+		slog.Warn("runner: pidfile dir prepare failed", "path", pidFile, "err", err)
+
+		return
+	}
+
+	if err := os.WriteFile(filepath.Clean(pidFile), append(data, '\n'), 0o600); err != nil {
+		slog.Warn("runner: pidfile write failed", "path", pidFile, "err", err)
+	}
+}
+
+func removePIDFile(pidFile string) {
+	pidFile = strings.TrimSpace(pidFile)
+	if pidFile == "" {
+		return
+	}
+
+	if err := os.Remove(filepath.Clean(pidFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		slog.Warn("runner: pidfile remove failed", "path", pidFile, "err", err)
+	}
 }
 
 // flushLogFile forces buffered writes to disk before the caller observes the
@@ -388,6 +448,7 @@ type superviseParams struct {
 	Stderr      io.ReadCloser
 	LogFile     *os.File
 	LogPath     string
+	PIDFile     string
 	ExtraSink   io.Writer
 	Secrets     []string
 	Prompt      string
@@ -499,6 +560,7 @@ func supervise(params superviseParams) {
 		// everything.
 		flushLogFile(params.LogFile)
 		closeLogFile(params.LogFile)
+		removePIDFile(params.PIDFile)
 
 		exitCode, propagated := classifyWaitError(waitErr, params.Cmd.ProcessState)
 

@@ -21,7 +21,7 @@ func (textPresenter) PresentRunWorkflow(stdout io.Writer, output RunWorkflowOutp
 }
 
 func (textPresenter) PresentStatusRun(stdout io.Writer, output StatusRunOutput) error {
-	_, err := io.WriteString(stdout, renderStatusView(output.StateDir, output.View))
+	_, err := io.WriteString(stdout, renderStatusView(output))
 	return err
 }
 
@@ -35,10 +35,12 @@ func (textPresenter) PresentMessage(stdout io.Writer, message string) error {
 	return err
 }
 
-func renderStatusView(stateDir string, view runtime.RunStatusView) string {
+func renderStatusView(output StatusRunOutput) string {
 	var builder strings.Builder
 
-	_, _ = fmt.Fprintf(&builder, "run_id=%s\nstate_dir=%s\nstate=%s\n", view.RunID, stateDir, view.State)
+	view := output.View
+
+	_, _ = fmt.Fprintf(&builder, "run_id=%s\nstate_dir=%s\nstate=%s\n", view.RunID, output.StateDir, view.State)
 
 	for _, step := range view.StepViews {
 		_, _ = fmt.Fprintf(&builder, "step=%s state=%s", step.StepID, step.State)
@@ -48,6 +50,14 @@ func renderStatusView(stateDir string, view runtime.RunStatusView) string {
 		}
 
 		builder.WriteByte('\n')
+	}
+
+	for _, orphan := range output.Orphans {
+		if !orphan.Alive || !orphan.IdentityMatched {
+			continue
+		}
+
+		_, _ = fmt.Fprintf(&builder, "WARNING: orphan provider process pid %d (step %s) still running; resume or cancel will terminate it\n", orphan.Record.PID, orphan.StepID)
 	}
 
 	return builder.String()

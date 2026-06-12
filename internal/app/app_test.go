@@ -2,13 +2,17 @@ package app
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/JackDrogon/Cogito/internal/provider"
 	"github.com/JackDrogon/Cogito/internal/runtime"
 	"github.com/JackDrogon/Cogito/internal/store"
 	"github.com/JackDrogon/Cogito/internal/version"
@@ -217,12 +221,15 @@ func TestParseReplayRequestRequiresEventsPath(t *testing.T) {
 }
 
 func TestFormatRunStatusIncludesStepLines(t *testing.T) {
-	output := renderStatusView("ref/tmp/runs/run-1", runtime.RunStatusView{
-		RunID: "run-1",
-		State: runtime.RunStateSucceeded,
-		StepViews: []runtime.StepStatusView{
-			{StepID: "prepare", State: runtime.StepStateSucceeded},
-			{StepID: "review", State: runtime.StepStateSucceeded},
+	output := renderStatusView(StatusRunOutput{
+		StateDir: "ref/tmp/runs/run-1",
+		View: runtime.RunStatusView{
+			RunID: "run-1",
+			State: runtime.RunStateSucceeded,
+			StepViews: []runtime.StepStatusView{
+				{StepID: "prepare", State: runtime.StepStateSucceeded},
+				{StepID: "review", State: runtime.StepStateSucceeded},
+			},
 		},
 	})
 
@@ -440,6 +447,45 @@ func TestResumeCommandResumesPausedRunAndRejectsDuplicate(t *testing.T) {
 	}
 }
 
+func TestStatusReportsOrphanReadOnlyAndResumeReapsIt(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "run-orphan-resume")
+	writePausedRunState(t, stateDir)
+	cmd, record := startAppDetachedBash(t)
+	pidFile := filepath.Join(stateDir, providerLogsDir, "prepare", "attempt-prepare-01.pid.json")
+	writeAppPIDRecord(t, pidFile, record)
+
+	var statusOut bytes.Buffer
+	if err := Run(t.Context(), []string{"status", "--state-dir", stateDir}, &statusOut); err != nil {
+		cleanupAppDetachedCommand(cmd, record.PGID)
+		t.Fatalf("Run(status) error = %v", err)
+	}
+	if !strings.Contains(statusOut.String(), "WARNING: orphan provider process pid") {
+		cleanupAppDetachedCommand(cmd, record.PGID)
+		t.Fatalf("Run(status) output = %q, want orphan warning", statusOut.String())
+	}
+	if _, err := os.Stat(pidFile); err != nil {
+		cleanupAppDetachedCommand(cmd, record.PGID)
+		t.Fatalf("status removed pidfile: %v", err)
+	}
+	if err := syscall.Kill(record.PID, 0); err != nil {
+		cleanupAppDetachedCommand(cmd, record.PGID)
+		t.Fatalf("status killed orphan: %v", err)
+	}
+
+	var resumeOut bytes.Buffer
+	if err := Run(t.Context(), []string{"resume", "--state-dir", stateDir}, &resumeOut); err != nil {
+		cleanupAppDetachedCommand(cmd, record.PGID)
+		t.Fatalf("Run(resume) error = %v", err)
+	}
+	waitAppCommandExit(t, cmd)
+	if !strings.Contains(resumeOut.String(), "reaped orphan provider process pid") || !strings.Contains(resumeOut.String(), "run resumed") {
+		t.Fatalf("Run(resume) output = %q, want reap line and final message", resumeOut.String())
+	}
+	if _, err := os.Stat(pidFile); !os.IsNotExist(err) {
+		t.Fatalf("pidfile stat after resume err = %v, want not exist", err)
+	}
+}
+
 func TestReplayCommandDoesNotMutateRunState(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "run-replay")
 	workflowPath := filepath.Join("..", "workflow", "testdata", "simple.yaml")
@@ -531,6 +577,27 @@ func TestCancelCommandCancelsPausedRunAndRejectsDuplicate(t *testing.T) {
 	}
 	if dupOut.Len() != 0 {
 		t.Fatalf("Run(cancel duplicate) output = %q, want empty", dupOut.String())
+	}
+}
+
+func TestCancelCommandReapsOrphanBeforeCancel(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "run-orphan-cancel")
+	writePausedRunState(t, stateDir)
+	cmd, record := startAppDetachedBash(t)
+	pidFile := filepath.Join(stateDir, providerLogsDir, "prepare", "attempt-prepare-01.pid.json")
+	writeAppPIDRecord(t, pidFile, record)
+
+	var out bytes.Buffer
+	if err := Run(t.Context(), []string{"cancel", "--state-dir", stateDir}, &out); err != nil {
+		cleanupAppDetachedCommand(cmd, record.PGID)
+		t.Fatalf("Run(cancel) error = %v", err)
+	}
+	waitAppCommandExit(t, cmd)
+	if !strings.Contains(out.String(), "reaped orphan provider process pid") || !strings.Contains(out.String(), "run canceled") {
+		t.Fatalf("Run(cancel) output = %q, want reap line and final message", out.String())
+	}
+	if _, err := os.Stat(pidFile); !os.IsNotExist(err) {
+		t.Fatalf("pidfile stat after cancel err = %v, want not exist", err)
 	}
 }
 
@@ -659,6 +726,69 @@ func writePausedCommandRunState(params pausedCommandRunStateParams) {
 		},
 	}); err != nil {
 		params.Test.Fatalf("SaveCheckpoint() error = %v", err)
+	}
+}
+
+func startAppDetachedBash(t *testing.T) (*exec.Cmd, provider.PIDRecord) {
+	t.Helper()
+
+	cmd := exec.Command("/bin/bash", "-c", "sleep 30 & wait")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start detached bash: %v", err)
+	}
+
+	pgid, err := syscall.Getpgid(cmd.Process.Pid)
+	if err != nil {
+		cleanupAppDetachedCommand(cmd, cmd.Process.Pid)
+		t.Fatalf("Getpgid(%d): %v", cmd.Process.Pid, err)
+	}
+
+	record := provider.PIDRecord{PID: cmd.Process.Pid, PGID: pgid, Binary: "/bin/bash", StartedAt: time.Now().UTC().Format(time.RFC3339)}
+
+	return cmd, record
+}
+
+func writeAppPIDRecord(t *testing.T, path string, record provider.PIDRecord) {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("mkdir pidfile dir: %v", err)
+	}
+
+	data, err := json.Marshal(record)
+	if err != nil {
+		t.Fatalf("marshal pid record: %v", err)
+	}
+
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write pidfile: %v", err)
+	}
+}
+
+func cleanupAppDetachedCommand(cmd *exec.Cmd, pgid int) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+
+	if pgid > 1 {
+		_ = syscall.Kill(-pgid, syscall.SIGKILL)
+	}
+
+	_ = cmd.Wait()
+}
+
+func waitAppCommandExit(t *testing.T, cmd *exec.Cmd) {
+	t.Helper()
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	select {
+	case <-done:
+		return
+	case <-time.After(3 * time.Second):
+		t.Fatal("detached command did not exit")
 	}
 }
 

@@ -101,6 +101,9 @@ Behavior:
 - loads `workflow.json`
 - reconstructs runtime state from checkpoint/events
 - renders a `RunStatusView`
+- scans `provider-logs/*/*.pid.json` read-only and warns about alive provider
+  orphans that still match their recorded binary identity; it does not kill or
+  clean anything
 
 ## `resume`
 
@@ -113,6 +116,7 @@ cogito resume --state-dir ./.cogito/runs/run-123
 Behavior:
 
 - opens the existing run session
+- reaps any confirmed orphan provider processes recorded under the run dir
 - calls `engine.Resume("")`
 - continues execution until the run settles again
 
@@ -146,21 +150,14 @@ cogito cancel --state-dir ./.cogito/runs/run-123
 Behavior:
 
 - opens the existing run session
+- reaps any confirmed orphan provider processes recorded under the run dir
 - asks runtime to cancel the run
 - if a step is actively running, runtime first attempts interruption
 
-### Cross-process cancel limitation
-
-`cogito cancel` runs as a **separate process** from the `cogito run` (or `feishu
-run`) process that owns the live adapter subprocess. It cannot directly signal an
-adapter child running inside another process. Instead it appends `RunCanceled` to
-`events.jsonl`; the in-progress run observes that event on its next state-machine
-poll and stops, and in-process interruption (e.g. Ctrl-C to the running process)
-is what actually signals the adapter process group.
-
-This is a pre-existing Cogito design limitation, intentionally left unchanged by
-the AgentLoop port (plan L2.6): cross-process synchronization happens through the
-event log, not through direct process signaling.
+`cancel` still uses the event log for normal runtime state transitions. The orphan
+reap step is a machine-local safety cleanup for provider child processes whose
+parent Cogito process already died; it uses pidfiles and identity checks rather
+than durable runtime events.
 
 ## `replay`
 

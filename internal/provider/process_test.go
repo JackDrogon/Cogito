@@ -3,6 +3,7 @@ package provider
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -163,6 +164,93 @@ func TestStartLogPathReceivesStreamedOutput(t *testing.T) {
 
 	if !bytes.Equal(contents, []byte(body)) {
 		t.Errorf("log file = %q, want %q", string(contents), body)
+	}
+}
+
+func TestStartPIDFileExistsWhileRunningAndRemovedAfterDone(t *testing.T) {
+	t.Parallel()
+
+	pidFile := filepath.Join(t.TempDir(), "attempt.pid.json")
+	session, err := StartProcess(context.Background(), ProcessRequest{
+		Binary:  "/bin/bash",
+		Args:    []string{"-c", "sleep 0.3"},
+		PIDFile: pidFile,
+		Label:   "run=run-1 step=build attempt=attempt-1",
+	})
+	if err != nil {
+		t.Fatalf("StartProcess returned error: %v", err)
+	}
+
+	record := readPIDFileEventually(t, pidFile)
+	if record.PID <= 1 {
+		t.Fatalf("pidfile PID = %d, want real child pid", record.PID)
+	}
+	if record.PGID <= 1 {
+		t.Fatalf("pidfile PGID = %d, want real process group", record.PGID)
+	}
+	if record.Binary != "/bin/bash" {
+		t.Fatalf("pidfile Binary = %q, want /bin/bash", record.Binary)
+	}
+	if record.Label != "run=run-1 step=build attempt=attempt-1" {
+		t.Fatalf("pidfile Label = %q", record.Label)
+	}
+
+	result := awaitResult(t, session, 2*time.Second)
+	if result.Err != nil {
+		t.Fatalf("ProcessResult.Err = %v, want nil", result.Err)
+	}
+	if _, err := os.Stat(pidFile); !os.IsNotExist(err) {
+		t.Fatalf("pidfile stat after Done err = %v, want not exist", err)
+	}
+}
+
+func TestCancelRemovesPIDFile(t *testing.T) {
+	t.Parallel()
+
+	pidFile := filepath.Join(t.TempDir(), "attempt.pid.json")
+	session, err := StartProcess(context.Background(), ProcessRequest{
+		Binary:    "/bin/bash",
+		Args:      []string{"-c", "sleep 30"},
+		PIDFile:   pidFile,
+		ExitGrace: 100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("StartProcess returned error: %v", err)
+	}
+
+	_ = readPIDFileEventually(t, pidFile)
+	session.Cancel()
+	_ = awaitResult(t, session, 3*time.Second)
+
+	if _, err := os.Stat(pidFile); !os.IsNotExist(err) {
+		t.Fatalf("pidfile stat after Cancel err = %v, want not exist", err)
+	}
+}
+
+func TestPIDFileWriteFailureIsTolerated(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	notDir := filepath.Join(base, "not-a-dir")
+	if err := os.WriteFile(notDir, []byte("file"), 0o600); err != nil {
+		t.Fatalf("write not-dir fixture: %v", err)
+	}
+
+	session, err := StartProcess(context.Background(), ProcessRequest{
+		Binary:  "/bin/bash",
+		Args:    []string{"-c", "printf ok"},
+		PIDFile: filepath.Join(notDir, "attempt.pid.json"),
+	})
+	if err != nil {
+		t.Fatalf("StartProcess returned error: %v", err)
+	}
+
+	result := awaitResult(t, session, 2*time.Second)
+	if result.Err != nil {
+		t.Fatalf("ProcessResult.Err = %v, want nil", result.Err)
+	}
+	if string(result.Stdout) != "ok" {
+		t.Fatalf("stdout = %q, want ok", string(result.Stdout))
 	}
 }
 
@@ -394,6 +482,29 @@ func awaitResult(t *testing.T, session *Session, timeout time.Duration) ProcessR
 		t.Fatalf("session.Done did not resolve within %v", timeout)
 		return ProcessResult{}
 	}
+}
+
+func readPIDFileEventually(t *testing.T, path string) PIDRecord {
+	t.Helper()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			record := PIDRecord{}
+			if err := json.Unmarshal(data, &record); err != nil {
+				t.Fatalf("decode pidfile: %v", err)
+			}
+
+			return record
+		}
+
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	t.Fatalf("pidfile %q did not appear", path)
+
+	return PIDRecord{}
 }
 
 // shellQuote wraps s in single quotes, escaping any embedded single quotes.

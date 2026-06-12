@@ -129,6 +129,10 @@ All three providers currently:
 - honor optional `ProcessRequest.Timeout` wall-clock and `IdleTimeout`
   no-output watchdogs when the app passes `--agent-timeout` or
   `--agent-idle-timeout`; both default to `0` / disabled
+- ask the shared process supervisor to write `<attempt>.pid.json` beside the
+  provider log while a child process is alive; the supervisor removes that file
+  just before delivering `ProcessResult`, so naturally-finished processes leave
+  no pidfile behind
 - support `PollOrCollect` by awaiting the session's `Done` channel
 - parse the `AGENT_RESULT_JSON` line into a normalized `AgentResult` and marshal
   it into `Execution.StructuredOutput`
@@ -143,6 +147,35 @@ the parent environment and treats values of variables whose names contain
 matches split across stream chunks. The in-memory stdout/stderr buffers remain
 raw so session-id scraping and `AGENT_RESULT_JSON` parsing continue to operate on
 the provider's original output.
+
+### Orphan process pidfiles
+
+Provider children run in their own process group (`setsid`) so Cogito can signal
+the whole provider tree. If the parent Cogito process is killed with `SIGKILL`,
+that process group can survive and keep mutating the repository. To make this
+discoverable without polluting deterministic replay state, `ProcessRequest.PIDFile`
+points the supervisor at a plain JSON pidfile under
+`provider-logs/<step-id>/<attempt>.pid.json`.
+
+Pidfiles contain the child `pid`, `pgid`, provider `binary`, `started_at`, and a
+free-form run/step/attempt label. They are machine-local and ephemeral: they are
+not events, checkpoints, or artifacts. `StartProcess` writes them after
+`cmd.Start()` with warn-only error handling, and the supervise goroutine removes
+them on every normal completion path, including cancellation.
+
+On a later `cogito resume` or `cogito cancel`, the app calls
+`provider.ReapOrphans(runDir)` before continuing runtime work. Reaping first
+classifies each pidfile:
+
+| Process state | Identity check | Action |
+|---------------|----------------|--------|
+| alive | `/proc/<pid>/cmdline` basename matches recorded binary | send SIGTERM to `-pgid`, wait `DefaultExitGrace`, then SIGKILL to `-pgid` if needed; remove pidfile |
+| alive | binary mismatch or unsafe PID | do not signal; remove stale pidfile |
+| dead | not applicable | remove stale pidfile |
+
+The identity check is mandatory because PIDs can be reused. `cogito status` uses
+`provider.FindOrphans(runDir)` and is read-only: it reports only alive,
+identity-matched provider orphans and leaves pidfiles and processes untouched.
 
 ### Provider-specific command style
 
