@@ -45,10 +45,12 @@ func buildRuntimeWiring(runStore *store.Store, flags *sharedFlags) (runtimeWirin
 
 	return runtimeWiring{
 		LookupProvider: defaultProviderLookup(providerOptionDefaults{
-			Sandbox:    codexSandbox(),
-			Model:      "",
-			LogDirRoot: runStore.Layout().RunDir,
-			LiveSink:   liveOutputSink(flags),
+			Sandbox:     codexSandbox(),
+			Model:       "",
+			LogDirRoot:  runStore.Layout().RunDir,
+			LiveSink:    liveOutputSink(flags),
+			Timeout:     agentTimeout(flags),
+			IdleTimeout: agentIdleTimeout(flags),
 		}),
 		CommandRunner: newSupervisorCommandRunner(runStore, execContext.workingDir, providerTimeout(flags)),
 		RepoPath:      execContext.repoPath,
@@ -143,6 +145,22 @@ func providerTimeout(flags *sharedFlags) time.Duration {
 	}
 
 	return flags.providerTimeout
+}
+
+func agentTimeout(flags *sharedFlags) time.Duration {
+	if flags == nil {
+		return 0
+	}
+
+	return flags.agentTimeout
+}
+
+func agentIdleTimeout(flags *sharedFlags) time.Duration {
+	if flags == nil {
+		return 0
+	}
+
+	return flags.agentIdle
 }
 
 // acquireRepoLockInput bundles the lock inputs so the function stays within

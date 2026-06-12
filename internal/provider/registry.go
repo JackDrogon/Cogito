@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Factory func() Provider
@@ -30,6 +31,14 @@ type Options struct {
 	// real time (AgentLoop-style live output, e.g. for `-v`). The writer must
 	// be safe for concurrent use; nil disables live streaming.
 	LiveSink io.Writer
+
+	// Timeout applies to agent process invocations. Values <= 0 disable
+	// wall-clock timeout enforcement.
+	Timeout time.Duration
+
+	// IdleTimeout applies to agent process invocations. Values <= 0 disable
+	// no-output timeout enforcement.
+	IdleTimeout time.Duration
 }
 
 // OptionFactory builds an adapter from runtime-resolved options. Providers

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -155,6 +156,24 @@ func TestParseSharedFlagsWithoutArgsRejectsPositionals(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "status does not accept positional arguments") {
 		t.Fatalf("parseSharedFlagsWithoutArgs() error = %v", err)
+	}
+}
+
+func TestParseSharedFlagsAcceptsAgentTimeouts(t *testing.T) {
+	var out bytes.Buffer
+	parsed, err := parseSharedFlags("run", []string{"--agent-timeout", "30m", "--agent-idle-timeout", "10m", "workflow.yaml"}, &out)
+	if err != nil {
+		t.Fatalf("parseSharedFlags() error = %v", err)
+	}
+
+	if parsed.flags.agentTimeout != 30*time.Minute {
+		t.Fatalf("agentTimeout = %v, want 30m", parsed.flags.agentTimeout)
+	}
+	if parsed.flags.agentIdle != 10*time.Minute {
+		t.Fatalf("agentIdle = %v, want 10m", parsed.flags.agentIdle)
+	}
+	if !reflect.DeepEqual(parsed.remainingArgs, []string{"workflow.yaml"}) {
+		t.Fatalf("remainingArgs = %#v, want workflow.yaml", parsed.remainingArgs)
 	}
 }
 

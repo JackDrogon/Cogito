@@ -5,6 +5,7 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/JackDrogon/Cogito/internal/provider"
 	"github.com/JackDrogon/Cogito/internal/runtime"
@@ -47,12 +48,15 @@ func (c providerResolverChain) Resolve(providerName string, options provider.Opt
 // providerOptionDefaults holds the run-scoped inputs used to build per-step
 // adapter options. Sandbox/Model are run-wide; LogDirRoot is the run directory
 // under which each step gets its own provider-logs subdirectory; LiveSink is
-// the optional console stream for verbose live output.
+// the optional console stream for verbose live output; Timeout and IdleTimeout
+// apply to every agent process invocation in the run.
 type providerOptionDefaults struct {
-	Sandbox    string
-	Model      string
-	LogDirRoot string
-	LiveSink   io.Writer
+	Sandbox     string
+	Model       string
+	LogDirRoot  string
+	LiveSink    io.Writer
+	Timeout     time.Duration
+	IdleTimeout time.Duration
 }
 
 func newProviderLookup(resolver providerResolver, defaults providerOptionDefaults) runtime.ProviderLookup {
@@ -64,10 +68,12 @@ func newProviderLookup(resolver providerResolver, defaults providerOptionDefault
 		providerName := strings.TrimSpace(step.Agent.Agent)
 
 		options := provider.Options{
-			Sandbox:  defaults.Sandbox,
-			Model:    defaults.Model,
-			LogDir:   stepLogDir(defaults.LogDirRoot, step.ID),
-			LiveSink: defaults.LiveSink,
+			Sandbox:     defaults.Sandbox,
+			Model:       defaults.Model,
+			LogDir:      stepLogDir(defaults.LogDirRoot, step.ID),
+			LiveSink:    defaults.LiveSink,
+			Timeout:     defaults.Timeout,
+			IdleTimeout: defaults.IdleTimeout,
 		}
 
 		adapter, ok := resolver.Resolve(providerName, options)

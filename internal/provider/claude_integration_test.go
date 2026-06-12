@@ -220,6 +220,50 @@ func TestClaudeResumeUsesRealSessionID(t *testing.T) {
 	}
 }
 
+func TestClaudeTimeoutResultNormalizesAsFailed(t *testing.T) {
+	const reason = "agent process produced no output for 100ms"
+
+	adapter := claude.New(claude.Config{
+		LookPath: func(string) (string, error) { return "/usr/local/bin/claude", nil },
+		Runner:   &claudeVersionRunner{},
+		Starter:  (&claudeTimeoutStarter{reason: reason}).start,
+	})
+
+	ctx := t.Context()
+	start, err := adapter.Start(ctx, provider.StartRequest{RunID: "run-1", StepID: "step", AttemptID: "attempt", WorkingDir: testWorkspaceRepo, Prompt: "do it"})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	terminal, err := adapter.PollOrCollect(ctx, start.Handle)
+	if err != nil {
+		t.Fatalf("PollOrCollect() error = %v", err)
+	}
+
+	result, err := adapter.NormalizeResult(ctx, provider.NormalizeRequest{Execution: terminal})
+	if err != nil {
+		t.Fatalf("NormalizeResult() error = %v", err)
+	}
+	if result.Status != provider.ExecutionStateFailed {
+		t.Fatalf("Status = %q, want failed", result.Status)
+	}
+	if !strings.Contains(result.Summary, reason) {
+		t.Fatalf("Summary = %q, want contains %q", result.Summary, reason)
+	}
+}
+
+type claudeTimeoutStarter struct {
+	reason string
+}
+
+func (s *claudeTimeoutStarter) start(_ context.Context, _ provider.ProcessRequest) (*provider.Session, error) {
+	done := make(chan provider.ProcessResult, 1)
+	done <- provider.ProcessResult{TimeoutReason: s.reason, Interrupted: true}
+	close(done)
+
+	return &provider.Session{Done: done}, nil
+}
+
 // TestClaudeStructuredOutputFromResponseResult is v3.2 N1: a real claude run
 // returns the AGENT_RESULT_JSON marker inside the parsed response.Result string,
 // never as a standalone stdout line (the raw stdout is one JSON object with the

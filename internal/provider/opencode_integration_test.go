@@ -231,6 +231,50 @@ func TestOpenCodeResumeUsesRealSessionID(t *testing.T) {
 	assertArgSubsequence(t, resumeArgs, []string{"--dir", "/workspace/repo"})
 }
 
+func TestOpenCodeTimeoutResultNormalizesAsFailed(t *testing.T) {
+	const reason = "agent process timed out after 100ms"
+
+	adapter := opencode.New(opencode.Config{
+		LookPath: func(string) (string, error) { return "/usr/local/bin/opencode", nil },
+		Runner:   &opencodeVersionRunner{},
+		Starter:  (&opencodeTimeoutStarter{reason: reason}).start,
+	})
+
+	ctx := t.Context()
+	start, err := adapter.Start(ctx, provider.StartRequest{RunID: "run-1", StepID: "step", AttemptID: "attempt", WorkingDir: "/workspace/repo", Prompt: "do it"})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	terminal, err := adapter.PollOrCollect(ctx, start.Handle)
+	if err != nil {
+		t.Fatalf("PollOrCollect() error = %v", err)
+	}
+
+	result, err := adapter.NormalizeResult(ctx, provider.NormalizeRequest{Execution: terminal})
+	if err != nil {
+		t.Fatalf("NormalizeResult() error = %v", err)
+	}
+	if result.Status != provider.ExecutionStateFailed {
+		t.Fatalf("Status = %q, want failed", result.Status)
+	}
+	if !strings.Contains(result.Summary, reason) {
+		t.Fatalf("Summary = %q, want contains %q", result.Summary, reason)
+	}
+}
+
+type opencodeTimeoutStarter struct {
+	reason string
+}
+
+func (s *opencodeTimeoutStarter) start(_ context.Context, _ provider.ProcessRequest) (*provider.Session, error) {
+	done := make(chan provider.ProcessResult, 1)
+	done <- provider.ProcessResult{TimeoutReason: s.reason, Interrupted: true}
+	close(done)
+
+	return &provider.Session{Done: done}, nil
+}
+
 // TestOpenCodeStructuredOutputFromOutputText is v3.2 N1: a real opencode run
 // returns the AGENT_RESULT_JSON marker inside the normalized output_text message
 // body, never as a standalone stdout line (the raw stdout is one JSON object

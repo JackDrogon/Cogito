@@ -21,7 +21,7 @@ func TestStartReturnsBeforeProcessExits(t *testing.T) {
 
 	begin := time.Now()
 	session, err := StartProcess(context.Background(), ProcessRequest{
-		Binary: "/bin/sh",
+		Binary: "/bin/bash",
 		Args:   []string{"-c", "sleep 0.2; echo done"},
 	})
 	startElapsed := time.Since(begin)
@@ -111,7 +111,7 @@ func TestStartExtractsSessionIDFromStdout(t *testing.T) {
 	stdoutBody := "preamble\nsession id: " + wantID + "\nmore output\n"
 
 	session, err := StartProcess(context.Background(), ProcessRequest{
-		Binary: "/bin/sh",
+		Binary: "/bin/bash",
 		Args:   []string{"-c", "printf '%s' " + shellQuote(stdoutBody)},
 	})
 	if err != nil {
@@ -142,7 +142,7 @@ func TestStartLogPathReceivesStreamedOutput(t *testing.T) {
 	const body = "line one\nline two\n"
 
 	session, err := StartProcess(context.Background(), ProcessRequest{
-		Binary:  "/bin/sh",
+		Binary:  "/bin/bash",
 		Args:    []string{"-c", "printf '%s' " + shellQuote(body)},
 		LogPath: logPath,
 	})
@@ -197,7 +197,7 @@ func TestStartExtraSinkReceivesLiveOutput(t *testing.T) {
 	sink := &syncBuffer{}
 
 	session, err := StartProcess(context.Background(), ProcessRequest{
-		Binary:    "/bin/sh",
+		Binary:    "/bin/bash",
 		Args:      []string{"-c", "printf '%s' " + shellQuote(body) + "; printf 'live stderr\\n' >&2"},
 		ExtraSink: sink,
 	})
@@ -231,7 +231,7 @@ func TestCancelInterruptsLongRunningChild(t *testing.T) {
 	const interruptBudget = exitGrace + 2*time.Second
 
 	session, err := StartProcess(context.Background(), ProcessRequest{
-		Binary:    "/bin/sh",
+		Binary:    "/bin/bash",
 		Args:      []string{"-c", "sleep 100"},
 		ExitGrace: exitGrace,
 	})
@@ -261,6 +261,86 @@ func TestCancelInterruptsLongRunningChild(t *testing.T) {
 	}
 }
 
+func TestStartTimeoutInterruptsLongRunningChild(t *testing.T) {
+	t.Parallel()
+
+	const timeout = 100 * time.Millisecond
+	const doneBudget = 2 * time.Second
+
+	begin := time.Now()
+	session, err := StartProcess(context.Background(), ProcessRequest{
+		Binary:    "/bin/bash",
+		Args:      []string{"-c", "sleep 30"},
+		Timeout:   timeout,
+		ExitGrace: 100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("StartProcess returned error: %v", err)
+	}
+
+	result := awaitResult(t, session, doneBudget)
+	if elapsed := time.Since(begin); elapsed > doneBudget {
+		t.Errorf("timeout completed after %v, want < %v", elapsed, doneBudget)
+	}
+	if result.TimeoutReason == "" {
+		t.Fatal("TimeoutReason is empty, want timeout reason")
+	}
+	if !result.Interrupted {
+		t.Fatal("Interrupted = false, want true after timeout cancellation")
+	}
+}
+
+func TestStartIdleTimeoutInterruptsSilentChild(t *testing.T) {
+	t.Parallel()
+
+	const idleTimeout = 100 * time.Millisecond
+	const doneBudget = 2 * time.Second
+
+	begin := time.Now()
+	session, err := StartProcess(context.Background(), ProcessRequest{
+		Binary:      "/bin/bash",
+		Args:        []string{"-c", "sleep 30"},
+		IdleTimeout: idleTimeout,
+		ExitGrace:   100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("StartProcess returned error: %v", err)
+	}
+
+	result := awaitResult(t, session, doneBudget)
+	if elapsed := time.Since(begin); elapsed > doneBudget {
+		t.Errorf("idle timeout completed after %v, want < %v", elapsed, doneBudget)
+	}
+	if result.TimeoutReason == "" {
+		t.Fatal("TimeoutReason is empty, want idle timeout reason")
+	}
+	if !result.Interrupted {
+		t.Fatal("Interrupted = false, want true after idle timeout cancellation")
+	}
+}
+
+func TestStartTimeoutsStayEmptyWhenChildFinishes(t *testing.T) {
+	t.Parallel()
+
+	session, err := StartProcess(context.Background(), ProcessRequest{
+		Binary:      "/bin/bash",
+		Args:        []string{"-c", "printf done"},
+		Timeout:     time.Second,
+		IdleTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("StartProcess returned error: %v", err)
+	}
+
+	result := awaitResult(t, session, 2*time.Second)
+	if result.TimeoutReason != "" {
+		t.Fatalf("TimeoutReason = %q, want empty", result.TimeoutReason)
+	}
+	if result.Interrupted {
+		t.Fatal("Interrupted = true, want false for natural exit")
+	}
+}
+
 // TestStartGitCeilingDirectories asserts the env var is set to the parent of
 // Dir so an agent in a non-repo working directory cannot leak commits into an
 // enclosing repository.
@@ -274,7 +354,7 @@ func TestStartGitCeilingDirectories(t *testing.T) {
 	}
 
 	session, err := StartProcess(context.Background(), ProcessRequest{
-		Binary: "/bin/sh",
+		Binary: "/bin/bash",
 		Args:   []string{"-c", "printf '%s' \"$GIT_CEILING_DIRECTORIES\""},
 		Dir:    subdir,
 	})
@@ -317,7 +397,7 @@ func awaitResult(t *testing.T, session *Session, timeout time.Duration) ProcessR
 }
 
 // shellQuote wraps s in single quotes, escaping any embedded single quotes.
-// Used for /bin/sh -c scripts where the test body needs to contain literal
+// Used for /bin/bash -c scripts where the test body needs to contain literal
 // metacharacters.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"

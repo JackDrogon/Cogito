@@ -101,6 +101,14 @@ type ProcessRequest struct {
 	// SessionPattern overrides SessionIDPattern. nil means use the default.
 	SessionPattern *regexp.Regexp
 
+	// Timeout is the maximum wall-clock duration from StartProcess until the
+	// child must finish. Values <= 0 disable wall-clock enforcement.
+	Timeout time.Duration
+
+	// IdleTimeout is the maximum duration between stdout/stderr bytes from the
+	// child. Values <= 0 disable no-output enforcement.
+	IdleTimeout time.Duration
+
 	// ExitGrace and KillGrace override the default SIGTERM → SIGKILL timing.
 	// Values <= 0 fall back to the package defaults.
 	ExitGrace time.Duration
@@ -131,6 +139,12 @@ type ProcessResult struct {
 	// avoid downgrading a naturally-succeeded execution to interrupted when an
 	// interrupt arrives after the child already finished.
 	Interrupted bool
+
+	// TimeoutReason is empty unless the process watchdog fired. When set it is a
+	// human-readable reason, Interrupted will typically also be true because the
+	// watchdog cancels via the same SIGTERM→SIGKILL escalation, and adapters must
+	// check TimeoutReason before Interrupted so timeouts become failed executions.
+	TimeoutReason string
 
 	// Err is reserved for spawn/wait/IO errors. Cancellation alone is NOT an
 	// error: callers detect interruption via parent context state, not Err.
@@ -228,6 +242,8 @@ func StartProcess(parentCtx context.Context, req ProcessRequest) (*Session, erro
 		ExtraSink:   req.ExtraSink,
 		Prompt:      req.Prompt,
 		Pattern:     settings.pattern,
+		Timeout:     req.Timeout,
+		IdleTimeout: req.IdleTimeout,
 		ExitGrace:   settings.exitGrace,
 		KillGrace:   settings.killGrace,
 		WarningSink: req.WarningSink,
@@ -373,6 +389,8 @@ type superviseParams struct {
 	ExtraSink   io.Writer
 	Prompt      string
 	Pattern     *regexp.Regexp
+	Timeout     time.Duration
+	IdleTimeout time.Duration
 	ExitGrace   time.Duration
 	KillGrace   time.Duration
 	WarningSink func(string)
@@ -383,7 +401,12 @@ type superviseParams struct {
 func supervise(params superviseParams) {
 	var stdoutBuf, stderrBuf bytes.Buffer
 
-	var logMu sync.Mutex
+	var (
+		logMu      sync.Mutex
+		lastOutput atomic.Int64
+	)
+
+	lastOutput.Store(time.Now().UnixNano())
 
 	if params.Stdin != nil {
 		go writePrompt(params.Stdin, params.Prompt)
@@ -397,12 +420,13 @@ func supervise(params superviseParams) {
 		defer ioWG.Done()
 
 		teeAndScan(params.Stdout, teeParams{
-			Buffer:    &stdoutBuf,
-			LogFile:   params.LogFile,
-			LogMu:     &logMu,
-			ExtraSink: params.ExtraSink,
-			Pattern:   params.Pattern,
-			Session:   params.Session,
+			Buffer:     &stdoutBuf,
+			LogFile:    params.LogFile,
+			LogMu:      &logMu,
+			ExtraSink:  params.ExtraSink,
+			Pattern:    params.Pattern,
+			Session:    params.Session,
+			LastOutput: &lastOutput,
 		})
 	}()
 
@@ -410,18 +434,23 @@ func supervise(params superviseParams) {
 		defer ioWG.Done()
 
 		teeAndScan(params.Stderr, teeParams{
-			Buffer:    &stderrBuf,
-			LogFile:   params.LogFile,
-			LogMu:     &logMu,
-			ExtraSink: params.ExtraSink,
-			Session:   params.Session,
+			Buffer:     &stderrBuf,
+			LogFile:    params.LogFile,
+			LogMu:      &logMu,
+			ExtraSink:  params.ExtraSink,
+			Session:    params.Session,
+			LastOutput: &lastOutput,
 		})
 	}()
 
 	go func() {
 		readersDone := make(chan struct{})
 
-		var interrupted atomic.Bool
+		var (
+			interrupted   atomic.Bool
+			timeoutReason atomic.Value
+			timeoutOnce   sync.Once
+		)
 
 		// signalOnCancel watches for parent cancellation vs natural child
 		// exit. Natural exit is detected by readers draining the stdout/
@@ -434,6 +463,16 @@ func supervise(params superviseParams) {
 			ReadersDone: readersDone,
 			Interrupted: &interrupted,
 			WarnStuck:   func() { warnKillTimeout(params.LogFile, &logMu, params.WarningSink) },
+		})
+
+		startWatchdog(watchdogParams{
+			Timeout:       params.Timeout,
+			IdleTimeout:   params.IdleTimeout,
+			LastOutput:    &lastOutput,
+			ReadersDone:   readersDone,
+			Cancel:        params.Cancel,
+			Reason:        &timeoutReason,
+			RecordTimeout: &timeoutOnce,
 		})
 
 		// Per Go exec docs (StdoutPipe / StderrPipe): "It is incorrect to
@@ -459,13 +498,14 @@ func supervise(params superviseParams) {
 		exitCode, propagated := classifyWaitError(waitErr, params.Cmd.ProcessState)
 
 		params.Done <- ProcessResult{
-			ExitCode:    exitCode,
-			Stdout:      bytes.Clone(stdoutBuf.Bytes()),
-			Stderr:      bytes.Clone(stderrBuf.Bytes()),
-			LogPath:     params.LogPath,
-			SessionID:   params.Session.SessionID(),
-			Interrupted: interrupted.Load(),
-			Err:         propagated,
+			ExitCode:      exitCode,
+			Stdout:        bytes.Clone(stdoutBuf.Bytes()),
+			Stderr:        bytes.Clone(stderrBuf.Bytes()),
+			LogPath:       params.LogPath,
+			SessionID:     params.Session.SessionID(),
+			Interrupted:   interrupted.Load(),
+			TimeoutReason: loadTimeoutReason(&timeoutReason),
+			Err:           propagated,
 		}
 
 		close(params.Done)
@@ -495,12 +535,13 @@ func writePrompt(stdin io.WriteCloser, prompt string) {
 // stderr each get their own Buffer but share LogFile/LogMu/ExtraSink; only the
 // stdout stream carries a Pattern for session-id scraping.
 type teeParams struct {
-	Buffer    *bytes.Buffer
-	LogFile   *os.File
-	LogMu     *sync.Mutex
-	ExtraSink io.Writer
-	Pattern   *regexp.Regexp
-	Session   *Session
+	Buffer     *bytes.Buffer
+	LogFile    *os.File
+	LogMu      *sync.Mutex
+	ExtraSink  io.Writer
+	Pattern    *regexp.Regexp
+	Session    *Session
+	LastOutput *atomic.Int64
 }
 
 // teeAndScan reads src in 4KB chunks, appends to Buf, LogFile (under LogMu),
@@ -514,9 +555,13 @@ func teeAndScan(src io.Reader, params teeParams) {
 	var carry []byte
 
 	for {
-		n, err := src.Read(chunk)
-		if n > 0 {
-			data := chunk[:n]
+		bytesRead, err := src.Read(chunk)
+		if bytesRead > 0 {
+			if params.LastOutput != nil {
+				params.LastOutput.Store(time.Now().UnixNano())
+			}
+
+			data := chunk[:bytesRead]
 			buf.Write(data)
 
 			if params.LogFile != nil {
@@ -548,6 +593,103 @@ func teeAndScan(src io.Reader, params teeParams) {
 			return
 		}
 	}
+}
+
+// watchdogParams configures the optional process timeout watchdog. It is a
+// struct because the watchdog needs several shared signals and state handles.
+type watchdogParams struct {
+	Timeout       time.Duration
+	IdleTimeout   time.Duration
+	LastOutput    *atomic.Int64
+	ReadersDone   <-chan struct{}
+	Cancel        context.CancelFunc
+	Reason        *atomic.Value
+	RecordTimeout *sync.Once
+}
+
+func startWatchdog(params watchdogParams) {
+	if params.Timeout <= 0 && params.IdleTimeout <= 0 {
+		return
+	}
+
+	go runWatchdog(params)
+}
+
+func runWatchdog(params watchdogParams) {
+	var wallClock <-chan time.Time
+
+	var wallTimer *time.Timer
+
+	if params.Timeout > 0 {
+		wallTimer = time.NewTimer(params.Timeout)
+		defer wallTimer.Stop()
+
+		wallClock = wallTimer.C
+	}
+
+	var idleTicks <-chan time.Time
+
+	var idleTicker *time.Ticker
+
+	if params.IdleTimeout > 0 {
+		idleTicker = time.NewTicker(idleCheckInterval(params.IdleTimeout))
+		defer idleTicker.Stop()
+
+		idleTicks = idleTicker.C
+	}
+
+	for {
+		select {
+		case <-params.ReadersDone:
+			return
+		case <-wallClock:
+			recordTimeout(params, fmt.Sprintf("agent process timed out after %s", params.Timeout))
+
+			return
+		case <-idleTicks:
+			if params.LastOutput == nil {
+				continue
+			}
+
+			last := time.Unix(0, params.LastOutput.Load())
+			if time.Since(last) < params.IdleTimeout {
+				continue
+			}
+
+			recordTimeout(params, fmt.Sprintf("agent process produced no output for %s", params.IdleTimeout))
+
+			return
+		}
+	}
+}
+
+func idleCheckInterval(idleTimeout time.Duration) time.Duration {
+	interval := idleTimeout / 4
+	if interval < 100*time.Millisecond {
+		return 100 * time.Millisecond
+	}
+
+	if interval > 10*time.Second {
+		return 10 * time.Second
+	}
+
+	return interval
+}
+
+func recordTimeout(params watchdogParams, reason string) {
+	params.RecordTimeout.Do(func() {
+		params.Reason.Store(reason)
+		params.Cancel()
+	})
+}
+
+func loadTimeoutReason(reason *atomic.Value) string {
+	value, ok := reason.Load().(string)
+	if !ok {
+		return ""
+	}
+
+	return value
 }
 
 // signalParams configures one signalOnCancel escalation. It is a struct because

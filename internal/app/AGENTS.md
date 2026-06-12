@@ -9,7 +9,7 @@
 | Add or rename a CLI command | `app.go`, `app_commands.go`, `command_registry.go` | root command tables and subcommand groups live here |
 | Change shared flags or defaults | `app.go` | `parseSharedFlags` and `defaultStateDir` define the common CLI contract |
 | Change app-level workflow/run actions | `application_service.go`, `run_service.go` | service methods call workflow/runtime/store in a fixed order |
-| Change runtime dependency wiring | `wiring.go`, `adapter_resolver.go`, `command_runner.go` | app builds runtime dependencies without leaking provider details |
+| Change runtime dependency wiring | `wiring.go`, `provider_resolver.go`, `command_runner.go` | app builds runtime dependencies without leaking provider details |
 | Change CLI presentation | `text_presenter.go` | keep human-readable output here, not in runtime |
 | Change run-state path handling | `run_requests.go`, `app_runtime.go` | app owns request normalization before runtime/store calls |
 

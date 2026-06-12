@@ -240,6 +240,50 @@ func TestCodexResumeUsesRealSessionID(t *testing.T) {
 	assertArgSubsequence(t, resumeArgs, []string{"--cd", "/workspace/repo"})
 }
 
+func TestCodexTimeoutResultNormalizesAsFailed(t *testing.T) {
+	const reason = "agent process timed out after 100ms"
+
+	adapter := codex.New(codex.Config{
+		LookPath: func(string) (string, error) { return "/usr/local/bin/codex", nil },
+		Runner:   &codexVersionRunner{},
+		Starter:  (&codexTimeoutStarter{reason: reason}).start,
+	})
+
+	ctx := t.Context()
+	start, err := adapter.Start(ctx, provider.StartRequest{RunID: "run-1", StepID: "step", AttemptID: "attempt", WorkingDir: "/workspace/repo", Prompt: "do it"})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	terminal, err := adapter.PollOrCollect(ctx, start.Handle)
+	if err != nil {
+		t.Fatalf("PollOrCollect() error = %v", err)
+	}
+
+	result, err := adapter.NormalizeResult(ctx, provider.NormalizeRequest{Execution: terminal})
+	if err != nil {
+		t.Fatalf("NormalizeResult() error = %v", err)
+	}
+	if result.Status != provider.ExecutionStateFailed {
+		t.Fatalf("Status = %q, want failed", result.Status)
+	}
+	if !strings.Contains(result.Summary, reason) {
+		t.Fatalf("Summary = %q, want contains %q", result.Summary, reason)
+	}
+}
+
+type codexTimeoutStarter struct {
+	reason string
+}
+
+func (s *codexTimeoutStarter) start(_ context.Context, _ provider.ProcessRequest) (*provider.Session, error) {
+	done := make(chan provider.ProcessResult, 1)
+	done <- provider.ProcessResult{TimeoutReason: s.reason, Interrupted: true}
+	close(done)
+
+	return &provider.Session{Done: done}, nil
+}
+
 // codexRealSessionStarter writes the codex last-message file and resolves Done
 // with an event stream carrying a configurable real thread_id, recording every
 // StartRequest so resume argv can be asserted.

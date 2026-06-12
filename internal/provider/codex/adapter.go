@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/JackDrogon/Cogito/internal/prompt"
 	"github.com/JackDrogon/Cogito/internal/provider"
@@ -39,10 +40,12 @@ func init() {
 		},
 		NewWithOptions: func(options provider.Options) provider.Provider {
 			return New(Config{
-				Sandbox:  options.Sandbox,
-				Model:    options.Model,
-				LogDir:   options.LogDir,
-				LiveSink: options.LiveSink,
+				Sandbox:     options.Sandbox,
+				Model:       options.Model,
+				LogDir:      options.LogDir,
+				LiveSink:    options.LiveSink,
+				Timeout:     options.Timeout,
+				IdleTimeout: options.IdleTimeout,
 			})
 		},
 	}); err != nil {
@@ -69,6 +72,10 @@ type Config struct {
 	// LiveSink optionally receives the process output stream in real time;
 	// nil disables live streaming. Must be safe for concurrent writes.
 	LiveSink io.Writer
+	// Timeout is the maximum agent process wall-clock duration; <=0 disables it.
+	Timeout time.Duration
+	// IdleTimeout is the maximum no-output duration; <=0 disables it.
+	IdleTimeout time.Duration
 }
 
 type Adapter struct {
@@ -79,6 +86,8 @@ type Adapter struct {
 	model    string
 	logDir   string
 	liveSink io.Writer
+	timeout  time.Duration
+	idle     time.Duration
 
 	mu       sync.RWMutex
 	sessions map[string]*agentSession
@@ -149,6 +158,8 @@ func New(config Config) *Adapter {
 		model:    strings.TrimSpace(config.Model),
 		logDir:   strings.TrimSpace(config.LogDir),
 		liveSink: config.LiveSink,
+		timeout:  config.Timeout,
+		idle:     config.IdleTimeout,
 		sessions: map[string]*agentSession{},
 	}
 }
@@ -199,6 +210,8 @@ func (a *Adapter) Start(ctx context.Context, request provider.StartRequest) (*pr
 		PromptOnStdin: true,
 		LogPath:       a.logPath(request),
 		ExtraSink:     newLiveRenderer(a.liveSink),
+		Timeout:       a.timeout,
+		IdleTimeout:   a.idle,
 	})
 	if startErr != nil {
 		lastMessageResult.remove()
@@ -358,6 +371,8 @@ func (a *Adapter) Resume(ctx context.Context, request provider.ResumeRequest) (*
 		PromptOnStdin: true,
 		LogPath:       a.logPath(resumeStart),
 		ExtraSink:     newLiveRenderer(a.liveSink),
+		Timeout:       a.timeout,
+		IdleTimeout:   a.idle,
 	})
 	if startErr != nil {
 		lastMessageResult.remove()
@@ -529,7 +544,14 @@ func (a *Adapter) collectTerminal(record *agentSession) (*provider.Execution, er
 		defer record.removeLastMsgDir()
 
 		result := <-record.session.Done
+
 		record.terminalInterrupted = result.Interrupted
+		if result.TimeoutReason != "" {
+			record.terminal = timeoutExecution(record.handle, result.TimeoutReason)
+			a.releaseSession(record.handle.ProviderSessionID)
+
+			return
+		}
 
 		events, parseErr := parseEvents(result.Stdout)
 		if parseErr != nil {
@@ -587,6 +609,14 @@ func (a *Adapter) collectTerminal(record *agentSession) (*provider.Execution, er
 	}
 
 	return record.terminal, nil
+}
+
+func timeoutExecution(handle provider.ExecutionHandle, reason string) *provider.Execution {
+	return &provider.Execution{
+		Handle:  handle,
+		State:   provider.ExecutionStateFailed,
+		Summary: reason,
+	}
 }
 
 // structuredOutput recovers the normalized AgentResult JSON for a finished codex

@@ -117,6 +117,9 @@ All three providers currently:
 - register themselves with the process-local registry
 - launch the provider CLI through the shared async `internal/provider`
 - hold the live `provider.Session` (with its cancel func) in an in-memory map
+- honor optional `ProcessRequest.Timeout` wall-clock and `IdleTimeout`
+  no-output watchdogs when the app passes `--agent-timeout` or
+  `--agent-idle-timeout`; both default to `0` / disabled
 - support `PollOrCollect` by awaiting the session's `Done` channel
 - parse the `AGENT_RESULT_JSON` line into a normalized `AgentResult` and marshal
   it into `Execution.StructuredOutput`
@@ -147,6 +150,23 @@ key as well). That extracted id flows back through `Result.SessionID` →
 `Execution.Handle.ProviderSessionID`, and runtime persists it so a later `Resume`
 can pass it to the provider's resume flag. When no session line is matched, the
 synthetic id is kept so interrupt/await still work in-process.
+
+### Process timeout semantics
+
+`internal/provider.ProcessRequest` carries two optional agent-process watchdogs:
+
+- `Timeout`: maximum wall-clock duration from `StartProcess` until process exit.
+- `IdleTimeout`: maximum gap with no stdout/stderr bytes from the process.
+
+Values `<= 0` disable the corresponding watchdog. When either watchdog fires, the
+shared process supervisor records `ProcessResult.TimeoutReason` with a human
+readable summary such as `agent process timed out after 30m0s` or
+`agent process produced no output for 10m0s`, then invokes the same cancel path as
+manual interrupt (SIGTERM, grace, SIGKILL). Because that cancel path usually sets
+`ProcessResult.Interrupted`, adapters must check `TimeoutReason` first. Built-in
+adapters classify timeout results as `ExecutionStateFailed`, not
+`ExecutionStateInterrupted`, so runtime records the existing failed-step events and
+does not treat the execution as resumable.
 
 ## Execution Data Types
 

@@ -21,6 +21,8 @@ type sharedFlags struct {
 	stateDir        string
 	approval        string
 	providerTimeout time.Duration
+	agentTimeout    time.Duration
+	agentIdle       time.Duration
 	allowDirty      bool
 	verbose         bool
 }
@@ -146,6 +148,8 @@ func registerSharedFlags(fs *flag.FlagSet, flags *sharedFlags) {
 	fs.StringVar(&flags.stateDir, "state-dir", "", "Run state directory (default: <repo>/.cogito/runs/<generated-run-id>)")
 	fs.StringVar(&flags.approval, "approval", "", "Approval mode")
 	fs.DurationVar(&flags.providerTimeout, "provider-timeout", 0, "Provider timeout (for example: 30s, 2m)")
+	fs.DurationVar(&flags.agentTimeout, "agent-timeout", 0, "Agent process wall-clock timeout (for example: 30s, 2m; 0 disables)")
+	fs.DurationVar(&flags.agentIdle, "agent-idle-timeout", 0, "Agent process no-output timeout (for example: 30s, 2m; 0 disables)")
 	fs.BoolVar(&flags.allowDirty, "allow-dirty", false, "Allow dirty repository state")
 	fs.BoolVar(&flags.verbose, "v", false, "Enable verbose logging")
 }
